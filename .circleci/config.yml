@@ -5,6 +5,10 @@ executors:
     docker:
       - image: circleci/rust:latest
     resource_class: small
+  node:
+    docker:
+      - image: circleci/node:latest
+    resource_class: small
 
 commands:
   print_rust_version:
@@ -15,8 +19,30 @@ commands:
             rustup --version
             rustc --version
             cargo --version
+  install_npm_dependencies:
+    steps:
+      - run:
+          name: Installing npm dependencies
+          command: npm install
+
 
 jobs:
+  commit-convention:
+    executor: node
+    steps:
+      - checkout
+      - install_npm_dependencies
+      - run:
+          name: Running commitlint
+          command: npm run commitlint
+  markdown-lint:
+    executor: node
+    steps:
+      - checkout
+      - install_npm_dependencies
+      - run:
+          name: Running markdownlint
+          command: npm run markdownlint
   rust-fmt:
     executor: rust
     steps:
@@ -24,14 +50,14 @@ jobs:
       - print_rust_version
       - run:
           name: Installing Rust nightly
-          command: rustup install nightly
+          command: rustup toolchain install nightly
       - run:
           name: Installing fmt
           command: rustup component add rustfmt
       - run:
           name: Running cargo fmt (on nightly)
           command: cargo +nightly fmt -- --check
-  rust-lint:
+  rust-clippy:
     executor: rust
     steps:
       - checkout
@@ -71,7 +97,7 @@ jobs:
       - print_rust_version
       - run:
           name: Installing Rust nightly
-          command: rustup install nightly
+          command: rustup toolchain install nightly
       - run:
           name: Running cargo test (on nightly)
           command: |
@@ -97,17 +123,22 @@ jobs:
           command: bash <(curl -s https://codecov.io/bash) -f ./target/debug/coverage/lcov.info -n "${CIRCLE_BUILD_NUM}"
 
 workflows:
-  rust-fmt:
+  commit:
+    jobs:
+      - commit-convention
+  syntax:
     jobs:
       - rust-fmt
-  rust-lint:
+      - markdown-lint
+  lint:
     jobs:
-      - rust-lint
-  rust-build:
+      - rust-clippy
+  build:
     jobs:
       - rust-build
-  rust-test:
+  test:
     jobs:
       - rust-test
+  coverage:
+    jobs:
       - rust-coverage
-      
