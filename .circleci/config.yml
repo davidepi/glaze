@@ -53,7 +53,7 @@ jobs:
           command: rustup toolchain install nightly
       - run:
           name: Installing fmt
-          command: rustup component add rustfmt
+          command: rustup component add rustfmt --toolchain nightly
       - run:
           name: Running cargo fmt (on nightly)
           command: cargo +nightly fmt -- --check
@@ -123,22 +123,19 @@ jobs:
           command: bash <(curl -s https://codecov.io/bash) -f ./target/debug/coverage/lcov.info -n "${CIRCLE_BUILD_NUM}"
 
 workflows:
-  commit:
+  lib-dev:
     jobs:
       - commit-convention
-  syntax:
-    jobs:
       - rust-fmt
       - markdown-lint
-  lint:
-    jobs:
       - rust-clippy
-  build:
-    jobs:
-      - rust-build
-  test:
-    jobs:
-      - rust-test
-  coverage:
-    jobs:
-      - rust-coverage
+      - rust-build:
+          requires:
+            - rust-fmt
+            - rust-clippy
+      - rust-test:
+          requires:
+            - rust-build
+      - rust-coverage:
+          requires:
+            - rust-test
