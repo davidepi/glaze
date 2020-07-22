@@ -25,7 +25,6 @@ commands:
           name: Installing npm dependencies
           command: npm install
 
-
 jobs:
   commit-convention:
     executor: node
@@ -49,14 +48,11 @@ jobs:
       - checkout
       - print_rust_version
       - run:
-          name: Installing Rust nightly
-          command: rustup toolchain install nightly
-      - run:
           name: Installing fmt
-          command: rustup component add rustfmt --toolchain nightly
+          command: rustup component add rustfmt
       - run:
-          name: Running cargo fmt (on nightly)
-          command: cargo +nightly fmt -- --check
+          name: Running cargo fmt
+          command: cargo fmt -- --check
   rust-clippy:
     executor: rust
     steps:
