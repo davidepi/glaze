@@ -1,0 +1,78 @@
+version: 2.1
+
+executors:
+  rust:
+    docker:
+      - image: circleci/rust:latest
+    resource_class: small
+
+commands:
+  print_rust_version:
+    steps:
+      - run:
+          name: Printing rust version
+          command: |
+            rustup --version
+            rustc --version
+            cargo --version
+
+jobs:
+  rust-fmt:
+    executor: rust
+    steps:
+      - checkout
+      - print_rust_version
+      - run:
+          name: Installing fmt
+          command: rustup component add rustfmt
+      - run:
+          name: Running cargo fmt
+          command: cargo fmt -- --check
+  rust-lint:
+    executor: rust
+    steps:
+      - checkout
+      - print_rust_version
+      - run:
+          name: Installing clippy
+          command: rustup component add clippy
+      - run:
+          name: Running cargo check
+          command: cargo check --all-features --tests
+      - run:
+          name: Running cargo clean
+          command: cargo clean
+      - run:
+          name: Running cargo clippy
+          command: cargo clippy --all-features --tests -- -D warnings
+  rust-build:
+    executor: rust
+    steps:
+      - checkout
+      - print_rust_version
+      - run:
+          name: Running cargo build
+          command: cargo build
+  rust-test:
+    executor: rust
+    steps:
+      - checkout
+      - print_rust_version
+      - run:
+          name: Running cargo test
+          command: cargo test
+
+workflows:
+  rust-fmt:
+    jobs:
+      - rust-fmt
+  rust-lint:
+    jobs:
+      - rust-lint
+  rust-build:
+    jobs:
+      - rust-build
+  rust-test:
+    jobs:
+      - rust-test
+      
