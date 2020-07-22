@@ -1,0 +1,14 @@
+ignore:
+   - "**/tests/*"
+coverage:
+  status:
+    project:
+      default:
+        target: 95
+        threshold: 0%
+        base: auto
+        paths:
+          - "src/"
+        branches:
+          - master
+        if_ci_failed: error
