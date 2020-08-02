@@ -25,7 +25,7 @@ impl AABB {
     /// box, as any point can be added to it, however, some methods may return unexpected values.
     /// # Examples
     /// ```
-    /// use glaze::geometry::AABB;
+    /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::zero();
     ///
@@ -41,7 +41,8 @@ impl AABB {
     /// Constructs a zero-sized bounding box composed solely by one, given, point.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{AABB, Point3};
+    /// use glaze::geometry::Point3;
+    /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::point(&Point3::zero());
     ///
@@ -58,7 +59,8 @@ impl AABB {
     /// order or their minimum or maximum component is imposed.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Point3, AABB};
+    /// use glaze::geometry::Point3;
+    /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
     ///
@@ -74,7 +76,8 @@ impl AABB {
     /// Expands the bounding box by a given amount in every axis, both positive and negative.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Point3, AABB};
+    /// use glaze::geometry::Point3;
+    /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
     /// assert_eq!(aabb.surface(), 6.0); //each face has surface == 1.0
@@ -93,7 +96,8 @@ impl AABB {
     /// point
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Point3, AABB};
+    /// use glaze::geometry::Point3;
+    /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
     /// assert_eq!(aabb.surface(), 6.0);
@@ -113,7 +117,8 @@ impl AABB {
     /// the one passed as input parameter.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Point3, AABB};
+    /// use glaze::geometry::Point3;
+    /// use glaze::shapes::AABB;
     ///
     /// let aabb0 = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
     /// let aabb1 = AABB::new(&Point3::new(3.0, 3.0, 3.0), &Point3::new(4.0, 4.0, 4.0));
@@ -131,7 +136,8 @@ impl AABB {
     /// Returns true if the given point is inside the bounding box, false otherwise.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Point3, AABB};
+    /// use glaze::geometry::Point3;
+    /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
     /// let point = Point3::new(0.5, 0.7, 0.3);
@@ -150,7 +156,8 @@ impl AABB {
     /// Returns the total surface of the bounding box
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Point3, AABB};
+    /// use glaze::geometry::Point3;
+    /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
     ///
@@ -164,7 +171,8 @@ impl AABB {
     /// Returns the total volume of the bounding box
     /// # Examples
     /// ```
-    /// use glaze::geometry::{AABB, Point3};
+    /// use glaze::geometry::Point3;
+    /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(2.0, 2.0, 2.0));
     ///
@@ -196,7 +204,8 @@ impl AABB {
     /// Returns the point at the center of the bounding box
     /// # Examples
     /// ```
-    /// use glaze::geometry::{AABB, Point3};
+    /// use glaze::geometry::Point3;
+    /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
     ///

@@ -1,4 +1,5 @@
-use crate::geometry::{Point3, AABB};
+use crate::geometry::Point3;
+use crate::shapes::AABB;
 use assert_approx_eq::assert_approx_eq;
 use std::f32::INFINITY;
 

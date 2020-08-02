@@ -206,7 +206,7 @@ pub struct Vec3 {
 
 /// A Normal can be represented as a Vec3 and behaves almost identically, except during its
 /// transformation
-type Normal = Vec3;
+pub type Normal = Vec3;
 
 impl Vec3 {
     /// Constructs a 3D zero vector, a vector in the form `(0.0, 0.0, 0.0)`.
