@@ -50,7 +50,7 @@ fn ef32_precision_longrun() {
         let mut precise1 = float1 as f64;
         let mut tracked1 = Ef32::new(float1, 0.0);
         for _ in 0..100 {
-            if !precise1.is_finite() || !tracked1.float().is_finite() {
+            if !precise1.is_finite() || !tracked1.value().is_finite() {
                 break;
             }
             // actual assert that the previous operation was fine
@@ -85,7 +85,7 @@ fn ef32_precision_longrun() {
                     {
                         precise_tmp
                     } else {
-                        tracked2.float() as f64
+                        tracked2.value() as f64
                     };
                 }
                 _ => panic!(),

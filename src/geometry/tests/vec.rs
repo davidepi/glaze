@@ -16,6 +16,20 @@ fn vec2_components_constructor() {
 }
 
 #[test]
+fn vec2_right_constructor() {
+    let v = Vec2::right();
+    assert_eq!(v.x, 1.0);
+    assert_eq!(v.y, 0.0);
+}
+
+#[test]
+fn vec2_up_constructor() {
+    let v = Vec2::up();
+    assert_eq!(v.x, 0.0);
+    assert_eq!(v.y, 1.0);
+}
+
+#[test]
 fn vec2_clone() {
     let v = Vec2::new(-83.27705, 79.29129);
     let v2 = v.clone();
@@ -213,6 +227,30 @@ fn vec3_components_constructor() {
     assert_eq!(v.x, 1.0);
     assert_eq!(v.y, 0.0);
     assert_eq!(v.z, -1.0);
+}
+
+#[test]
+fn vec3_right_constructor() {
+    let v = Vec3::right();
+    assert_eq!(v.x, 1.0);
+    assert_eq!(v.y, 0.0);
+    assert_eq!(v.z, 0.0);
+}
+
+#[test]
+fn vec3_up_constructor() {
+    let v = Vec3::up();
+    assert_eq!(v.x, 0.0);
+    assert_eq!(v.y, 1.0);
+    assert_eq!(v.z, 0.0);
+}
+
+#[test]
+fn vec3_front_constructor() {
+    let v = Vec3::front();
+    assert_eq!(v.x, 0.0);
+    assert_eq!(v.y, 0.0);
+    assert_eq!(v.z, 1.0);
 }
 
 #[test]

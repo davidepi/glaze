@@ -47,6 +47,34 @@ impl Vec2 {
         Vec2 { x, y }
     }
 
+    /// Constructs a normalized vector pointing *right*, towards `(1.0, 0.0)`.
+    /// # Examples
+    /// ```
+    /// use glaze::geometry::Vec2;
+    ///
+    /// let v = Vec2::right();
+    ///
+    /// assert_eq!(v.x, 1.0);
+    /// assert_eq!(v.y, 0.0);
+    /// ```
+    pub fn right() -> Vec2 {
+        Vec2 { x: 1.0, y: 0.0 }
+    }
+
+    /// Constructs a normalized vector pointing *up*, towards `(0.0, 1.0)`.
+    /// # Examples
+    /// ```
+    /// use glaze::geometry::Vec2;
+    ///
+    /// let v = Vec2::up();
+    ///
+    /// assert_eq!(v.x, 0.0);
+    /// assert_eq!(v.y, 1.0);
+    /// ```
+    pub fn up() -> Vec2 {
+        Vec2 { x: 0.0, y: 1.0 }
+    }
+
     /// Returns the euclidean length (or magnitude) of the vector.
     /// # Examples
     /// ```
@@ -86,7 +114,7 @@ impl Vec2 {
     /// ```
     /// # Panics
     /// Panics if compiled with debug assertions and the vector has a length of zero. Otherwise the
-    /// resulting vector will be `(inf, inf)`
+    /// resulting vector will be `(inf, inf)`.
     #[must_use = "Vec2::normalize() does not act in place!"]
     pub fn normalize(&self) -> Vec2 {
         let len = self.length();
@@ -120,8 +148,10 @@ impl Vec2 {
     }
 
     /// Returns the current vector restricted between two boundaries.
+    ///
     /// The lower bound is defined by the `min` parameter, while the upper bound is defined by the
     /// `max` one. If the current vector is in-between, it is left unchanged.
+    ///
     /// Clamping is performed component-wise.
     /// # Examples
     /// ```
@@ -154,6 +184,7 @@ impl Vec2 {
     }
 
     /// Performs the dot product between two vectors.
+    ///
     /// Given two vectors `a` and `b` the dot product is defined as ‖`a`‖*‖`b`‖ cos`θ`, where ‖`x`‖
     /// represents the euclidean length of the vector `x`, and `θ` represents the angle between the
     /// two vectors.
@@ -162,7 +193,7 @@ impl Vec2 {
     /// use glaze::geometry::Vec2;
     ///
     /// let v = Vec2::new(1.0, 2.0);
-    /// let v2 =Vec2::new(4.0, -5.0);
+    /// let v2 = Vec2::new(4.0, -5.0);
     ///
     /// assert_eq!(Vec2::dot(&v, &v2), -6.0);
     /// ```
@@ -205,7 +236,7 @@ pub struct Vec3 {
 }
 
 /// A Normal can be represented as a Vec3 and behaves almost identically, except during its
-/// transformation
+/// transformation.
 pub type Normal = Vec3;
 
 impl Vec3 {
@@ -243,6 +274,64 @@ impl Vec3 {
         Vec3 { x, y, z }
     }
 
+    /// Constructs a normalized vector pointing *right*, towards `(1.0, 0.0, 0.0)`.
+    /// # Examples
+    /// ```
+    /// use glaze::geometry::Vec3;
+    ///
+    /// let v = Vec3::right();
+    ///
+    /// assert_eq!(v.x, 1.0);
+    /// assert_eq!(v.y, 0.0);
+    /// assert_eq!(v.z, 0.0);
+    /// ```
+    pub fn right() -> Vec3 {
+        Vec3 {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+        }
+    }
+
+    /// Constructs a normalized vector pointing *up*, towards `(0.0, 1.0, 0.0)`.
+    /// # Examples
+    /// ```
+    /// use glaze::geometry::Vec3;
+    ///
+    /// let v = Vec3::up();
+    ///
+    /// assert_eq!(v.x, 0.0);
+    /// assert_eq!(v.y, 1.0);
+    /// assert_eq!(v.z, 0.0);
+    /// ```
+    pub fn up() -> Vec3 {
+        Vec3 {
+            x: 0.0,
+            y: 1.0,
+            z: 0.0,
+        }
+    }
+
+    /// Constructs a normalized vector pointing *front* in a Left-Handed system, towards
+    /// `(0.0, 0.0, 1.0)`.
+    /// # Examples
+    /// ```
+    /// use glaze::geometry::Vec3;
+    ///
+    /// let v = Vec3::front();
+    ///
+    /// assert_eq!(v.x, 0.0);
+    /// assert_eq!(v.y, 0.0);
+    /// assert_eq!(v.z, 1.0);
+    /// ```
+    pub fn front() -> Vec3 {
+        Vec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        }
+    }
+
     /// Returns the euclidean length (or magnitude) of the vector.
     /// # Examples
     /// ```
@@ -269,8 +358,9 @@ impl Vec3 {
         self.x * self.x + self.y * self.y + self.z * self.z
     }
 
-    /// Returns the normalized version of the current vector. A vector is normalized if its
-    /// euclidean length is equal to 1.0.
+    /// Returns the normalized version of the current vector.
+    ///
+    /// A vector is normalized if its euclidean length is equal to 1.0.
     /// # Examples
     /// ```
     /// use glaze::geometry::Vec3;
@@ -282,7 +372,7 @@ impl Vec3 {
     /// ```
     /// # Panics
     /// Panics if compiled with debug assertions and the vector has a length of zero. Otherwise the
-    /// resulting vector will be `(inf, inf)`
+    /// resulting vector will be `(inf, inf)`.
     #[must_use = "Vec3::normalize() does not act in place!"]
     pub fn normalize(&self) -> Vec3 {
         let len = self.length();
@@ -314,8 +404,10 @@ impl Vec3 {
     }
 
     /// Returns the current vector restricted between two boundaries.
+    ///
     /// The lower bound is defined by the `min` parameter, while the upper bound is defined by the
     /// `max` one. If the current vector is in-between, it is left unchanged.
+    ///
     /// Clamping is performed component-wise.
     /// # Examples
     /// ```
@@ -355,8 +447,10 @@ impl Vec3 {
         Vec3 { x, y, z }
     }
 
-    /// Reflect a vector around a centre of reflection. The centre of reflection is represented by
-    /// the `centre` parameter and should be normalized.
+    /// Reflects a vector around a centre of reflection.
+    ///
+    /// The centre of reflection is represented by the `centre` parameter and should be normalized.
+    ///
     /// If debug assertions are enabled, a warning is issued in case the centre of reflection is
     /// not normalized.
     /// # Example
@@ -381,12 +475,15 @@ impl Vec3 {
         self - (centre * (2. * Vec3::dot(self, centre)))
     }
 
-    /// Reflect a vector while passing through an interface. The interface is represented by
-    /// the `interface` parameter and should be normalized. The magnitude of refraction is
-    /// controlled by the `eta` parameter, representing the ration between the two materials' Index
-    /// of Refractions η  = η1/η2.
+    /// Refracts a vector passing through an interface.
+    ///
+    /// The interface is represented by the `interface` parameter and should be normalized.
+    /// The magnitude of refraction is controlled by the `eta` parameter, representing the ration
+    /// between the two materials' Index of Refraction η  = η1/η2.
+    ///
     /// If debug assertions are enabled, a warning is issued in case the centre of reflection is
     /// not normalized.
+    ///
     /// In case of Total Internal Reflection, None is returned.
     /// # Example
     /// ```
@@ -420,6 +517,7 @@ impl Vec3 {
     }
 
     /// Performs the dot product between two vectors.
+    ///
     /// Given two vectors `a` and `b` the dot product `a`·`b` is defined as ‖`a`‖ * ‖`b`‖ * cos`θ`,
     /// where:
     /// - ‖`x`‖ represents the euclidean length of the vector `x`.
@@ -438,6 +536,7 @@ impl Vec3 {
     }
 
     /// Performs the cross product between two vectors.
+    ///
     /// Given two vectors `a` and `b` the cross product `a` ⨯ `b` represents the vector
     /// perpendicular to both `a` and `b` defined as `n` * ‖`a`‖ * ‖`b`‖ * sin`θ` where:
     ///- ‖`x`‖ represents the euclidean length of the vector `x`.
@@ -448,6 +547,7 @@ impl Vec3 {
     /// In this implementation, however, the `n` vector is not supplied, as the cross product is
     /// anti-commutative and `a ⨯ b = -(b ⨯ a)`. The wanted direction can thus be obtained by
     /// changing the order of the parameters.
+    ///
     /// In this implementation, a Right-Handed System is assumed. If a Left-Handed one is used,
     /// the functions should be called as `Vec3::cross(&vec_b, &vec_a);`
     /// # Examples
@@ -479,8 +579,8 @@ impl Vec3 {
     ///
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Matrix4, Point3, Vec3};
     /// use assert_approx_eq::assert_approx_eq;
+    /// use glaze::geometry::{Matrix4, Point3, Vec3};
     ///
     /// let transform = Matrix4::rotate_x(std::f32::consts::PI);
     /// let original = Vec3::new(0.0, 0.0, 1.0);

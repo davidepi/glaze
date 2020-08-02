@@ -14,7 +14,6 @@ use std::ops;
 ///  situations.
 ///
 /// A Point2 consists of two coordinates, usually called `x` and `y`
-///
 #[derive(Copy, Clone)]
 pub struct Point2 {
     /// A single precision floating point representing the `x` coordinate of the point

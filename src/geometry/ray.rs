@@ -35,7 +35,7 @@ impl Ray {
     /// assert_eq!(ray.direction.x, 0.0);
     /// assert_eq!(ray.direction.y, 0.0);
     /// assert_eq!(ray.direction.z, 1.0);
-    ///```
+    /// ```
     pub fn zero() -> Ray {
         Ray {
             origin: Point3::zero(),
@@ -47,7 +47,7 @@ impl Ray {
     /// Constructs a Ray with the given origin and direction
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Ray, Vec3, Point3};
+    /// use glaze::geometry::{Point3, Ray, Vec3};
     ///
     /// let origin = Point3::new(1.0, 2.0, 3.0);
     /// let direction = Vec3::new(0.0, 1.0, 0.0);
@@ -72,8 +72,8 @@ impl Ray {
     /// its origin and direction independently.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Ray, Matrix4};
     /// use assert_approx_eq::assert_approx_eq;
+    /// use glaze::geometry::{Matrix4, Ray};
     ///
     /// let ray = Ray::zero();
     /// let transform = Matrix4::rotate_x(std::f32::consts::PI);
@@ -98,7 +98,7 @@ impl Ray {
     /// the ray.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Ray, Point3, Vec3};
+    /// use glaze::geometry::{Point3, Ray, Vec3};
     ///
     /// let ray = Ray::new(&Point3::zero(), &Vec3::new(0.0, 1.0, 0.0));
     /// let point_along_ray = ray.point_along(2.5);
