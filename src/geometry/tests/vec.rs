@@ -1,4 +1,5 @@
-use crate::geometry::{Vec2, Vec3};
+use crate::geometry::matrix::Transform3;
+use crate::geometry::{Matrix4, Vec2, Vec3};
 use assert_approx_eq::assert_approx_eq;
 
 #[test]
@@ -517,4 +518,27 @@ fn vec3_display() {
     let v = Vec3::new(0.1, 1.2, 2.3);
     let str = format!("{}", &v);
     assert_eq!(str, "Vec3[0.1, 1.2, 2.3]");
+}
+
+#[test]
+//scale should alter the vector
+fn vec3_transform_scale() {
+    //scale
+    let v = Vec3::new(1.0, 1.0, 1.0);
+    let m = Matrix4::scale(&Vec3::new(3.0, 3.0, 3.0));
+    let transformed = v.transform(&m);
+    assert_eq!(transformed.x, 3.0);
+    assert_eq!(transformed.y, 3.0);
+    assert_eq!(transformed.z, 3.0);
+}
+
+#[test]
+//translation should leave vector unaffected
+fn vec3_transform_translation() {
+    let v = Vec3::new(0.0, 1.0, 1.0);
+    let m = Matrix4::translation(&Vec3::new(0.0, -1.0, 2.5));
+    let transformed = v.transform(&m);
+    assert_eq!(transformed.x, 0.0);
+    assert_eq!(transformed.y, 1.0);
+    assert_eq!(transformed.z, 1.0);
 }

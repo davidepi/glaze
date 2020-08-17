@@ -1,5 +1,6 @@
 use crate::geometry::{Matrix4, Point3, Ray, Vec3};
 use assert_approx_eq::assert_approx_eq;
+use crate::geometry::matrix::Transform3;
 
 #[test]
 fn ray_default_constructor() {
@@ -40,7 +41,7 @@ fn ray_point_along() {
 }
 
 #[test]
-fn matrix4_transform_ray() {
+fn ray_transform() {
     let p = Point3::zero();
     let v = Vec3::new(0.0, 1.0, 0.0);
     let ray = Ray::new(&p, &v);
@@ -50,6 +51,46 @@ fn matrix4_transform_ray() {
     let transformed_ray = ray.transform(&m);
     //assert that transforming a ray is exactly like transforming origin and
     //direction separately
+    assert_approx_eq!(transformed_point.x, transformed_ray.origin.x);
+    assert_approx_eq!(transformed_point.y, transformed_ray.origin.y);
+    assert_approx_eq!(transformed_point.z, transformed_ray.origin.z);
+    assert_approx_eq!(transformed_vec.x, transformed_ray.direction.x);
+    assert_approx_eq!(transformed_vec.y, transformed_ray.direction.y);
+    assert_approx_eq!(transformed_vec.z, transformed_ray.direction.z);
+}
+
+#[test]
+//w component is what really differentiate a Point3(x,y,z) from a Vec3(x,y,z).
+fn ray_transform_no_w_component() {
+    //no w component
+    let p = Point3::new(1.0, 1.0, 1.0);
+    let v = Vec3::new(0.0, 1.0, 0.0);
+    let ray = Ray::new(&p, &v);
+    let m = Matrix4::scale(&Vec3::new(3.0, 3.0, 3.0));
+    let transformed_point = p.transform(&m);
+    let transformed_vec = v.transform(&m);
+    let transformed_ray = ray.transform(&m);
+    assert_approx_eq!(transformed_point.x, transformed_ray.origin.x);
+    assert_approx_eq!(transformed_point.y, transformed_ray.origin.y);
+    assert_approx_eq!(transformed_point.z, transformed_ray.origin.z);
+    assert_approx_eq!(transformed_vec.x, transformed_ray.direction.x);
+    assert_approx_eq!(transformed_vec.y, transformed_ray.direction.y);
+    assert_approx_eq!(transformed_vec.z, transformed_ray.direction.z);
+}
+
+#[test]
+//w component is what really differentiate a Point3(x,y,z) from a Vec3(x,y,z).
+//it appears in certain perspective matrix, here I faked it.
+fn ray_transform_with_w_component() {
+    let p = Point3::new(0.0, 1.0, 1.0);
+    let v = Vec3::new(0.0, 1.0, 0.0);
+    let ray = Ray::new(&p, &v);
+    let mut m = Matrix4::translation(&Vec3::new(0.0, -1.0, 2.5));
+    m.m[12] = 1.0;
+    m.m[14] = 1.0;
+    let transformed_point = p.transform(&m);
+    let transformed_vec = v.transform(&m);
+    let transformed_ray = ray.transform(&m);
     assert_approx_eq!(transformed_point.x, transformed_ray.origin.x);
     assert_approx_eq!(transformed_point.y, transformed_ray.origin.y);
     assert_approx_eq!(transformed_point.z, transformed_ray.origin.z);

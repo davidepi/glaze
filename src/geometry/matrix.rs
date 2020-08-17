@@ -4,6 +4,31 @@ use crate::utility::float_eq;
 use overload::overload;
 use std::ops;
 
+/// An interface for entities transformable with a matrix.
+///
+/// This interface works with 3-dimensional entities (hence the 3 in the name) and thus requires a
+/// 4 by 4 matrix in homogeneous coordinates.
+pub trait Transform3 {
+
+    /// Transforms a 3D entity with the given 4D matrix.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use glaze::geometry::{Matrix4, Point3, Vec3, Transform3};
+    ///
+    /// let mov = Vec3::new(0.0, -1.0, 0.0);
+    /// let magnitude = Vec3::new(5.0, 1.0, 1.0);
+    /// let transform = Matrix4::scale(&magnitude) * Matrix4::translation(&mov);
+    /// let original = Point3::new(1.0, 1.0, 1.0);
+    /// let transformed = original.transform(&transform);
+    ///
+    /// assert_eq!(transformed.x, 5.0);
+    /// assert_eq!(transformed.y, 0.0);
+    /// assert_eq!(transformed.z, 1.0);
+    /// ```
+    fn transform(&self, mat: &Matrix4) -> Self;
+}
+
 //indices for an easier indexing (don't want to use multidimensional array as I don't know the
 //memory layout and this will be a really low level class)
 const M00: usize = 00;
@@ -27,7 +52,7 @@ const M33: usize = 15;
 ///
 /// The Matrix4 class represents a 4x4 transformation matrix in 3D space. A 4x4 Matrix is usually
 /// used to perform transformations such as scaling, rotations or translations of a model.
-/// The matrix is 4x4 instead of 3x3 because some transformations requires an homogeneus space
+/// The matrix is 4x4 instead of 3x3 because some transformations requires an homogeneous space
 /// instead of a cartesian one.
 #[derive(Clone)]
 pub struct Matrix4 {
@@ -69,7 +94,7 @@ impl Matrix4 {
     /// The input vector `dir` defines the magnitude and direction of the translation.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Matrix4, Point3, Vec3};
+    /// use glaze::geometry::{Matrix4, Point3, Vec3, Transform3};
     ///
     /// let dir = Vec3::new(0.0, 1.0, 0.0);
     /// let translate = Matrix4::translation(&dir);
@@ -121,7 +146,7 @@ impl Matrix4 {
     /// be strictly positives.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Matrix4, Point3, Vec3};
+    /// use glaze::geometry::{Matrix4, Point3, Vec3, Transform3};
     ///
     /// let magnitude = Vec3::new(5.0, 1.0, 1.0);
     /// let scale = Matrix4::scale(&magnitude);
@@ -176,7 +201,7 @@ impl Matrix4 {
     /// # Examples
     /// ```
     /// use assert_approx_eq::assert_approx_eq;
-    /// use glaze::geometry::{Matrix4, Point3, Vec3};
+    /// use glaze::geometry::{Matrix4, Point3, Vec3, Transform3};
     ///
     /// let roll = 90.0_f32.to_radians();
     /// let rot = Matrix4::rotate_x(roll);
@@ -208,7 +233,7 @@ impl Matrix4 {
     /// # Examples
     /// ```
     /// use assert_approx_eq::assert_approx_eq;
-    /// use glaze::geometry::{Matrix4, Point3, Vec3};
+    /// use glaze::geometry::{Matrix4, Point3, Vec3, Transform3};
     ///
     /// let pitch = 90.0_f32.to_radians();
     /// let rot = Matrix4::rotate_y(pitch);
@@ -239,7 +264,7 @@ impl Matrix4 {
     /// # Examples
     /// ```
     /// use assert_approx_eq::assert_approx_eq;
-    /// use glaze::geometry::{Matrix4, Point3, Vec3};
+    /// use glaze::geometry::{Matrix4, Point3, Vec3, Transform3};
     ///
     /// let yaw = 90.0_f32.to_radians();
     /// let rot = Matrix4::rotate_z(yaw);

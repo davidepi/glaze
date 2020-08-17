@@ -11,6 +11,7 @@ mod ray;
 pub use self::ray::Ray;
 mod matrix;
 pub use self::matrix::Matrix4;
+pub use self::matrix::Transform3;
 
 #[cfg(test)]
 mod tests;

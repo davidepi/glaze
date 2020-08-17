@@ -1,4 +1,6 @@
+use crate::geometry::matrix::Transform3;
 use crate::geometry::{Matrix4, Point3, Vec3};
+use crate::utility::{float_eq, gamma};
 use std::fmt::{Display, Formatter};
 
 #[derive(Copy, Clone)]
@@ -78,42 +80,6 @@ impl Ray {
         }
     }
 
-    /// Transforms the Ray using the provided transformation matrix. This translates to transforming
-    /// its origin and direction independently.
-    /// # Examples
-    /// ```
-    /// use assert_approx_eq::assert_approx_eq;
-    /// use glaze::geometry::{Matrix4, Ray};
-    ///
-    /// let ray = Ray::zero();
-    /// let transform = Matrix4::rotate_x(std::f32::consts::PI);
-    /// let transformed = ray.transform(&transform);
-    ///
-    /// assert_approx_eq!(transformed.origin.x, 0.0);
-    /// assert_approx_eq!(transformed.origin.y, 0.0);
-    /// assert_approx_eq!(transformed.origin.z, 0.0);
-    /// assert_approx_eq!(transformed.direction.x, 0.0);
-    /// assert_approx_eq!(transformed.direction.y, 0.0);
-    /// assert_approx_eq!(transformed.direction.z, -1.0);
-    /// ```
-    pub fn transform(&self, matrix: &Matrix4) -> Ray {
-        let mut origin = self.origin.transform_with_error(&matrix);
-        let direction = self.direction.transform_with_error(&matrix);
-        let length2 = direction.value.length2();
-        if length2 > 0.0 {
-            // adjust origin based on fp error
-            let dt = Vec3::dot(&self.direction.abs(), &origin.error) / length2;
-            origin.value += direction.value * dt;
-        }
-        Ray {
-            origin: origin.value,
-            direction: direction.value,
-            bounces: self.bounces,
-            error_origin: origin.error,
-            error_direction: direction.error,
-        }
-    }
-
     /// Find a point at a particular position along a ray, at a given `distance`from the origin of
     /// the ray.
     /// # Examples
@@ -132,6 +98,75 @@ impl Ray {
             x: self.origin.x + self.direction.x * distance,
             y: self.origin.y + self.direction.y * distance,
             z: self.origin.z + self.direction.z * distance,
+        }
+    }
+}
+
+struct ErrorTrackedPoint3 {
+    value: Point3,
+    error: Vec3,
+}
+
+fn transform_point_with_error(p: &Point3, mat: &Matrix4) -> ErrorTrackedPoint3 {
+    let mut x = mat.m[00] * p.x + mat.m[01] * p.y + mat.m[02] * p.z + mat.m[03];
+    let mut y = mat.m[04] * p.x + mat.m[05] * p.y + mat.m[06] * p.z + mat.m[07];
+    let mut z = mat.m[08] * p.x + mat.m[09] * p.y + mat.m[10] * p.z + mat.m[11];
+    let mut w = mat.m[12] * p.x + mat.m[13] * p.y + mat.m[14] * p.z + mat.m[15];
+    let abs_x =
+        (mat.m[00] * p.x).abs() + (mat.m[01] * p.y).abs() + (mat.m[02] * p.z).abs() + mat.m[03];
+    let abs_y =
+        (mat.m[04] * p.x).abs() + (mat.m[05] * p.y).abs() + (mat.m[06] * p.z).abs() + mat.m[07];
+    let abs_z =
+        (mat.m[08] * p.x).abs() + (mat.m[09] * p.y).abs() + (mat.m[10] * p.z).abs() + mat.m[11];
+    if !float_eq(w, 1.0, 1E-5) {
+        w = 1.0 / w;
+        x *= w;
+        y *= w;
+        z *= w;
+    }
+    let gamma3 = gamma(3);
+    ErrorTrackedPoint3 {
+        value: Point3::new(x, y, z),
+        error: Vec3::new(gamma3 * abs_x, gamma3 * abs_y, gamma3 * abs_z),
+    }
+}
+
+struct ErrorTrackedVec3 {
+    value: Vec3,
+    error: Vec3,
+}
+
+fn transform_vec_with_error(v: &Vec3, mat: &Matrix4) -> ErrorTrackedVec3 {
+    let x = mat.m[00] * v.x + mat.m[01] * v.y + mat.m[02] * v.z;
+    let y = mat.m[04] * v.x + mat.m[05] * v.y + mat.m[06] * v.z;
+    let z = mat.m[08] * v.x + mat.m[09] * v.y + mat.m[10] * v.z;
+    let abs_x = (mat.m[00] * v.x).abs() + (mat.m[01] * v.y).abs() + (mat.m[02] * v.z).abs();
+    let abs_y = (mat.m[04] * v.x).abs() + (mat.m[05] * v.y).abs() + (mat.m[06] * v.z).abs();
+    let abs_z = (mat.m[08] * v.x).abs() + (mat.m[09] * v.y).abs() + (mat.m[10] * v.z).abs();
+    let gamma3 = gamma(3);
+    ErrorTrackedVec3 {
+        value: Vec3::new(x, y, z),
+        error: Vec3::new(gamma3 * abs_x, gamma3 * abs_y, gamma3 * abs_z),
+    }
+}
+
+impl Transform3 for Ray {
+    fn transform(&self, mat: &Matrix4) -> Self {
+        //this keeps track of errors to avoid self intersections
+        let mut origin = transform_point_with_error(&self.origin, &mat);
+        let direction = transform_vec_with_error(&self.direction, &mat);
+        let length2 = direction.value.length2();
+        if length2 > 0.0 {
+            // adjust origin based on fp error
+            let dt = Vec3::dot(&self.direction.abs(), &origin.error) / length2;
+            origin.value += direction.value * dt;
+        }
+        Ray {
+            origin: origin.value,
+            direction: direction.value,
+            bounces: self.bounces,
+            error_origin: origin.error,
+            error_direction: direction.error,
         }
     }
 }

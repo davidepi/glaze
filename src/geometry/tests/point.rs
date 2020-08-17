@@ -1,4 +1,5 @@
-use crate::geometry::{Point2, Point3, Vec2, Vec3};
+use crate::geometry::matrix::Transform3;
+use crate::geometry::{Matrix4, Point2, Point3, Vec2, Vec3};
 use assert_approx_eq::assert_approx_eq;
 
 #[test]
@@ -255,4 +256,30 @@ fn point3_display() {
     let p = Point3::new(0.1, 1.2, 2.3);
     let str = format!("{}", &p);
     assert_eq!(str, "Point3[0.1, 1.2, 2.3]");
+}
+
+#[test]
+//w component is what really differentiate a Point3(x,y,z) from a Vec3(x,y,z).
+fn point3_transform_no_w_component() {
+    //no w component
+    let p = Point3::new(1.0, 1.0, 1.0);
+    let m = Matrix4::scale(&Vec3::new(3.0, 3.0, 3.0));
+    let transformed = p.transform(&m);
+    assert_eq!(transformed.x, 3.0);
+    assert_eq!(transformed.y, 3.0);
+    assert_eq!(transformed.z, 3.0);
+}
+
+#[test]
+//w component is what really differentiate a Point3(x,y,z) from a Vec3(x,y,z).
+//it appears in certain perspective matrix, here I faked it.
+fn point3_transform_with_w_component() {
+    let p = Point3::new(0.0, 1.0, 1.0);
+    let mut m = Matrix4::translation(&Vec3::new(0.0, -1.0, 2.5));
+    m.m[12] = 1.0;
+    m.m[14] = 1.0;
+    let transformed = p.transform(&m);
+    assert_eq!(transformed.x, 0.0);
+    assert_eq!(transformed.y, 0.0);
+    assert_approx_eq!(transformed.z, 3.5 / 2.0);
 }

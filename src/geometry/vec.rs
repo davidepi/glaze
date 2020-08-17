@@ -1,4 +1,4 @@
-use crate::geometry::matrix::Matrix4;
+use crate::geometry::matrix::{Matrix4, Transform3};
 use crate::utility::gamma;
 use log::warn;
 use overload::overload;
@@ -252,12 +252,6 @@ pub struct Vec3 {
     pub y: f32,
     /// A single precision floating point representing the `z` component of the vector.
     pub z: f32,
-}
-
-/// Group together a vector and the accumulated error for each component
-pub(super) struct ErrorTrackingVec3 {
-    pub(super) value: Vec3,
-    pub(super) error: Vec3,
 }
 
 /// A Normal can be represented as a Vec3 and behaves almost identically, except during its
@@ -614,52 +608,14 @@ impl Vec3 {
             z: vec_a.x * vec_b.y - vec_a.y * vec_b.x,
         }
     }
+}
 
-    /// Transforms the current vector with the matrix passed as `mat`.
-    ///
-    /// **NOTE:**
-    /// When transforming *Surface Normals* the input matrix **MUST** be the inverse of the
-    /// requested transformation. For example, an object-space to world-space matrix must be passed
-    /// in order to transform a world-space Normal to object-space.
-    ///
-    /// # Examples
-    /// ```
-    /// use assert_approx_eq::assert_approx_eq;
-    /// use glaze::geometry::{Matrix4, Point3, Vec3};
-    ///
-    /// let transform = Matrix4::rotate_x(std::f32::consts::PI);
-    /// let original = Vec3::new(0.0, 0.0, 1.0);
-    /// let transformed = original.transform(&transform);
-    ///
-    /// assert_approx_eq!(transformed.x, 0.0);
-    /// assert_approx_eq!(transformed.y, 0.0);
-    /// assert_approx_eq!(transformed.z, -1.0);
-    /// ```
-    pub fn transform(&self, mat: &Matrix4) -> Self {
+impl Transform3 for Vec3 {
+    fn transform(&self, mat: &Matrix4) -> Self {
         let x = mat.m[00] * self.x + mat.m[01] * self.y + mat.m[02] * self.z;
         let y = mat.m[04] * self.x + mat.m[05] * self.y + mat.m[06] * self.z;
         let z = mat.m[08] * self.x + mat.m[09] * self.y + mat.m[10] * self.z;
         Vec3 { x, y, z }
-    }
-
-    /// Transforms the vector with the matrix passed as `mat`, tracking the floating point error.
-    ///
-    /// Not public as this is used only internally by the ray class
-    pub(super) fn transform_with_error(&self, mat: &Matrix4) -> ErrorTrackingVec3 {
-        let x = mat.m[00] * self.x + mat.m[01] * self.y + mat.m[02] * self.z;
-        let y = mat.m[04] * self.x + mat.m[05] * self.y + mat.m[06] * self.z;
-        let z = mat.m[08] * self.x + mat.m[09] * self.y + mat.m[10] * self.z;
-        let abs_x =
-            (mat.m[00] * self.x).abs() + (mat.m[01] * self.y).abs() + (mat.m[02] * self.z).abs();
-        let abs_y =
-            (mat.m[04] * self.x).abs() + (mat.m[05] * self.y).abs() + (mat.m[06] * self.z).abs();
-        let abs_z =
-            (mat.m[08] * self.x).abs() + (mat.m[09] * self.y).abs() + (mat.m[10] * self.z).abs();
-        let gamma3 = gamma(3);
-        ErrorTrackingVec3 {
-            value: Vec3::new(x, y, z),
-            error: Vec3::new(gamma3 * abs_x, gamma3 * abs_y, gamma3 * abs_z),
-        }
     }
 }
 
