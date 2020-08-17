@@ -86,6 +86,19 @@ fn vec2_normalize_zero() {
 }
 
 #[test]
+fn vec2_abs() {
+    let negative = Vec2::new(-1.5, -2.5);
+    let positive = Vec2::new(1.5, 2.5);
+    let neg_abs = negative.abs();
+    let pos_abs = positive.abs();
+
+    assert_eq!(neg_abs.x, 1.5);
+    assert_eq!(neg_abs.y, 2.5);
+    assert_eq!(pos_abs.x, 1.5);
+    assert_eq!(pos_abs.y, 2.5);
+}
+
+#[test]
 fn vec2_clamp() {
     let sample = Vec2::new(4.9, -5.8);
     let mut clamped;
@@ -316,6 +329,21 @@ fn vec3_normalize() {
 #[should_panic]
 fn vec3_normalize_zero() {
     let _ = Vec3::zero().normalize();
+}
+
+#[test]
+fn vec3_abs() {
+    let negative = Vec3::new(-1.5, -2.5, -3.5);
+    let positive = Vec3::new(1.5, 2.5, 3.5);
+    let neg_abs = negative.abs();
+    let pos_abs = positive.abs();
+
+    assert_eq!(neg_abs.x, 1.5);
+    assert_eq!(neg_abs.y, 2.5);
+    assert_eq!(neg_abs.z, 3.5);
+    assert_eq!(pos_abs.x, 1.5);
+    assert_eq!(pos_abs.y, 2.5);
+    assert_eq!(pos_abs.z, 3.5);
 }
 
 #[test]

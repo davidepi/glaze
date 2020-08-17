@@ -19,6 +19,12 @@ pub struct Ray {
     /// reaches a determined value, the ray must be destroyed. However, this is responsibility of
     /// the integrator algorithm and not of the ray itself.
     pub bounces: u8,
+    /// The accumulated floating point error (during transformations) on the origin's components.
+    /// This is used for more accurate intersections.
+    pub(crate) error_origin: Vec3,
+    /// The accumulated floating point error (during transformations) on the direction's components.
+    /// This is used for more accurate intersections.
+    pub(crate) error_direction: Vec3,
 }
 
 impl Ray {
@@ -41,6 +47,8 @@ impl Ray {
             origin: Point3::zero(),
             direction: Vec3::new(0.0, 0.0, 1.0),
             bounces: 0,
+            error_origin: Vec3::zero(),
+            error_direction: Vec3::zero(),
         }
     }
 
@@ -65,6 +73,8 @@ impl Ray {
             origin: *origin,
             direction: *direction,
             bounces: 0,
+            error_origin: Vec3::zero(),
+            error_direction: Vec3::zero(),
         }
     }
 
@@ -87,10 +97,20 @@ impl Ray {
     /// assert_approx_eq!(transformed.direction.z, -1.0);
     /// ```
     pub fn transform(&self, matrix: &Matrix4) -> Ray {
+        let mut origin = self.origin.transform_with_error(&matrix);
+        let direction = self.direction.transform_with_error(&matrix);
+        let length2 = direction.value.length2();
+        if length2 > 0.0 {
+            // adjust origin based on fp error
+            let dt = Vec3::dot(&self.direction.abs(), &origin.error) / length2;
+            origin.value += direction.value * dt;
+        }
         Ray {
-            origin: self.origin.transform(&matrix),
-            direction: self.direction.transform(&matrix),
+            origin: origin.value,
+            direction: direction.value,
             bounces: self.bounces,
+            error_origin: origin.error,
+            error_direction: direction.error,
         }
     }
 

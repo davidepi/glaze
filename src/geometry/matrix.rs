@@ -29,6 +29,7 @@ const M33: usize = 15;
 /// used to perform transformations such as scaling, rotations or translations of a model.
 /// The matrix is 4x4 instead of 3x3 because some transformations requires an homogeneus space
 /// instead of a cartesian one.
+#[derive(Clone)]
 pub struct Matrix4 {
     pub(super) m: [f32; 16],
 }

@@ -1,4 +1,4 @@
-use crate::geometry::Point3;
+use crate::geometry::{Matrix4, Point3};
 use overload::overload;
 use std::f32::INFINITY;
 use std::ops;
@@ -220,6 +220,27 @@ impl AABB {
             y: (self.bot.y + self.top.y) * 0.5,
             z: (self.bot.z + self.top.z) * 0.5,
         }
+    }
+
+    pub fn transform(&self, matrix: &Matrix4) -> AABB {
+        // transform all 8 points of the box, transforming two corners and taking their min/max
+        // is not sufficient
+        let p = [
+            self.bot.transform(matrix),
+            Point3::new(self.top.x, self.bot.y, self.bot.z).transform(matrix),
+            Point3::new(self.top.x, self.top.y, self.bot.z).transform(matrix),
+            Point3::new(self.bot.x, self.top.y, self.bot.z).transform(matrix),
+            Point3::new(self.bot.x, self.bot.y, self.top.z).transform(matrix),
+            Point3::new(self.top.x, self.bot.y, self.top.z).transform(matrix),
+            Point3::new(self.bot.x, self.top.y, self.top.z).transform(matrix),
+            self.top.transform(matrix),
+        ];
+        // take their min and max as new top/bot
+        // TODO: replace with https://github.com/rust-lang/rust/issues/68125 when stable
+        let bot = p.iter().fold(p[0], |bot, x| Point3::min(&bot, x));
+        let top = p.iter().fold(p[0], |top, x| Point3::max(&top, x));
+
+        AABB { bot, top }
     }
 }
 

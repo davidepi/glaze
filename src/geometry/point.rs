@@ -1,7 +1,7 @@
 use crate::geometry::matrix::Matrix4;
 use crate::geometry::vec::Vec2;
 use crate::geometry::vec::Vec3;
-use crate::utility::float_eq;
+use crate::utility::{float_eq, gamma};
 use overload::overload;
 use std::fmt::Formatter;
 use std::ops;
@@ -145,6 +145,12 @@ pub struct Point3 {
     pub z: f32,
 }
 
+// group together a floating point and the possible rounding error for each component
+pub(super) struct ErrorTrackedPoint3 {
+    pub(super) value: Point3,
+    pub(super) error: Vec3,
+}
+
 impl Point3 {
     /// Constructs a point in the Origin of the cartesian space, with coordinates (0.0, 0.0, 0.0)
     /// # Examples
@@ -271,6 +277,39 @@ impl Point3 {
             z *= w;
         }
         Point3 { x, y, z }
+    }
+
+    /// Transforms the point with the matrix passed as `mat`, tracking the floating point error.
+    ///
+    /// Not public as this is used only internally by the ray class
+    pub(super) fn transform_with_error(&self, mat: &Matrix4) -> ErrorTrackedPoint3 {
+        let mut x = mat.m[00] * self.x + mat.m[01] * self.y + mat.m[02] * self.z + mat.m[03];
+        let mut y = mat.m[04] * self.x + mat.m[05] * self.y + mat.m[06] * self.z + mat.m[07];
+        let mut z = mat.m[08] * self.x + mat.m[09] * self.y + mat.m[10] * self.z + mat.m[11];
+        let mut w = mat.m[12] * self.x + mat.m[13] * self.y + mat.m[14] * self.z + mat.m[15];
+        let abs_x = (mat.m[00] * self.x).abs()
+            + (mat.m[01] * self.y).abs()
+            + (mat.m[02] * self.z).abs()
+            + mat.m[03];
+        let abs_y = (mat.m[04] * self.x).abs()
+            + (mat.m[05] * self.y).abs()
+            + (mat.m[06] * self.z).abs()
+            + mat.m[07];
+        let abs_z = (mat.m[08] * self.x).abs()
+            + (mat.m[09] * self.y).abs()
+            + (mat.m[10] * self.z).abs()
+            + mat.m[11];
+        if !float_eq(w, 1.0, 1E-5) {
+            w = 1.0 / w;
+            x *= w;
+            y *= w;
+            z *= w;
+        }
+        let gamma3 = gamma(3);
+        ErrorTrackedPoint3 {
+            value: Point3::new(x, y, z),
+            error: Vec3::new(gamma3 * abs_x, gamma3 * abs_y, gamma3 * abs_z),
+        }
     }
 }
 

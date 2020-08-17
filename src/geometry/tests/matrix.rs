@@ -546,6 +546,32 @@ fn transform_point3_with_w_component() {
 }
 
 #[test]
+//w component is what really differentiate a Point3(x,y,z) from a Vec3(x,y,z).
+fn transform_werror_point3_no_w_component() {
+    //no w component
+    let p = Point3::new(1.0, 1.0, 1.0);
+    let m = Matrix4::scale(&Vec3::new(3.0, 3.0, 3.0));
+    let transformed = p.transform_with_error(&m);
+    assert_eq!(transformed.value.x, 3.0);
+    assert_eq!(transformed.value.y, 3.0);
+    assert_eq!(transformed.value.z, 3.0);
+}
+
+#[test]
+//w component is what really differentiate a Point3(x,y,z) from a Vec3(x,y,z).
+//it appears in certain perspective matrix, here I faked it.
+fn transform_werror_point3_with_w_component() {
+    let p = Point3::new(0.0, 1.0, 1.0);
+    let mut m = Matrix4::translation(&Vec3::new(0.0, -1.0, 2.5));
+    m.m[12] = 1.0;
+    m.m[14] = 1.0;
+    let transformed = p.transform_with_error(&m);
+    assert_eq!(transformed.value.x, 0.0);
+    assert_eq!(transformed.value.y, 0.0);
+    assert_approx_eq!(transformed.value.z, 3.5 / 2.0);
+}
+
+#[test]
 //scale should alter the vector
 fn transform_vec3_scale() {
     //scale

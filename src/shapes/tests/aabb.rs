@@ -1,4 +1,4 @@
-use crate::geometry::Point3;
+use crate::geometry::{Point3, Matrix4};
 use crate::shapes::AABB;
 use assert_approx_eq::assert_approx_eq;
 use std::f32::INFINITY;
@@ -558,4 +558,19 @@ fn aabb_sum_assign_aabb_infinite() {
     assert_approx_eq!(aabb.top.x, old.top.x, 1e-5);
     assert!(aabb.top.y.is_infinite());
     assert!(aabb.top.z.is_infinite());
+}
+
+#[test]
+fn aabb_transform() {
+    let one = Point3::new(1.0, 1.0, 1.0);
+    let aabb = AABB::new(&-one, &one);
+    let matrix = Matrix4::rotate_z((-45.0 as f32).to_radians());
+    let transformed = aabb.transform(&matrix);
+
+    assert_approx_eq!(transformed.bot.x, -1.414213);
+    assert_approx_eq!(transformed.bot.y, -1.414213);
+    assert_eq!(transformed.bot.z, -1.0);
+    assert_approx_eq!(transformed.top.x, 1.414213);
+    assert_approx_eq!(transformed.top.y, 1.414213);
+    assert_eq!(transformed.top.z, 1.0);
 }

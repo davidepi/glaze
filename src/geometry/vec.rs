@@ -1,4 +1,5 @@
 use crate::geometry::matrix::Matrix4;
+use crate::utility::gamma;
 use log::warn;
 use overload::overload;
 use std::f32;
@@ -147,6 +148,24 @@ impl Vec2 {
         len > 1. - f32::EPSILON && len < 1. + f32::EPSILON
     }
 
+    /// Returns the component-wise absolute value for this vector.
+    /// # Examples
+    /// ```
+    /// use glaze::geometry::Vec2;
+    ///
+    /// let negative = Vec2::new(-1.0, -2.0);
+    /// let positive = negative.abs();
+    ///
+    /// assert_eq!(positive.x, 1.0);
+    /// assert_eq!(positive.y, 2.0);
+    /// ```
+    pub fn abs(&self) -> Vec2 {
+        Vec2 {
+            x: self.x.abs(),
+            y: self.y.abs(),
+        }
+    }
+
     /// Returns the current vector restricted between two boundaries.
     ///
     /// The lower bound is defined by the `min` parameter, while the upper bound is defined by the
@@ -233,6 +252,12 @@ pub struct Vec3 {
     pub y: f32,
     /// A single precision floating point representing the `z` component of the vector.
     pub z: f32,
+}
+
+/// Group together a vector and the accumulated error for each component
+pub(super) struct ErrorTrackingVec3 {
+    pub(super) value: Vec3,
+    pub(super) error: Vec3,
 }
 
 /// A Normal can be represented as a Vec3 and behaves almost identically, except during its
@@ -401,6 +426,26 @@ impl Vec3 {
     pub fn is_normalized(&self) -> bool {
         let len = self.length();
         len > 1. - f32::EPSILON && len < 1. + f32::EPSILON
+    }
+
+    /// Returns the component-wise absolute value for this vector.
+    /// # Examples
+    /// ```
+    /// use glaze::geometry::Vec3;
+    ///
+    /// let negative = Vec3::new(-1.0, -2.0, -3.0);
+    /// let positive = negative.abs();
+    ///
+    /// assert_eq!(positive.x, 1.0);
+    /// assert_eq!(positive.y, 2.0);
+    /// assert_eq!(positive.z, 3.0);
+    /// ```
+    pub fn abs(&self) -> Vec3 {
+        Vec3 {
+            x: self.x.abs(),
+            y: self.y.abs(),
+            z: self.z.abs(),
+        }
     }
 
     /// Returns the current vector restricted between two boundaries.
@@ -595,6 +640,26 @@ impl Vec3 {
         let y = mat.m[04] * self.x + mat.m[05] * self.y + mat.m[06] * self.z;
         let z = mat.m[08] * self.x + mat.m[09] * self.y + mat.m[10] * self.z;
         Vec3 { x, y, z }
+    }
+
+    /// Transforms the vector with the matrix passed as `mat`, tracking the floating point error.
+    ///
+    /// Not public as this is used only internally by the ray class
+    pub(super) fn transform_with_error(&self, mat: &Matrix4) -> ErrorTrackingVec3 {
+        let x = mat.m[00] * self.x + mat.m[01] * self.y + mat.m[02] * self.z;
+        let y = mat.m[04] * self.x + mat.m[05] * self.y + mat.m[06] * self.z;
+        let z = mat.m[08] * self.x + mat.m[09] * self.y + mat.m[10] * self.z;
+        let abs_x =
+            (mat.m[00] * self.x).abs() + (mat.m[01] * self.y).abs() + (mat.m[02] * self.z).abs();
+        let abs_y =
+            (mat.m[04] * self.x).abs() + (mat.m[05] * self.y).abs() + (mat.m[06] * self.z).abs();
+        let abs_z =
+            (mat.m[08] * self.x).abs() + (mat.m[09] * self.y).abs() + (mat.m[10] * self.z).abs();
+        let gamma3 = gamma(3);
+        ErrorTrackingVec3 {
+            value: Vec3::new(x, y, z),
+            error: Vec3::new(gamma3 * abs_x, gamma3 * abs_y, gamma3 * abs_z),
+        }
     }
 }
 

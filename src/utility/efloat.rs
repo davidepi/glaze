@@ -2,6 +2,8 @@ use overload::overload;
 use std::fmt::Formatter;
 use std::ops;
 
+pub const MACHINE_EPSILON: f32 = f32::EPSILON * 0.5;
+
 /// Trait used to implement methods to get the next or the previous representable float.
 pub trait NextRepresentable {
     /// Returns the next representable float.
@@ -33,6 +35,17 @@ impl NextRepresentable for f32 {
             f32::from_bits(ui)
         }
     }
+}
+
+/// Function to track the accumulated fp error as described by *Higham N. J.* in
+/// *Accuracy and Stability of Numerical Algorithms*, section 3.1.
+/// For a precise description of the function or the input value check the above source (it's long).
+/// Intuitively this function is the accumulated rounding error, the input is the nth operation
+/// performed.
+#[inline]
+pub(crate) fn gamma(n: i32) -> f32 {
+    let nn = n as f32;
+    (nn * MACHINE_EPSILON) / (1.0 - nn * MACHINE_EPSILON)
 }
 
 /// Float (f32) value keeping track of the error accumulation.
