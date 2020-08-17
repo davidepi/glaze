@@ -1,6 +1,6 @@
+use crate::geometry::matrix::Transform3;
 use crate::geometry::{Matrix4, Point3, Ray, Vec3};
 use assert_approx_eq::assert_approx_eq;
-use crate::geometry::matrix::Transform3;
 
 #[test]
 fn ray_default_constructor() {

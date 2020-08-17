@@ -1,4 +1,4 @@
-use crate::geometry::{Matrix4, Transform3, Point3};
+use crate::geometry::{Matrix4, Point3, Transform3};
 use overload::overload;
 use std::f32::INFINITY;
 use std::ops;

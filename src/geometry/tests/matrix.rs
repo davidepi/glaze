@@ -1,6 +1,5 @@
 use crate::geometry::{Matrix4, Point3, Vec3};
 use assert_approx_eq::assert_approx_eq;
-use crate::geometry::matrix::Transform3;
 
 #[test]
 fn matrix4_new() {
@@ -328,10 +327,10 @@ fn matrix4_get_scale() {
     combined *= mrx;
     combined *= ms;
 
-    let extracted = combined.get_translation();
-    assert_approx_eq!(extracted.x, translation.x, 1e-5);
-    assert_approx_eq!(extracted.y, translation.y, 1e-5);
-    assert_approx_eq!(extracted.z, translation.z, 1e-5);
+    let extracted = combined.get_scale();
+    assert_approx_eq!(extracted.x, scale.x, 1e-5);
+    assert_approx_eq!(extracted.y, scale.y, 1e-5);
+    assert_approx_eq!(extracted.z, scale.z, 1e-5);
 }
 
 #[test]

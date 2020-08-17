@@ -1,5 +1,4 @@
 use crate::geometry::matrix::{Matrix4, Transform3};
-use crate::utility::gamma;
 use log::warn;
 use overload::overload;
 use std::f32;

@@ -44,8 +44,8 @@ impl NextRepresentable for f32 {
 /// performed.
 #[inline]
 pub(crate) fn gamma(n: i32) -> f32 {
-    let nn = n as f32;
-    (nn * MACHINE_EPSILON) / (1.0 - nn * MACHINE_EPSILON)
+    let n_machine = n as f32 * MACHINE_EPSILON;
+    n_machine / 1.0 - n_machine
 }
 
 /// Float (f32) value keeping track of the error accumulation.

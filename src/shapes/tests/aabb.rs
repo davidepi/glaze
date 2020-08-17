@@ -1,4 +1,4 @@
-use crate::geometry::{Point3, Matrix4, Transform3};
+use crate::geometry::{Matrix4, Point3, Transform3};
 use crate::shapes::AABB;
 use assert_approx_eq::assert_approx_eq;
 use std::f32::INFINITY;

@@ -107,17 +107,17 @@ struct ErrorTrackedPoint3 {
     error: Vec3,
 }
 
-fn transform_point_with_error(p: &Point3, mat: &Matrix4) -> ErrorTrackedPoint3 {
-    let mut x = mat.m[00] * p.x + mat.m[01] * p.y + mat.m[02] * p.z + mat.m[03];
-    let mut y = mat.m[04] * p.x + mat.m[05] * p.y + mat.m[06] * p.z + mat.m[07];
-    let mut z = mat.m[08] * p.x + mat.m[09] * p.y + mat.m[10] * p.z + mat.m[11];
-    let mut w = mat.m[12] * p.x + mat.m[13] * p.y + mat.m[14] * p.z + mat.m[15];
+fn transform_point_with_error(pt: &Point3, mat: &Matrix4) -> ErrorTrackedPoint3 {
+    let mut x = mat.m[00] * pt.x + mat.m[01] * pt.y + mat.m[02] * pt.z + mat.m[03];
+    let mut y = mat.m[04] * pt.x + mat.m[05] * pt.y + mat.m[06] * pt.z + mat.m[07];
+    let mut z = mat.m[08] * pt.x + mat.m[09] * pt.y + mat.m[10] * pt.z + mat.m[11];
+    let mut w = mat.m[12] * pt.x + mat.m[13] * pt.y + mat.m[14] * pt.z + mat.m[15];
     let abs_x =
-        (mat.m[00] * p.x).abs() + (mat.m[01] * p.y).abs() + (mat.m[02] * p.z).abs() + mat.m[03];
+        (mat.m[00] * pt.x).abs() + (mat.m[01] * pt.y).abs() + (mat.m[02] * pt.z).abs() + mat.m[03];
     let abs_y =
-        (mat.m[04] * p.x).abs() + (mat.m[05] * p.y).abs() + (mat.m[06] * p.z).abs() + mat.m[07];
+        (mat.m[04] * pt.x).abs() + (mat.m[05] * pt.y).abs() + (mat.m[06] * pt.z).abs() + mat.m[07];
     let abs_z =
-        (mat.m[08] * p.x).abs() + (mat.m[09] * p.y).abs() + (mat.m[10] * p.z).abs() + mat.m[11];
+        (mat.m[08] * pt.x).abs() + (mat.m[09] * pt.y).abs() + (mat.m[10] * pt.z).abs() + mat.m[11];
     if !float_eq(w, 1.0, 1E-5) {
         w = 1.0 / w;
         x *= w;
@@ -136,13 +136,13 @@ struct ErrorTrackedVec3 {
     error: Vec3,
 }
 
-fn transform_vec_with_error(v: &Vec3, mat: &Matrix4) -> ErrorTrackedVec3 {
-    let x = mat.m[00] * v.x + mat.m[01] * v.y + mat.m[02] * v.z;
-    let y = mat.m[04] * v.x + mat.m[05] * v.y + mat.m[06] * v.z;
-    let z = mat.m[08] * v.x + mat.m[09] * v.y + mat.m[10] * v.z;
-    let abs_x = (mat.m[00] * v.x).abs() + (mat.m[01] * v.y).abs() + (mat.m[02] * v.z).abs();
-    let abs_y = (mat.m[04] * v.x).abs() + (mat.m[05] * v.y).abs() + (mat.m[06] * v.z).abs();
-    let abs_z = (mat.m[08] * v.x).abs() + (mat.m[09] * v.y).abs() + (mat.m[10] * v.z).abs();
+fn transform_vec_with_error(vec: &Vec3, mat: &Matrix4) -> ErrorTrackedVec3 {
+    let x = mat.m[00] * vec.x + mat.m[01] * vec.y + mat.m[02] * vec.z;
+    let y = mat.m[04] * vec.x + mat.m[05] * vec.y + mat.m[06] * vec.z;
+    let z = mat.m[08] * vec.x + mat.m[09] * vec.y + mat.m[10] * vec.z;
+    let abs_x = (mat.m[00] * vec.x).abs() + (mat.m[01] * vec.y).abs() + (mat.m[02] * vec.z).abs();
+    let abs_y = (mat.m[04] * vec.x).abs() + (mat.m[05] * vec.y).abs() + (mat.m[06] * vec.z).abs();
+    let abs_z = (mat.m[08] * vec.x).abs() + (mat.m[09] * vec.y).abs() + (mat.m[10] * vec.z).abs();
     let gamma3 = gamma(3);
     ErrorTrackedVec3 {
         value: Vec3::new(x, y, z),
