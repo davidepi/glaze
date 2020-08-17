@@ -212,8 +212,8 @@ Ef32 {
 overload!((a: ?Ef32) - (b: ?Ef32) -> Ef32 {
 Ef32 {
     val: a.val-b.val,
-    low: (a.low - b.low).previous_before(),
-    high: (a.high - b.high).next_after(),
+    low: (a.low - b.high).previous_before(),
+    high: (a.high - b.low).next_after(),
 }
 });
 
@@ -244,14 +244,14 @@ Ef32 {
 overload!(- (a: ?Ef32) -> Ef32 {
 Ef32 {
     val: -a.val,
-    low: -a.low,
-    high: -a.high,
+    low: -a.high,
+    high: -a.low,
 }
 });
 
 impl std::fmt::Display for Ef32 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} - [{}, {}]", self.val, self.low, self.high)
+        write!(f, "EF~{} [{} - {}]", self.val, self.low, self.high)
     }
 }
 
@@ -260,7 +260,7 @@ impl std::fmt::Display for Ef32 {
 /// If `b^2-4ac >= 0` returns the two results, otherwise None
 pub(crate) fn quadratic(a: Ef32, b: Ef32, c: Ef32) -> Option<(Ef32, Ef32)> {
     let discriminant = b.val * b.val - 4. * a.val * c.val;
-    if discriminant > 0.0 {
+    if discriminant >= 0.0 {
         let root = discriminant.sqrt();
         let root_ef = Ef32::new(root, std::f32::EPSILON * 0.5 * root);
         let q = if b.val < 0.0 {

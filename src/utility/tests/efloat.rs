@@ -1,5 +1,6 @@
-use crate::utility::efloat::NextRepresentable;
+use crate::utility::efloat::{quadratic, NextRepresentable};
 use crate::utility::{lerp, Ef32};
+use assert_approx_eq::assert_approx_eq;
 use rand::{Rng, RngCore, SeedableRng};
 use rand_xoshiro::Xoshiro256StarStar;
 use std::f32::INFINITY;
@@ -91,7 +92,7 @@ fn ef32_precision_longrun() {
                 _ => panic!(),
             }
             // random operation
-            match rng.gen_range(0, 1) {
+            match rng.gen_range(0, 7) {
                 0 => {
                     tracked1 = -tracked1;
                     precise1 = -precise1;
@@ -124,10 +125,67 @@ fn ef32_precision_longrun() {
                 }
                 6 => {
                     tracked1 = tracked1.abs();
-                    precise1 = precise1.abs()
+                    precise1 = precise1.abs();
                 }
                 _ => panic!(),
             }
         }
     }
+}
+
+#[test]
+fn efloat_display() {
+    let two = Ef32::new(2.0, 0.0);
+    let sqrt = two.sqrt();
+    let str = format!("{}", &sqrt);
+    assert_eq!(str, "EF~1.4142135 [1.4142134 - 1.4142137]");
+}
+
+#[test]
+// Δ > 0
+fn quadratic_two_sol() {
+    let a = Ef32::new(2.0, 0.0);
+    let b = Ef32::new(1.0, 0.0);
+    let c = Ef32::new(-1.0, 0.0);
+    let sol = quadratic(a, b, c);
+    assert!(sol.is_some());
+    let q = sol.unwrap();
+    assert_approx_eq!((q.0).value(), -1.0);
+    assert_approx_eq!((q.1).value(), 0.5);
+}
+
+#[test]
+// Δ = 0, very rare but could happen
+fn quadratic_one_sol() {
+    let a = Ef32::new(2.0, 0.0);
+    let b = Ef32::new(1.0, 0.0);
+    let c = Ef32::new(0.125, 0.0);
+    let sol = quadratic(a, b, c);
+    assert!(sol.is_some());
+    let q = sol.unwrap();
+    assert_approx_eq!((q.0).value(), -0.25);
+    assert_approx_eq!((q.1).value(), -0.25);
+}
+
+#[test]
+// Δ < 0
+fn quadratic_zero_sol() {
+    let a = Ef32::new(2.0, 0.0);
+    let b = Ef32::new(1.0, 0.0);
+    let c = Ef32::new(1.0, 0.0);
+    let sol = quadratic(a, b, c);
+    assert!(sol.is_none());
+}
+
+#[test]
+// negative b performs a different algorithm (to minimize errors)
+fn quadratic_neg_b() {
+    let a = Ef32::new(1.0, 0.0);
+    let b = Ef32::new(-2.0, 0.0);
+    let c = Ef32::new(0.75, 0.0);
+    let sol = quadratic(a, b, c);
+    assert!(sol.is_some());
+    let q = sol.unwrap();
+    assert_approx_eq!((q.0).value(), 0.5);
+    assert_approx_eq!((q.1).value(), 1.5);
 }
