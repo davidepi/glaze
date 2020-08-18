@@ -32,3 +32,30 @@ pub fn float_eq(a: f32, b: f32, epsilon: f32) -> bool {
 pub fn lerp(value: f32, min: f32, max: f32) -> f32 {
     (1.0 - value) * min + value * max
 }
+
+/// Restricts a value to a certain interval.
+///
+/// Used as a replacement while
+/// [the std version](https://doc.rust-lang.org/std/primitive.f32.html#method.clamp)
+/// is nightly-only
+/// # Examples
+/// Basic usage:
+/// ```
+/// // ez example stolen from the above link
+/// use glaze::utility::clamp;
+///
+/// assert_eq!(clamp(-3.0, -2.0, 1.0), -2.0);
+/// assert_eq!(clamp(0.0, -2.0, 1.0), 0.0);
+/// assert_eq!(clamp(2.0, -2.0, 1.0), 1.0);
+/// ```
+//TODO: replace all occurrences with std version when it will be stabilized
+#[inline]
+pub fn clamp(value: f32, min: f32, max: f32) -> f32 {
+    if value <= min {
+        min
+    } else if value >= max {
+        max
+    } else {
+        value
+    }
+}
