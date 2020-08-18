@@ -1,7 +1,7 @@
 use crate::geometry::{Normal, Point2, Point3, Ray, Vec3};
 use crate::shapes::AABB;
 
-/// Represents the point in space hit by a ray, along with some of its properties.
+/// Represents the point in space hit by a Ray, along with some properties.
 pub struct HitPoint {
     /// The hit point. Could be either in world space or object space.
     pub point: Point3,
@@ -21,15 +21,27 @@ pub struct HitPoint {
 
 /// Type representing the result of an intersection between a Ray and a Shape.
 pub struct Intersection {
-    /// The distance of the hit point from the ray.
+    /// The distance of the closest hit point from the ray.
     pub distance: f32,
+    /// The distance of the furthest hit point from the ray.
+    pub far_distance: f32,
     /// Data about the hit point.
     pub hit: HitPoint,
 }
 
-/// A trait used to represent a geometric primitive (Sphere, Triangle, etc.) in object-space.
+/// A trait used to represent a geometric primitive (sphere, triangle, etc.) in object-space.
 pub trait Shape {
     /// Returns the ID of this shape.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use glaze::shapes::{Shape, Sphere};
+    ///
+    /// let sphere = Sphere::new(505);
+    /// let id = sphere.get_id();
+    ///
+    /// assert_eq!(id, 505);
+    /// ```
     fn get_id(&self) -> usize;
 
     /// Intersects a Ray with the current shape.
@@ -38,11 +50,24 @@ pub trait Shape {
     /// the shape, returning if the intersection happened in the range defined by the minimum
     /// epsilon and the current distance.
     ///
-    /// **NOTE**: If there is an intersection, but it is outside the range defined
-    /// by SELF_INTERSECTION_ERROR and the current distance value, this method
-    /// should return None.
+    /// This method should guarantee that the field `distance` on the returned `Intersection` is
+    /// always greater than 0 and finite, if the returned value is not `None`. No such guarantee
+    /// is necessary for `far_distance`.
     ///
     /// The ray should be in the object space of the primitive being intersected
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::shapes::{Shape, Sphere};
+    ///
+    /// let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
+    /// let sphere = Sphere::new(0);
+    /// let intersection = sphere.intersect(&ray);
+    ///
+    /// assert!(intersection.is_some());
+    /// assert_eq!(intersection.unwrap().distance, 9.0);
+    /// ```
     // TODO: add MaskBoolean as parameter for alpha masking after porting the textures
     fn intersect(&self, ray: &Ray) -> Option<Intersection>;
 
@@ -50,6 +75,18 @@ pub trait Shape {
     ///
     /// Unlike the intersect method, this one should return just true or false if any kind of
     /// intersection happened. Setting the Intersection value is expensive and sometimes not needed.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::shapes::{Shape, Sphere};
+    ///
+    /// let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
+    /// let sphere = Sphere::new(0);
+    /// let intersection = sphere.intersect_fast(&ray);
+    ///
+    /// assert!(intersection);
+    /// ```
     // TODO: add MaskBoolean as parameter for alpha masking after porting the textures
     fn intersect_fast(&self, ray: &Ray) -> bool;
 
@@ -57,6 +94,16 @@ pub trait Shape {
     ///
     /// In its implementations, this method should return an AABB that can fit well on this shape
     /// in object space.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use glaze::shapes::{Shape, Sphere};
+    ///
+    /// let sphere = Sphere::new(0);
+    /// let aabb = sphere.bounding_box();
+    ///
+    /// assert_eq!(aabb.volume(), 8.0);
+    /// ```
     fn bounding_box(&self) -> AABB;
 }
 

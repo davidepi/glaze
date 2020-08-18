@@ -93,23 +93,30 @@ impl Shape for Sphere {
         let c = (origin_x * origin_x) + (origin_y * origin_y) + (origin_z * origin_z) - one;
 
         let intersection = quadratic(a, b, c);
-        let hit_distance = if let Some(intersection) = intersection {
+        let closest;
+        let furthest;
+        if let Some(intersection) = intersection {
             if intersection.1.lower() < 0.0 {
-                None // intersection happened behind ray origin
+                // intersection happened behind ray origin
+                closest = f32::INFINITY;
+                furthest = f32::INFINITY;
             } else if intersection.0.lower() < 0.0 {
-                Some(intersection.1) // origin is inside the sphere, keep the second intersection
+                closest = intersection.1.value();
+                furthest = f32::INFINITY;
             } else {
-                Some(intersection.0)
+                closest = intersection.0.value();
+                furthest = intersection.1.value();
             }
         } else {
-            None // no intersection at all
+            closest = f32::INFINITY;
+            furthest = f32::INFINITY;
         };
 
         // now we have the intersection distance. Finding the hit point is as simple as following
         // the ray direction starting from the origin for the found distance. This was already
         // implemented in the method `point_along`
-        if let Some(hit_distance) = hit_distance {
-            let mut hit_point = ray.point_along(hit_distance.value());
+        if closest != f32::INFINITY {
+            let mut hit_point = ray.point_along(closest);
             // the next lines refines the hit point accounting for the error
             let refine_offset = 1.0 / Point3::distance(&Point3::zero(), &hit_point);
             hit_point.x *= refine_offset;
@@ -129,7 +136,8 @@ impl Shape for Sphere {
             // compute uvs and differential for the intersection point
             let interaction = compute_interaction(&hit_point);
             Some(Intersection {
-                distance: hit_distance.value(),
+                distance: closest,
+                far_distance: furthest,
                 hit: HitPoint {
                     point: hit_point,
                     normal,
