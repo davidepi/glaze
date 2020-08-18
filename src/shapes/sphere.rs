@@ -1,5 +1,5 @@
 use crate::geometry::{Point2, Point3, Ray, Vec3};
-use crate::shapes::{HitPoint, Intersection, Shape, AABB};
+use crate::shapes::{HitPoint, Intersection, Shape, AABB, ID_SPHERE, ID_SPHERE_INVERTED};
 use crate::utility::{clamp, quadratic, Ef32};
 
 /// A primitive representing a sphere centered in `(0.0, 0.0, 0.0)` with a radius of `1.0`.
@@ -11,26 +11,22 @@ use crate::utility::{clamp, quadratic, Ef32};
 /// light-emission issues). Be sure to call the correct constructor, either `new` or
 /// `inverted`.
 pub struct Sphere {
-    /// The id of the primitive
-    id: usize,
     /// true if the sphere is inverted
     inverted: bool,
 }
 
 impl Sphere {
-    /// Creates a new Sphere with radius 1.0 and the given `id`.
-    pub fn new(id: usize) -> Sphere {
-        Sphere {
-            id,
-            inverted: false,
-        }
+    /// Creates a new Sphere with radius 1.0
+    #[allow(clippy::new_without_default)] // it would suck only for this class out of all Shapes...
+    pub fn new() -> Sphere {
+        Sphere { inverted: false }
     }
 
-    /// Creates a new Sphere with radius 1.0 and the given `id`, but the sphere will be flipped.
+    /// Creates a new Sphere with radius 1.0, but the sphere will be flipped.
     ///
     /// Every normal will point towards the inside.
-    pub fn inverted(id: usize) -> Sphere {
-        Sphere { id, inverted: true }
+    pub fn inverted() -> Sphere {
+        Sphere { inverted: true }
     }
 }
 
@@ -71,7 +67,11 @@ fn compute_interaction(hit: &Point3) -> (Point2, Vec3, Vec3) {
 
 impl Shape for Sphere {
     fn get_id(&self) -> usize {
-        self.id
+        if !self.inverted {
+            ID_SPHERE
+        } else {
+            ID_SPHERE_INVERTED
+        }
     }
 
     fn intersect(&self, ray: &Ray) -> Option<Intersection> {

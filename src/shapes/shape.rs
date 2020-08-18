@@ -31,16 +31,18 @@ pub struct Intersection {
 
 /// A trait used to represent a geometric primitive (sphere, triangle, etc.) in object-space.
 pub trait Shape {
-    /// Returns the ID of this shape.
+    /// Returns an unique ID for the shape. Same shapes should return same IDs.
     /// # Examples
     /// Basic usage:
     /// ```
     /// use glaze::shapes::{Shape, Sphere};
     ///
-    /// let sphere = Sphere::new(505);
-    /// let id = sphere.get_id();
+    /// let sphere = Sphere::new();
+    /// let sphere_inv = Sphere::inverted();
+    /// let sphere_id = sphere.get_id();
+    /// let inv_id = sphere_inv.get_id();
     ///
-    /// assert_eq!(id, 505);
+    /// assert_ne!(sphere_id, inv_id);
     /// ```
     fn get_id(&self) -> usize;
 
@@ -62,7 +64,7 @@ pub trait Shape {
     /// use glaze::shapes::{Shape, Sphere};
     ///
     /// let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
-    /// let sphere = Sphere::new(0);
+    /// let sphere = Sphere::new();
     /// let intersection = sphere.intersect(&ray);
     ///
     /// assert!(intersection.is_some());
@@ -82,7 +84,7 @@ pub trait Shape {
     /// use glaze::shapes::{Shape, Sphere};
     ///
     /// let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
-    /// let sphere = Sphere::new(0);
+    /// let sphere = Sphere::new();
     /// let intersection = sphere.intersect_fast(&ray);
     ///
     /// assert!(intersection);
@@ -99,7 +101,7 @@ pub trait Shape {
     /// ```
     /// use glaze::shapes::{Shape, Sphere};
     ///
-    /// let sphere = Sphere::new(0);
+    /// let sphere = Sphere::new();
     /// let aabb = sphere.bounding_box();
     ///
     /// assert_eq!(aabb.volume(), 8.0);

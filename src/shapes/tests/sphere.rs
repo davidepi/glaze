@@ -1,17 +1,21 @@
 use crate::geometry::{Point3, Ray, Vec3};
-use crate::shapes::{Shape, Sphere};
+use crate::shapes::{Shape, Sphere, ID_SPHERE, ID_SPHERE_INVERTED};
 
 #[test]
 fn sphere_get_id() {
-    let s0 = Sphere::new(0);
-    let s2 = Sphere::new(2);
-    assert_eq!(s0.get_id(), 0);
-    assert_eq!(s2.get_id(), 2);
+    let s0 = Sphere::new();
+    assert_eq!(s0.get_id(), ID_SPHERE);
+}
+
+#[test]
+fn sphere_inverted_get_id() {
+    let s0 = Sphere::inverted();
+    assert_eq!(s0.get_id(), ID_SPHERE_INVERTED);
 }
 
 #[test]
 fn sphere_bounding_box() {
-    let sphere = Sphere::new(0);
+    let sphere = Sphere::new();
     let aabb = sphere.bounding_box();
     assert_eq!(aabb.bot.x, -1.0);
     assert_eq!(aabb.bot.y, -1.0);
@@ -23,7 +27,7 @@ fn sphere_bounding_box() {
 
 #[test]
 fn sphere_intersect_hit_origin_before() {
-    let sphere = Sphere::new(0);
+    let sphere = Sphere::new();
     let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
     let res = sphere.intersect(&ray);
     assert!(res.is_some());
@@ -49,7 +53,7 @@ fn sphere_intersect_hit_origin_before() {
 
 #[test]
 fn sphere_intersect_hit_origin_inside() {
-    let sphere = Sphere::new(0);
+    let sphere = Sphere::new();
     let ray = Ray::new(&Point3::zero(), &Vec3::new(1.0, 0.0, 0.0));
     let res = sphere.intersect(&ray);
     assert!(res.is_some());
@@ -76,7 +80,7 @@ fn sphere_intersect_hit_origin_inside() {
 #[test]
 fn sphere_intersect_hit_non_differentiable() {
     //hit in the exact vertical axis of the sphere
-    let sphere = Sphere::new(0);
+    let sphere = Sphere::new();
     let ray = Ray::new(&Point3::zero(), &Vec3::new(0.0, 0.0, 1.0));
     let res = sphere.intersect(&ray);
     assert!(res.is_some());
@@ -102,7 +106,7 @@ fn sphere_intersect_hit_non_differentiable() {
 
 #[test]
 fn sphere_intersect_miss() {
-    let sphere = Sphere::new(0);
+    let sphere = Sphere::new();
     let ray = Ray::new(&Point3::new(-2.0, -2.0, -10.0), &Vec3::new(0.0, 0.0, 1.0));
     let res = sphere.intersect(&ray);
     assert!(res.is_none());
@@ -111,7 +115,7 @@ fn sphere_intersect_miss() {
 #[test]
 //would be hit, but origin is beyond sphere => so it's miss
 fn sphere_intersect_origin_after() {
-    let sphere = Sphere::new(0);
+    let sphere = Sphere::new();
     let ray = Ray::new(&Point3::new(0.0, 10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
     let res = sphere.intersect(&ray);
     assert!(res.is_none());
@@ -119,7 +123,7 @@ fn sphere_intersect_origin_after() {
 
 #[test]
 fn sphere_intersect_fast_hit_origin_before() {
-    let sphere = Sphere::new(0);
+    let sphere = Sphere::new();
     let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
     let res = sphere.intersect_fast(&ray);
     assert!(res);
@@ -127,7 +131,7 @@ fn sphere_intersect_fast_hit_origin_before() {
 
 #[test]
 fn sphere_intersect_fast_hit_origin_inside() {
-    let sphere = Sphere::new(0);
+    let sphere = Sphere::new();
     let ray = Ray::new(&Point3::zero(), &Vec3::new(1.0, 0.0, 0.0));
     let res = sphere.intersect_fast(&ray);
     assert!(res);
@@ -136,7 +140,7 @@ fn sphere_intersect_fast_hit_origin_inside() {
 #[test]
 //would be hit, but origin is beyond sphere => so it's miss
 fn sphere_intersect_fast_origin_after() {
-    let sphere = Sphere::new(0);
+    let sphere = Sphere::new();
     let ray = Ray::new(&Point3::new(0.0, 10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
     let res = sphere.intersect_fast(&ray);
     assert!(!res);
@@ -144,7 +148,7 @@ fn sphere_intersect_fast_origin_after() {
 
 #[test]
 fn sphere_intersect_fast_miss() {
-    let sphere = Sphere::new(0);
+    let sphere = Sphere::new();
     let ray = Ray::new(&Point3::new(-2.0, -2.0, -10.0), &Vec3::new(0.0, 0.0, 1.0));
     let res = sphere.intersect_fast(&ray);
     assert!(!res);
@@ -152,7 +156,7 @@ fn sphere_intersect_fast_miss() {
 
 #[test]
 fn sphere_inverted_normal() {
-    let sphere = Sphere::inverted(0);
+    let sphere = Sphere::inverted();
     let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
     let res = sphere.intersect(&ray);
     assert!(res.is_some());
