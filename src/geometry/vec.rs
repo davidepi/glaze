@@ -4,6 +4,7 @@ use overload::overload;
 use std::f32;
 use std::fmt::Formatter;
 use std::ops;
+use std::ops::{Index, IndexMut};
 
 /// A vector of two components.
 ///
@@ -12,9 +13,9 @@ use std::ops;
 /// A Vec2 consist of two coordinates, usually called `x`, and `y`.
 #[derive(Clone, Copy)]
 pub struct Vec2 {
-    /// A single precision floating point representing the `x` component of the vector.
+    /// Single precision floating point representing the `x` component of the vector. Indexed by 0.
     pub x: f32,
-    /// A single precision floating point representing the `y` component of the vector.
+    /// Single precision floating point representing the `y` component of the vector. Indexed by 1.
     pub y: f32,
 }
 
@@ -226,6 +227,28 @@ impl std::fmt::Display for Vec2 {
     }
 }
 
+impl Index<u8> for Vec2 {
+    type Output = f32;
+
+    fn index(&self, index: u8) -> &Self::Output {
+        match index {
+            0 => &self.x,
+            1 => &self.y,
+            _ => panic!("Out of bounds index {} for Vec2", index),
+        }
+    }
+}
+
+impl IndexMut<u8> for Vec2 {
+    fn index_mut(&mut self, index: u8) -> &mut Self::Output {
+        match index {
+            0 => &mut self.x,
+            1 => &mut self.y,
+            _ => panic!("Out of bounds index {} for Vec2", index),
+        }
+    }
+}
+
 overload!((a: ?Vec2) + (b: ?Vec2) -> Vec2 {Vec2{x:a.x+b.x,y:a.y+b.y}});
 overload!((a: ?Vec2) - (b: ?Vec2) -> Vec2 {Vec2{x:a.x-b.x,y:a.y-b.y}});
 overload!((a: ?Vec2) + (b: f32) -> Vec2 {Vec2{x:a.x+b,y:a.y+b}});
@@ -245,11 +268,11 @@ overload!((a: &mut Vec2) *= (b: f32){a.x*=b;a.y*=b;});
 /// A Vec3 consist of three coordinates, usually called `x`, `y` and `z`.
 #[derive(Clone, Copy)]
 pub struct Vec3 {
-    /// A single precision floating point representing the `x` component of the vector.
+    /// Single precision floating point representing the `x` component of the vector. Indexed by 0.
     pub x: f32,
-    /// A single precision floating point representing the `y` component of the vector.
+    /// Single precision floating point representing the `y` component of the vector. Indexed by 1.
     pub y: f32,
-    /// A single precision floating point representing the `z` component of the vector.
+    /// Single precision floating point representing the `z` component of the vector. Indexed by 2.
     pub z: f32,
 }
 
@@ -621,6 +644,30 @@ impl Transform3 for Vec3 {
 impl std::fmt::Display for Vec3 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Vec3[{}, {}, {}]", self.x, self.y, self.z)
+    }
+}
+
+impl Index<u8> for Vec3 {
+    type Output = f32;
+
+    fn index(&self, index: u8) -> &Self::Output {
+        match index {
+            0 => &self.x,
+            1 => &self.y,
+            2 => &self.z,
+            _ => panic!("Out of bounds index {} for Vec3", index),
+        }
+    }
+}
+
+impl IndexMut<u8> for Vec3 {
+    fn index_mut(&mut self, index: u8) -> &mut Self::Output {
+        match index {
+            0 => &mut self.x,
+            1 => &mut self.y,
+            2 => &mut self.z,
+            _ => panic!("Out of bounds index {} for Vec3", index),
+        }
     }
 }
 

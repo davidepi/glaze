@@ -1,17 +1,5 @@
 use crate::geometry::{Point3, Ray, Vec3};
-use crate::shapes::{Shape, Sphere, ID_SPHERE, ID_SPHERE_INVERTED};
-
-#[test]
-fn sphere_get_id() {
-    let s0 = Sphere::new();
-    assert_eq!(s0.get_id(), ID_SPHERE);
-}
-
-#[test]
-fn sphere_inverted_get_id() {
-    let s0 = Sphere::inverted();
-    assert_eq!(s0.get_id(), ID_SPHERE_INVERTED);
-}
+use crate::shapes::{Shape, Sphere};
 
 #[test]
 fn sphere_bounding_box() {

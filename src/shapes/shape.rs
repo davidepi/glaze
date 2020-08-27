@@ -31,21 +31,6 @@ pub struct Intersection {
 
 /// A trait used to represent a geometric primitive (sphere, triangle, etc.) in object-space.
 pub trait Shape {
-    /// Returns an unique ID for the shape. Same shapes should return same IDs.
-    /// # Examples
-    /// Basic usage:
-    /// ```
-    /// use glaze::shapes::{Shape, Sphere};
-    ///
-    /// let sphere = Sphere::new();
-    /// let sphere_inv = Sphere::inverted();
-    /// let sphere_id = sphere.get_id();
-    /// let inv_id = sphere_inv.get_id();
-    ///
-    /// assert_ne!(sphere_id, inv_id);
-    /// ```
-    fn get_id(&self) -> usize;
-
     /// Intersects a Ray with the current shape.
     ///
     /// In its implementations, this method should try to intersect a ray passed as a parameter with

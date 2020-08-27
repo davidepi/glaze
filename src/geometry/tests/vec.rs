@@ -123,6 +123,22 @@ fn vec2_clamp() {
 }
 
 #[test]
+fn vec2_index() {
+    let v = Vec2::new(0.5, 0.7);
+    assert_eq!(v[0], 0.5);
+    assert_eq!(v[1], 0.7);
+}
+
+#[test]
+fn vec2_index_mut() {
+    let mut v = Vec2::new(0.8, 0.4);
+    v[0] = 0.4;
+    v[1] = 0.9;
+    assert_eq!(v.x, 0.4);
+    assert_eq!(v.y, 0.9);
+}
+
+#[test]
 fn vec2_add_vec2() {
     let v1 = Vec2::new(1.0, 2.0);
     let v2 = Vec2::new(4.0, 5.5);
@@ -400,6 +416,25 @@ fn vec3_refract_no_tir() {
     assert_approx_eq!(refracted.x, -0.435);
     assert_approx_eq!(refracted.y, -0.145);
     assert_approx_eq!(refracted.z, -0.493051767);
+}
+
+#[test]
+fn vec3_index() {
+    let v = Vec3::new(0.3, 0.1, 0.8);
+    assert_eq!(v[0], 0.3);
+    assert_eq!(v[1], 0.1);
+    assert_eq!(v[2], 0.8);
+}
+
+#[test]
+fn vec3_index_mut() {
+    let mut v = Vec3::new(0.3, 0.1, 0.8);
+    v[0] = 0.1;
+    v[1] = 0.8;
+    v[2] = 0.3;
+    assert_eq!(v.x, 0.1);
+    assert_eq!(v.y, 0.8);
+    assert_eq!(v.z, 0.3);
 }
 
 #[test]

@@ -5,6 +5,7 @@ use crate::utility::float_eq;
 use overload::overload;
 use std::fmt::Formatter;
 use std::ops;
+use std::ops::{Index, IndexMut};
 
 ///  Two points representing a location in space
 ///
@@ -16,9 +17,9 @@ use std::ops;
 /// A Point2 consists of two coordinates, usually called `x` and `y`
 #[derive(Copy, Clone)]
 pub struct Point2 {
-    /// A single precision floating point representing the `x` coordinate of the point
+    /// Single precision floating point representing the `x` coordinate of the point. Indexed by 0.
     pub x: f32,
-    /// A single precision floating point representing the `y` coordinate of the point
+    /// Single precision floating point representing the `y` coordinate of the point. Indexed by 1.
     pub y: f32,
 }
 
@@ -117,6 +118,28 @@ impl std::fmt::Display for Point2 {
     }
 }
 
+impl Index<u8> for Point2 {
+    type Output = f32;
+
+    fn index(&self, index: u8) -> &Self::Output {
+        match index {
+            0 => &self.x,
+            1 => &self.y,
+            _ => panic!("Out of bounds index {} for Point2", index),
+        }
+    }
+}
+
+impl IndexMut<u8> for Point2 {
+    fn index_mut(&mut self, index: u8) -> &mut Self::Output {
+        match index {
+            0 => &mut self.x,
+            1 => &mut self.y,
+            _ => panic!("Out of bounds index {} for Point2", index),
+        }
+    }
+}
+
 overload!((a: ?Point2) + (b: ?Vec2) -> Point2 {Point2{x:a.x+b.x,y:a.y+b.y}});
 overload!((a: ?Point2) + (b: ?Point2) -> Vec2 {Vec2{x:a.x+b.x,y:a.y+b.y}});
 overload!((a: ?Point2) - (b: ?Vec2) -> Point2 {Point2{x:a.x-b.x,y:a.y-b.y}});
@@ -137,11 +160,11 @@ overload!((a: &mut Point2) -= (b: ?Point2) {a.x-=b.x;a.y-=b.y;});
 /// A Point3 consists of three coordinates, usually called `x`, `y` and `z`.
 #[derive(Copy, Clone)]
 pub struct Point3 {
-    /// A single precision floating point representing the `x` coordinate of the point
+    /// Single precision floating point representing the `x` coordinate of the point. Indexed by 0.
     pub x: f32,
-    /// A single precision floating point representing the `y` coordinate of the point
+    /// Single precision floating point representing the `y` coordinate of the point. Indexed by 1.
     pub y: f32,
-    /// A single precision floating point representing the `z` coordinate of the point
+    /// Single precision floating point representing the `z` coordinate of the point. Indexed by 2.
     pub z: f32,
 }
 
@@ -264,6 +287,30 @@ impl Transform3 for Point3 {
 impl std::fmt::Display for Point3 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "Point3[{}, {}, {}]", self.x, self.y, self.z)
+    }
+}
+
+impl Index<u8> for Point3 {
+    type Output = f32;
+
+    fn index(&self, index: u8) -> &Self::Output {
+        match index {
+            0 => &self.x,
+            1 => &self.y,
+            2 => &self.z,
+            _ => panic!("Out of bounds index {} for Point3", index),
+        }
+    }
+}
+
+impl IndexMut<u8> for Point3 {
+    fn index_mut(&mut self, index: u8) -> &mut Self::Output {
+        match index {
+            0 => &mut self.x,
+            1 => &mut self.y,
+            2 => &mut self.z,
+            _ => panic!("Out of bounds index {} for Point3", index),
+        }
     }
 }
 

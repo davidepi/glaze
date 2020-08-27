@@ -1,11 +1,14 @@
 use crate::geometry::{Point2, Point3, Ray, Vec3};
-use crate::shapes::{HitPoint, Intersection, Shape, AABB, ID_SPHERE, ID_SPHERE_INVERTED};
+use crate::shapes::{HitPoint, Intersection, Shape, AABB};
 use crate::utility::{clamp, quadratic, Ef32};
 
 /// A primitive representing a sphere centered in `(0.0, 0.0, 0.0)` with a radius of `1.0`.
 ///
 /// In order to have bigger or shifted spheres one should wrap a transformation matrix along with
 /// this shape in an `Asset` type.
+///
+/// The object-space for this primitive is pivoted in the exact center of the sphere, with the
+/// z-axis pointing up and the y-axis pointing front.
 ///
 /// This representation distinguishes between inside and outside of the sphere (mostly for
 /// light-emission issues). Be sure to call the correct constructor, either `new` or
@@ -66,14 +69,6 @@ fn compute_interaction(hit: &Point3) -> (Point2, Vec3, Vec3) {
 }
 
 impl Shape for Sphere {
-    fn get_id(&self) -> usize {
-        if !self.inverted {
-            ID_SPHERE
-        } else {
-            ID_SPHERE_INVERTED
-        }
-    }
-
     fn intersect(&self, ray: &Ray) -> Option<Intersection> {
         // sphere equation is x² + y² + z² - 1 = 0
         // ray equation is origin + distance * direction where distance >= 0

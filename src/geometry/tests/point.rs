@@ -71,6 +71,22 @@ fn point2_max() {
 }
 
 #[test]
+fn point2_index() {
+    let v = Point2::new(0.3, 0.6);
+    assert_eq!(v[0], 0.3);
+    assert_eq!(v[1], 0.6);
+}
+
+#[test]
+fn point2_index_mut() {
+    let mut v = Point2::new(0.9, 0.0);
+    v[0] = 0.2;
+    v[1] = 0.5;
+    assert_eq!(v.x, 0.2);
+    assert_eq!(v.y, 0.5);
+}
+
+#[test]
 fn point2_sum_vector() {
     let v1 = Point2::new(1.0, 2.0);
     let v2 = Vec2::new(4.0, 5.5);
@@ -208,6 +224,25 @@ fn point3_max() {
     compare = Point3::new(0.0, 0.0, 0.0);
     value = Point3::max(&sample, &compare);
     assert_eq!(value.z, compare.z);
+}
+
+#[test]
+fn point3_index() {
+    let v = Vec3::new(0.4, 0.8, 0.6);
+    assert_eq!(v[0], 0.4);
+    assert_eq!(v[1], 0.8);
+    assert_eq!(v[2], 0.6);
+}
+
+#[test]
+fn point3_index_mut() {
+    let mut v = Vec3::new(0.9, 0.1, 0.5);
+    v[0] = 0.6;
+    v[1] = 0.7;
+    v[2] = 0.1;
+    assert_eq!(v.x, 0.6);
+    assert_eq!(v.y, 0.7);
+    assert_eq!(v.z, 0.1);
 }
 
 #[test]
