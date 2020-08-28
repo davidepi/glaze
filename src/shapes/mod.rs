@@ -6,6 +6,9 @@ pub use crate::shapes::shape::Intersection;
 pub use crate::shapes::shape::Shape;
 mod sphere;
 pub use crate::shapes::sphere::Sphere;
-
+mod accelerator;
+pub use crate::shapes::accelerator::Accelerator;
+mod kdtree;
+pub use crate::shapes::kdtree::KdTree;
 #[cfg(test)]
 mod tests;

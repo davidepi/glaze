@@ -6,6 +6,7 @@ edition = "2018"
 
 [dependencies]
 log = "0.4"
+fnv = "1.0"
 overload = "0.1"
 rand = "0.7"
 rand_xoshiro = "0.4"
