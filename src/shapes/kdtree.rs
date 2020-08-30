@@ -1,4 +1,4 @@
-use crate::geometry::Ray;
+use crate::geometry::{Ray, Vec3};
 use crate::shapes::{Accelerator, Intersection, Shape, AABB};
 use fnv::FnvHashSet;
 use std::f32::NAN;
@@ -25,6 +25,7 @@ pub struct KdTree<T: Shape> {
     tree: Vec<KdNode>,
     elements: Vec<T>,
     extensive: bool,
+    scene_aabb: AABB,
 }
 
 impl<T: Shape> KdTree<T> {
@@ -33,13 +34,80 @@ impl<T: Shape> KdTree<T> {
             tree: Vec::new(),
             elements: Vec::new(),
             extensive: extensive_search,
+            scene_aabb: AABB::zero(),
         }
     }
 }
 
 impl<T: Shape> Shape for KdTree<T> {
+    #[allow(clippy::float_cmp)] //yep, I REALLY want a strict comparison. It's a corner case.
     fn intersect(&self, ray: &Ray) -> Option<Intersection> {
-        unimplemented!()
+        let inv_dir = Vec3::new(
+            1.0 / ray.direction.x,
+            1.0 / ray.direction.y,
+            1.0 / ray.direction.z,
+        );
+        let mut found = None;
+        if let Some(scene_intersection) = isect(&self.scene_aabb, ray, &inv_dir) {
+            let mut best = f32::INFINITY;
+            // (kdtree node index, node bounding box front, node bounding box back)
+            let mut jobs = vec![(0 as u32, scene_intersection.0, scene_intersection.1)];
+            while let Some(node) = jobs.pop() {
+                let index = node.0;
+                let min_distance = node.1;
+                let max_distance = node.2;
+                // processing front to back, but current best is less than the node front. exit.
+                // this is VERY important to cut down a lot of unneeded attempts.
+                if best < min_distance {
+                    break;
+                }
+                match &self.tree[index as usize] {
+                    KdNode::Node { split, data } => {
+                        let axis = (data & 0xC0000000) >> 30;
+                        let origin = ray.origin[axis as u8];
+                        let direction = ray.direction[axis as u8];
+                        let front;
+                        let back;
+                        // maintain a front-to-back order of visit
+                        let first_left = origin < *split || origin == *split && direction <= 0.0;
+                        if first_left {
+                            front = index + 1;
+                            back = data & 0x3FFFFFFF;
+                        } else {
+                            front = data & 0x3FFFFFFF;
+                            back = index + 1;
+                        }
+                        let split_distance = (split - origin) * inv_dir[axis as u8];
+                        if split_distance > max_distance || split_distance <= 0.0 {
+                            // split is intersected after the bounds exit => ray don't enter
+                            // the back child
+                            jobs.push((front, min_distance, max_distance));
+                        } else if split_distance < min_distance {
+                            // split is intersected before the bounds start => ray don't enter
+                            // the front child
+                            jobs.push((back, min_distance, max_distance));
+                        } else {
+                            jobs.push((back, split_distance, max_distance));
+                            jobs.push((front, min_distance, split_distance));
+                        }
+                    }
+                    KdNode::Leaf { offset, count } => {
+                        for i in 0..*count {
+                            let elem_idx = (*offset + i) as usize;
+                            let shape = &self.elements[elem_idx];
+                            if let Some(intersection) = shape.intersect(ray) {
+                                if intersection.distance < best {
+                                    best = intersection.distance;
+                                    found = Some(intersection);
+                                }
+                            }
+                        }
+                        // not breaking on purpose here! I need to clear out the jobs stack!
+                    }
+                }
+            }
+        }
+        found
     }
 
     fn intersect_fast(&self, ray: &Ray) -> bool {
@@ -47,7 +115,7 @@ impl<T: Shape> Shape for KdTree<T> {
     }
 
     fn bounding_box(&self) -> AABB {
-        unimplemented!()
+        self.scene_aabb
     }
 }
 
@@ -69,6 +137,7 @@ impl<T: Shape> Accelerator for KdTree<T> {
             tree: compact.1,
             elements: compact.2,
             extensive: self.extensive,
+            scene_aabb,
         }
     }
 }
@@ -184,8 +253,9 @@ fn build_rec<T: Shape>(
                     } else {
                         0.0
                     };
-                    // calculate the cost of descending and intersecting the primitives, weighted
-                    // on how much percentage of the area is occupied by each primitive
+                    // calculate the cost of descending and intersecting each shape, considering
+                    // the size of the area resulting from the split over the total area as the
+                    // probability of having to intersect all the shapes inside it
                     let cost = SAH_DESCEND
                         + SAH_INTERSECT
                             * (1.0 - bonus)
@@ -322,5 +392,58 @@ fn finalize_rec<T: Shape>(
         right_res.0 = my_index;
         right_res.1[my_index] = compact;
         right_res
+    }
+}
+
+/// Intersect the AABB and returns the entry and exit points. Used heavily by the acceleration
+/// structures. The returned tuple contains entry and exit distance from the ray origin.
+fn isect(aabb: &AABB, ray: &Ray, inv_dir: &Vec3) -> Option<(f32, f32)> {
+    let mut minxt;
+    let mut maxxt;
+    let minyt;
+    let maxyt;
+    let minzt;
+    let maxzt;
+    if ray.direction.x >= 0.0 {
+        minxt = (aabb.bot.x - ray.origin.x) * inv_dir.x;
+        maxxt = (aabb.top.x - ray.origin.x) * inv_dir.x;
+    } else {
+        minxt = (aabb.top.x - ray.origin.x) * inv_dir.x;
+        maxxt = (aabb.bot.x - ray.origin.x) * inv_dir.x;
+    }
+    if ray.direction.y >= 0.0 {
+        minyt = (aabb.bot.y - ray.origin.y) * inv_dir.y;
+        maxyt = (aabb.top.y - ray.origin.y) * inv_dir.y;
+    } else {
+        minyt = (aabb.top.y - ray.origin.y) * inv_dir.y;
+        maxyt = (aabb.bot.y - ray.origin.y) * inv_dir.y;
+    }
+    if (minyt > maxxt) || (minxt > maxyt) {
+        None
+    } else {
+        if minyt > minxt {
+            minxt = minyt;
+        }
+        if maxyt < maxxt {
+            maxxt = maxyt;
+        }
+        if ray.direction.z >= 0.0 {
+            minzt = (aabb.bot.z - ray.origin.z) * inv_dir.z;
+            maxzt = (aabb.top.z - ray.origin.z) * inv_dir.z;
+        } else {
+            minzt = (aabb.top.z - ray.origin.z) * inv_dir.z;
+            maxzt = (aabb.bot.z - ray.origin.z) * inv_dir.z;
+        }
+        if (minzt > maxxt) || (minxt > maxzt) {
+            None
+        } else {
+            if minzt > minxt {
+                minxt = minzt;
+            }
+            if maxzt < maxxt {
+                maxxt = maxzt;
+            }
+            Some((minxt, maxxt))
+        }
     }
 }
