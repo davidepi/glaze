@@ -3,22 +3,16 @@ use crate::shapes::{Accelerator, Intersection, Shape, AABB};
 use fnv::FnvHashSet;
 use std::f32::NAN;
 
-/// Minimum number of assets in a leaf
-const LEAF_MIN: usize = 1;
-/// Cost of descending the tree to the next node
-const SAH_DESCEND: f32 = 1.0;
-/// Cost of performing an intersection
-const SAH_INTERSECT: f32 = 50.0;
 /// Maximum depth of the tree
 const MAX_DEPTH: usize = 15;
 /// Dimensionality of the tree. We are operating in a three dimensional space.
 /// Changing this does not mean the kd-tree will work with more dimensions, the shapes are still 3D.
 const DIMENSIONS: usize = 3;
-/// Maximum amount of descends in the tree that are not convenient in term of cost (in the hope that
-/// a better split will be found)
+/// Maximum allowed descends in the tree that are not convenient in term of cost (in the hope
+/// of finding an overall better cost)
 const IMPERFECT_SPLIT_TOLERANCE: usize = 2;
-/// Maximum number of primitives supported. Due to how indexing works in KdNode.
-const MAX_PRIMITIVES: u32 = 0x3FFFFFFF;
+/// Maximum number of shapes supported. Due to how indexing works in KdNode.
+const MAX_SHAPES: u32 = 0x3FFFFFFF;
 
 /// Space-partitioning based acceleration structure.
 ///
@@ -27,7 +21,7 @@ const MAX_PRIMITIVES: u32 = 0x3FFFFFFF;
 /// for Shapes.
 ///
 /// This struct owns the Shapes it contains and implements the Shape trait itself. A call on any
-/// method of the Shape trait and this class will efficiently find the result based on the contained
+/// method of the Shape trait and this class will efficiently find the result on the contained
 /// data.
 ///
 /// This struct uses a Surface Area Heuristic to build the tree: a cost is assigned to intersecting
@@ -38,12 +32,31 @@ pub struct KdTree<T: Shape> {
     // the memory layout of this tree is uncommon, check the finalize_rec function doc
     tree: Vec<KdNode>,
     elements: Vec<T>,
-    extensive: bool,
     scene_aabb: AABB,
+    settings: KdTreeSettings,
+}
+
+/// Struct containing some parameters settings to build a KdTree.
+#[derive(Copy, Clone)]
+struct KdTreeSettings {
+    /// Minimum number of shapes contained inside a leaf node.
+    leaf_min: u8,
+    /// Whether to search for a split in every axis (extensively) or just the longest.
+    extensive_search: bool,
+    /// Cost of performing an intersection.
+    intersect_cost: f32,
+    /// Cost of descending to the next node of the tree.
+    descend_cost: f32,
 }
 
 impl<T: Shape> KdTree<T> {
-    /// Creates an empty KdTree.
+    /// Creates a KdTree with customized settings.
+    ///
+    /// The `leaf_min` parameter controls the minimum number of shapes necessary to form a leaf.
+    ///
+    /// The `intersect_cost` parameter defines the cost of performing an intersection. This value
+    /// should be adjusted in relation to the `descend_cost` parameters, defining the cost of
+    /// traversing the tree to find the next node.
     ///
     /// The `extensive_search` parameter is used at build time to extend the search time (at
     /// least three times slower) in order to find the tree providing the fastest intersection
@@ -57,19 +70,65 @@ impl<T: Shape> KdTree<T> {
     /// use glaze::geometry::{Point3, Ray, Vec3};
     /// use glaze::shapes::{KdTree, Shape, Sphere};
     ///
-    /// let k: KdTree<Sphere> = KdTree::new(false);
+    /// let k: KdTree<Sphere> = KdTree::new(1, 1.0, 50.0, true);
     /// // at this point one should call `k.build(...)`, to add shapes.
     /// // this examples shows an empty tree.
     ///
     /// let ray = Ray::new(&Point3::zero(), &Vec3::up());
     /// assert!(!k.intersect_fast(&ray));
     /// ```
-    pub fn new(extensive_search: bool) -> KdTree<T> {
+    pub fn new(
+        leaf_min: u8,
+        intersect_cost: f32,
+        descend_cost: f32,
+        extensive_search: bool,
+    ) -> KdTree<T> {
+        let settings = KdTreeSettings {
+            leaf_min,
+            extensive_search,
+            intersect_cost,
+            descend_cost,
+        };
         KdTree {
             tree: Vec::new(),
             elements: Vec::new(),
-            extensive: extensive_search,
             scene_aabb: AABB::zero(),
+            settings,
+        }
+    }
+
+    /// Creates a KdTree with default settings.
+    ///
+    /// The default settings are the following:
+    /// - `leaf_min`: `3`,
+    /// - `intersect_cost`: `50.0`,
+    /// - `descend_cost`: `5.0`,
+    /// - `extensive_search`: `false`
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::shapes::{KdTree, Shape, Sphere};
+    ///
+    /// let k: KdTree<Sphere> = KdTree::default();
+    /// // at this point one should call `k.build(...)`, to add shapes.
+    /// // this examples shows an empty tree.
+    ///
+    /// let ray = Ray::new(&Point3::zero(), &Vec3::up());
+    /// assert!(!k.intersect_fast(&ray));
+    /// ```
+    pub fn default() -> KdTree<T> {
+        let settings = KdTreeSettings {
+            leaf_min: 3,
+            extensive_search: false,
+            intersect_cost: 50.0,
+            descend_cost: 5.0,
+        };
+        KdTree {
+            tree: Vec::new(),
+            elements: Vec::new(),
+            scene_aabb: AABB::zero(),
+            settings,
         }
     }
 }
@@ -216,22 +275,22 @@ impl<T: Shape> Shape for KdTree<T> {
 impl<T: Shape> Accelerator for KdTree<T> {
     type Item = T;
     fn build(self, elements: Vec<Self::Item>) -> Self {
-        if elements.len() > MAX_PRIMITIVES as usize {
+        if elements.len() > MAX_SHAPES as usize {
             panic!(
-                "Too many primitives! Maximum number per kd-tree is {}",
-                MAX_PRIMITIVES
+                "Too many shapes! Maximum number per kd-tree is {}",
+                MAX_SHAPES
             )
         }
         let scene_aabb = elements
             .iter()
             .fold(AABB::zero(), |acc, elem| acc.merge(&elem.bounding_box()));
-        let tree = build_rec(elements, scene_aabb, 0, 0, self.extensive);
+        let tree = build_rec(elements, scene_aabb, 0, 0, self.settings);
         let compact = finalize_rec(tree, Vec::new(), Vec::new());
         KdTree {
             tree: compact.1,
             elements: compact.2,
-            extensive: self.extensive,
             scene_aabb,
+            settings: self.settings,
         }
     }
 }
@@ -264,14 +323,16 @@ struct KdBuildNode<T> {
 /// hope of finding an optimal split later. Starts with 0.
 /// - extensive: true if an extensive search among all axes should be performed. Mostly useless, as
 /// the longest axis is usually the best option.
+/// - cost(intersect, descend): kdtree parameters, check constructor description
+/// - leaf_min: minimum number of primitives per node
 fn build_rec<T: Shape>(
     elements: Vec<T>,
     node_aabb: AABB,
     depth: usize,
     bad: usize,
-    extensive: bool,
+    settings: KdTreeSettings,
 ) -> KdBuildNode<T> {
-    if depth == MAX_DEPTH || elements.len() <= LEAF_MIN {
+    if depth == MAX_DEPTH || elements.len() <= settings.leaf_min as usize {
         KdBuildNode {
             split: NAN,
             axis: 0xFF,
@@ -291,7 +352,7 @@ fn build_rec<T: Shape>(
         // the best cost for splitting (based in term of SAH_INTERSECT and SAH_DESCEND)
         let mut best_cost = f32::INFINITY;
         // cost of arriving here
-        let arrival_cost = SAH_INTERSECT * elements.len() as f32;
+        let arrival_cost = settings.intersect_cost * elements.len() as f32;
         // how many imperfect splits have been made until now. A split is imperfect if the cost of
         // splitting is higher than the cost of doing nothing.
         let mut expensive_split = bad;
@@ -361,8 +422,8 @@ fn build_rec<T: Shape>(
                     // calculate the cost of descending and intersecting each shape, considering
                     // the size of the area resulting from the split over the total area as the
                     // probability of having to intersect all the shapes inside it
-                    let cost = SAH_DESCEND
-                        + SAH_INTERSECT
+                    let cost = settings.descend_cost
+                        + settings.intersect_cost
                             * (1.0 - bonus)
                             * (perc_bot * bot_count as f32 + perc_top * top_count as f32);
                     // record the best cost
@@ -378,7 +439,7 @@ fn build_rec<T: Shape>(
                 }
             }
             // no decent cost for splitting on this axis or extensive search, try next axis
-            if best_axis == 0xFF || extensive {
+            if best_axis == 0xFF || settings.extensive_search {
                 searching -= 1;
                 axis = (axis + 1) % DIMENSIONS;
             } else {
@@ -426,8 +487,8 @@ fn build_rec<T: Shape>(
             let mut top_aabb = node_aabb;
             top_aabb.bot[best_axis as u8] = split;
             // continue recursion
-            let left = build_rec(bot_elems, bot_aabb, depth + 1, expensive_split, extensive);
-            let right = build_rec(top_elems, top_aabb, depth + 1, expensive_split, extensive);
+            let left = build_rec(bot_elems, bot_aabb, depth + 1, expensive_split, settings);
+            let right = build_rec(top_elems, top_aabb, depth + 1, expensive_split, settings);
             KdBuildNode {
                 split,
                 axis: best_axis as u8,

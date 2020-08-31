@@ -26,7 +26,7 @@ pub trait Accelerator: Shape {
     ///
     /// assert!(shapes[0].intersect_fast(&ray));
     ///
-    /// let kdtree = KdTree::new(false).build(shapes);
+    /// let kdtree = KdTree::default().build(shapes);
     ///
     /// assert!(kdtree.intersect_fast(&ray));
     /// ```
