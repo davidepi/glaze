@@ -19,7 +19,7 @@ pub struct Sphere {
 }
 
 impl Sphere {
-    /// Creates a new Sphere with radius 1.0
+    /// Creates a new Sphere with radius 1.0 .
     #[allow(clippy::new_without_default)] // it would suck only for this class out of all Shapes...
     pub fn new() -> Sphere {
         Sphere { inverted: false }

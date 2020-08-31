@@ -20,6 +20,20 @@ const IMPERFECT_SPLIT_TOLERANCE: usize = 2;
 /// Maximum number of primitives supported. Due to how indexing works in KdNode.
 const MAX_PRIMITIVES: u32 = 0x3FFFFFFF;
 
+/// Space-partitioning based acceleration structure.
+///
+/// KdTree, for K-dimensional tree, is a space partitioning data structure, used to improve the
+/// speed of the intersection routines between a Ray and a Shape. It can be seen as a container
+/// for Shapes.
+///
+/// This struct owns the Shapes it contains and implements the Shape trait itself. A call on any
+/// method of the Shape trait and this class will efficiently find the result based on the contained
+/// data.
+///
+/// This struct uses a Surface Area Heuristic to build the tree: a cost is assigned to intersecting
+/// the primitives or descending further down the tree. The tree is built considering the
+/// probability of hitting a region of space with the Ray and the cost of the action performed after
+/// hit, minimizing this cost.
 pub struct KdTree<T: Shape> {
     // the memory layout of this tree is uncommon, check the finalize_rec function doc
     tree: Vec<KdNode>,
@@ -29,6 +43,27 @@ pub struct KdTree<T: Shape> {
 }
 
 impl<T: Shape> KdTree<T> {
+    /// Creates an empty KdTree.
+    ///
+    /// The `extensive_search` parameter is used at build time to extend the search time (at
+    /// least three times slower) in order to find the tree providing the fastest intersection
+    /// speed.
+    ///
+    /// Note that this is usually not needed as good heuristics are employed in order to build the
+    /// best tree without performing an extensive search.
+    /// # Examples
+    /// Basic usage:
+    /// ```
+    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::shapes::{KdTree, Shape, Sphere};
+    ///
+    /// let k: KdTree<Sphere> = KdTree::new(false);
+    /// // at this point one should call `k.build(...)`, to add shapes.
+    /// // this examples shows an empty tree.
+    ///
+    /// let ray = Ray::new(&Point3::zero(), &Vec3::up());
+    /// assert!(!k.intersect_fast(&ray));
+    /// ```
     pub fn new(extensive_search: bool) -> KdTree<T> {
         KdTree {
             tree: Vec::new(),
@@ -42,6 +77,13 @@ impl<T: Shape> KdTree<T> {
 impl<T: Shape> Shape for KdTree<T> {
     #[allow(clippy::float_cmp)] //yep, I REALLY want a strict comparison. It's a corner case.
     fn intersect(&self, ray: &Ray) -> Option<Intersection> {
+        // the idea for this method is :
+        // - find the order in which the ray intersects the tree children, front to back. (first the
+        //   left child or the right child?)
+        // - If the node contains shapes always record the closest intersection to the origin
+        //   ray, until the found intersection is closer than the node bounds.
+        // - Since we are processing front to back, at this point will be IMPOSSIBLE to find a
+        //   closer shape intersection.
         let inv_dir = Vec3::new(
             1.0 / ray.direction.x,
             1.0 / ray.direction.y,
@@ -110,8 +152,60 @@ impl<T: Shape> Shape for KdTree<T> {
         found
     }
 
+    #[allow(clippy::float_cmp)]
     fn intersect_fast(&self, ray: &Ray) -> bool {
-        unimplemented!()
+        // mostly identical to the intersect method, but return as soon as the first intersection is
+        // found
+        let inv_dir = Vec3::new(
+            1.0 / ray.direction.x,
+            1.0 / ray.direction.y,
+            1.0 / ray.direction.z,
+        );
+        if let Some(scene_intersection) = isect(&self.scene_aabb, ray, &inv_dir) {
+            let mut jobs = vec![(0 as u32, scene_intersection.0, scene_intersection.1)];
+            while let Some(node) = jobs.pop() {
+                let index = node.0;
+                let min_distance = node.1;
+                let max_distance = node.2;
+                match &self.tree[index as usize] {
+                    KdNode::Node { split, data } => {
+                        let axis = (data & 0xC0000000) >> 30;
+                        let origin = ray.origin[axis as u8];
+                        let direction = ray.direction[axis as u8];
+                        let front;
+                        let back;
+                        let first_left = origin < *split || origin == *split && direction <= 0.0;
+                        if first_left {
+                            front = index + 1;
+                            back = data & 0x3FFFFFFF;
+                        } else {
+                            front = data & 0x3FFFFFFF;
+                            back = index + 1;
+                        }
+                        let split_distance = (split - origin) * inv_dir[axis as u8];
+                        if split_distance > max_distance || split_distance <= 0.0 {
+                            jobs.push((front, min_distance, max_distance));
+                        } else if split_distance < min_distance {
+                            jobs.push((back, min_distance, max_distance));
+                        } else {
+                            jobs.push((back, split_distance, max_distance));
+                            jobs.push((front, min_distance, split_distance));
+                        }
+                    }
+                    KdNode::Leaf { offset, count } => {
+                        for i in 0..*count {
+                            let elem_idx = (*offset + i) as usize;
+                            let shape = &self.elements[elem_idx];
+                            if shape.intersect_fast(ray) {
+                                // in this variant early exit as soon as one intersection is found
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 
     fn bounding_box(&self) -> AABB {
@@ -142,12 +236,23 @@ impl<T: Shape> Accelerator for KdTree<T> {
     }
 }
 
+/// KdTree node used during construction. This is a canonical tree node with some data, and a left
+/// and right pointer to its children.
+///
+/// Note that the finalized nodes used in the KdTree will have a different structure (for caching
+/// reasons).
 struct KdBuildNode<T> {
+    /// The position in space where to split a node.
     split: f32,
+    /// The chosen axis for the split.
     axis: u8,
+    /// if the current node is a leaf.
     leaf: bool,
+    /// The elements contains in the leaf.
     elements: Option<Vec<T>>,
+    /// Left child.
     left: Option<Box<KdBuildNode<T>>>,
+    /// Right child.
     right: Option<Box<KdBuildNode<T>>>,
 }
 
@@ -395,7 +500,7 @@ fn finalize_rec<T: Shape>(
     }
 }
 
-/// Intersect the AABB and returns the entry and exit points. Used heavily by the acceleration
+/// Intersects the AABB and returns the entry and exit points. Used heavily by the acceleration
 /// structures. The returned tuple contains entry and exit distance from the ray origin.
 fn isect(aabb: &AABB, ray: &Ray, inv_dir: &Vec3) -> Option<(f32, f32)> {
     let mut minxt;

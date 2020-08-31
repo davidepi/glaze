@@ -3,7 +3,7 @@ use overload::overload;
 use std::f32::INFINITY;
 use std::ops;
 
-/// An axis aligned bounding box
+/// An axis aligned bounding box.
 ///
 /// This class represents a bounding volume, a volume that contains a specific set of objects, in
 /// this case points belonging to the Point3 class.
@@ -13,16 +13,18 @@ use std::ops;
 /// bottom left of the box and the one on the back top right.
 #[derive(Copy, Clone)]
 pub struct AABB {
-    /// The front bottom left point of the AABB
+    /// The front bottom left point of the AABB.
     pub(super) bot: Point3,
-    /// The back top right point of the AABB
+    /// The back top right point of the AABB.
     pub(super) top: Point3,
 }
 
 impl AABB {
     /// Constructs a bounding box with the bottom left pointing to Infinity and the top right
-    /// pointing to -Infinity. This bounding box is degenerated thus it works exactly as an empty
-    /// box, as any point can be added to it, however, some methods may return unexpected values.
+    /// pointing to -Infinity.
+    ///
+    /// This bounding box is degenerated thus it works exactly as an empty box, as any point can be
+    /// added to it, however, some methods may return unexpected values.
     /// # Examples
     /// ```
     /// use glaze::shapes::AABB;
@@ -55,8 +57,9 @@ impl AABB {
         }
     }
 
-    /// Constructs a bounding box given two points in the space. No restriction over the points
-    /// order or their minimum or maximum component is imposed.
+    /// Constructs a bounding box given two points in the space.
+    ///
+    /// No restriction over the points order or their minimum or maximum component is imposed.
     /// # Examples
     /// ```
     /// use glaze::geometry::Point3;
@@ -93,7 +96,7 @@ impl AABB {
     }
 
     /// Creates a new, bigger, bounding box that encloses both the old bounding box and the given
-    /// point
+    /// point.
     /// # Examples
     /// ```
     /// use glaze::geometry::Point3;
@@ -153,7 +156,7 @@ impl AABB {
             && point.z <= self.top.z
     }
 
-    /// Returns the total surface of the bounding box
+    /// Returns the total surface of the bounding box.
     /// # Examples
     /// ```
     /// use glaze::geometry::Point3;
@@ -168,7 +171,7 @@ impl AABB {
         2.0 * (diagonal.x * diagonal.y + diagonal.x * diagonal.z + diagonal.y * diagonal.z)
     }
 
-    /// Returns the total volume of the bounding box
+    /// Returns the total volume of the bounding box.
     /// # Examples
     /// ```
     /// use glaze::geometry::Point3;
@@ -183,13 +186,15 @@ impl AABB {
         diagonal.x * diagonal.y * diagonal.z
     }
 
-    /// Returns the longest axis of the bounding box. The possible return values are:
+    /// Returns the longest axis of the bounding box.
+    ///
+    /// The possible return values are:
     /// - `0` - if the `x` axis is the longest
     /// - `1` - if the `y` axis is the longest
     /// - `2` - if the `z` axis is the longest
     ///
     /// Out of two or more axes having the same length, the first appearing in the previous list is
-    /// returned
+    /// returned.
     pub fn longest_axis(&self) -> u8 {
         let diagonal = self.top - self.bot;
         if diagonal.x >= diagonal.y && diagonal.x >= diagonal.z {
@@ -201,7 +206,7 @@ impl AABB {
         }
     }
 
-    /// Returns the point at the center of the bounding box
+    /// Returns the point at the center of the bounding box.
     /// # Examples
     /// ```
     /// use glaze::geometry::Point3;
