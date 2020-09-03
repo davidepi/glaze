@@ -23,8 +23,6 @@ pub struct HitPoint {
 pub struct Intersection {
     /// The distance of the closest hit point from the ray.
     pub distance: f32,
-    /// The distance of the furthest hit point from the ray.
-    pub far_distance: f32,
     /// Data about the hit point.
     pub hit: HitPoint,
 }

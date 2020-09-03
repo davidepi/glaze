@@ -10,5 +10,6 @@ mod accelerator;
 pub use crate::shapes::accelerator::Accelerator;
 mod kdtree;
 pub use crate::shapes::kdtree::KdTree;
+mod mesh;
 #[cfg(test)]
 mod tests;

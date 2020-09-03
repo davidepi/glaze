@@ -89,22 +89,17 @@ impl Shape for Sphere {
 
         let intersection = quadratic(a, b, c);
         let closest;
-        let furthest;
         if let Some(intersection) = intersection {
             if intersection.1.lower() < 0.0 {
                 // intersection happened behind ray origin
                 closest = f32::INFINITY;
-                furthest = f32::INFINITY;
             } else if intersection.0.lower() < 0.0 {
                 closest = intersection.1.value();
-                furthest = f32::INFINITY;
             } else {
                 closest = intersection.0.value();
-                furthest = intersection.1.value();
             }
         } else {
             closest = f32::INFINITY;
-            furthest = f32::INFINITY;
         };
 
         // now we have the intersection distance. Finding the hit point is as simple as following
@@ -132,7 +127,6 @@ impl Shape for Sphere {
             let interaction = compute_interaction(&hit_point);
             Some(Intersection {
                 distance: closest,
-                far_distance: furthest,
                 hit: HitPoint {
                     point: hit_point,
                     normal,
