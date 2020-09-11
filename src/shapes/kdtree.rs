@@ -2,6 +2,7 @@ use crate::geometry::{Ray, Vec3};
 use crate::shapes::{Accelerator, Intersection, Shape, AABB};
 use fnv::FnvHashSet;
 use std::f32::NAN;
+use std::slice::Iter;
 
 /// Maximum depth of the tree
 const MAX_DEPTH: usize = 15;
@@ -292,6 +293,10 @@ impl<T: Shape> Accelerator for KdTree<T> {
             scene_aabb,
             settings: self.settings,
         }
+    }
+
+    fn iter(&self) -> Iter<Self::Item> {
+        self.elements.iter()
     }
 }
 

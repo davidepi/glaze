@@ -1,4 +1,5 @@
 use crate::shapes::Shape;
+use std::slice::Iter;
 
 /// A trait for structs used to speed up Ray - Shape intersections.
 ///
@@ -32,4 +33,21 @@ pub trait Accelerator: Shape {
     /// ```
     #[must_use]
     fn build(self, elements: Vec<Self::Item>) -> Self;
+
+    /// Iterates all the elements contained inside the accelerator structure.
+    ///
+    /// No particular order is guaranteed.
+    /// # Examples
+    /// Basic usage with Kd-trees:
+    /// ```
+    /// use glaze::shapes::{Accelerator, KdTree, Sphere};
+    ///
+    /// let shapes = vec![Sphere::new()];
+    /// let kdtree = KdTree::default().build(shapes);
+    /// let mut iterator = kdtree.iter();
+    ///
+    /// assert!(iterator.next().is_some());
+    /// assert!(iterator.next().is_none());
+    /// ```
+    fn iter(&self) -> Iter<Self::Item>;
 }

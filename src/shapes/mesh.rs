@@ -1,5 +1,5 @@
 use crate::geometry::{Normal, Point2, Point3, Ray, Vec3};
-use crate::shapes::{HitPoint, Intersection, KdTree, Shape, AABB};
+use crate::shapes::{Accelerator, HitPoint, Intersection, KdTree, Shape, AABB};
 use crate::utility::gamma;
 
 /// Struct representing a vertex.
@@ -251,6 +251,93 @@ pub struct Mesh<'a> {
     t: Vec<Point2>,
     /// Acceleration structure
     f: KdTree<Triangle<'a>>,
+}
+
+impl Mesh<'_> {
+    /// Converts the current mesh to an OBJ file.
+    ///
+    /// Returns a String representing the current Mesh as the content of a
+    /// [Wavefront OBJ file](http://www.martinreddy.net/gfx/3d/OBJ.spec).
+    pub fn to_obj(&self) -> String {
+        let software_name = option_env!("CARGO_PKG_NAME").unwrap_or("<Missing name>");
+        let version = option_env!("CARGO_PKG_VERSION").unwrap_or("<Missing version>");
+
+        let header = vec![
+            "# Wavefront OBJ created by ",
+            software_name,
+            " version ",
+            version,
+        ]
+        .into_iter()
+        .collect::<String>();
+
+        let vertices = self
+            .p
+            .iter()
+            .map(|p| {
+                vec![p.x, p.y, p.z]
+                    .into_iter()
+                    .map(|component| component.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .flat_map(|str| vec!["v ".to_string(), str, "\n".to_string()])
+            .collect::<String>();
+
+        let textures = self
+            .t
+            .iter()
+            .map(|t| {
+                vec![t.x, t.y]
+                    .into_iter()
+                    .map(|component| component.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .flat_map(|str| vec!["vt ".to_string(), str, "\n".to_string()])
+            .collect::<String>();
+
+        let normals = self
+            .n
+            .iter()
+            .map(|n| {
+                vec![n.x, n.y, n.z]
+                    .into_iter()
+                    .map(|component| component.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .flat_map(|str| vec!["vn ".to_string(), str, "\n".to_string()])
+            .collect::<String>();
+
+        let faces = self
+            .f
+            .iter()
+            .map(|tris| {
+                let a = vec![tris.a.p + 1, tris.a.t + 1, tris.a.n + 1]
+                    .into_iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let b = vec![tris.b.p + 1, tris.b.t + 1, tris.b.n + 1]
+                    .into_iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let c = vec![tris.c.p + 1, tris.c.t + 1, tris.c.n + 1]
+                    .into_iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                vec![a, b, c].join(" ")
+            })
+            .flat_map(|str| vec!["f ".to_string(), str, "\n".to_string()])
+            .collect::<String>();
+
+        vec![header, vertices, textures, normals, faces]
+            .into_iter()
+            .collect::<_>()
+    }
 }
 
 impl Shape for Mesh<'_> {
