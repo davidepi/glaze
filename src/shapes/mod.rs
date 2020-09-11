@@ -11,5 +11,6 @@ pub use crate::shapes::accelerator::Accelerator;
 mod kdtree;
 pub use crate::shapes::kdtree::KdTree;
 mod mesh;
+pub use crate::shapes::mesh::Mesh;
 #[cfg(test)]
 mod tests;
