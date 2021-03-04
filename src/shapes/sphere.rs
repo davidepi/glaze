@@ -1,6 +1,6 @@
 use crate::geometry::{Point2, Point3, Ray, Vec3};
 use crate::shapes::{HitPoint, Intersection, Shape, AABB};
-use crate::utility::{clamp, quadratic, Ef32};
+use crate::utility::{quadratic, Ef32};
 
 /// A primitive representing a sphere centered in `(0.0, 0.0, 0.0)` with a radius of `1.0`.
 ///
@@ -53,7 +53,7 @@ fn compute_interaction(hit: &Point3) -> (Point2, Vec3, Vec3) {
     }
     // calculates θ by using the z value of the hit point as tangent.
     // although the radius is in [-1.0, 1.0] clamping is necessary due to fp errors.
-    let theta = clamp(hit.z, -1.0, 1.0).acos();
+    let theta = hit.z.clamp(-1.0, 1.0).acos();
     // for the uv just use the ϕ and θ mapped in the range [0.0, 1.0].
     // ϕ is the longitude so the interval is [0, 2π]. So divide by 1/2π.
     // θ is the latitude so the interval is [0, π]. So divide by 1/π.

@@ -33,36 +33,8 @@ pub fn lerp(value: f32, min: f32, max: f32) -> f32 {
     (1.0 - value) * min + value * max
 }
 
-/// Restricts a value to a certain interval.
-///
-/// Used as a replacement while
-/// [the std version](https://doc.rust-lang.org/std/primitive.f32.html#method.clamp)
-/// is nightly-only
-/// # Examples
-/// Basic usage:
-/// ```
-/// // ez example stolen from the above link
-/// use glaze::utility::clamp;
-///
-/// assert_eq!(clamp(-3.0, -2.0, 1.0), -2.0);
-/// assert_eq!(clamp(0.0, -2.0, 1.0), 0.0);
-/// assert_eq!(clamp(2.0, -2.0, 1.0), 1.0);
-/// ```
-//TODO: replace all occurrences with std version when it will be stabilized
-#[inline]
-pub fn clamp(value: f32, min: f32, max: f32) -> f32 {
-    if value <= min {
-        min
-    } else if value >= max {
-        max
-    } else {
-        value
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::utility::inlines::clamp;
     use crate::utility::{float_eq, lerp};
 
     #[test]
@@ -79,27 +51,6 @@ mod tests {
         assert_ne!(a, errored);
         assert!(float_eq(a, errored, 1E-5));
         assert!(!float_eq(a, errored, 1E-16));
-    }
-
-    #[test]
-    fn inlines_clamp_in_range() {
-        let a = 0.75;
-        let res = clamp(a, 0.5, 2.);
-        assert_eq!(res, a);
-    }
-
-    #[test]
-    fn inlines_clamp_lower() {
-        let a = -0.5;
-        let res = clamp(a, 0.5, 2.0);
-        assert_eq!(res, 0.5);
-    }
-
-    #[test]
-    fn inlines_clamp_higher() {
-        let a = 3.50;
-        let res = clamp(a, 0.50, 2.0);
-        assert_eq!(res, 2.0);
     }
 
     #[test]

@@ -1,5 +1,4 @@
 mod inlines;
-pub use self::inlines::clamp;
 pub use self::inlines::float_eq;
 pub use self::inlines::lerp;
 mod efloat;
