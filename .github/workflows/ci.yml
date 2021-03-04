@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - '**.rs'
+      - '**.toml'
+      - '.github/workflows/ci.yml'
+  push:
+    paths:
+      - '**.rs'
+      - '**.toml'
+      - '.github/workflows/ci.yml'
+
+jobs:
+
+  commitlint:
+    name: Commit name lint and Markdown lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Use Node.js
+        uses: actions/setup-node@v1
+      - name: Cache Node.js modules
+        uses: actions/cache@v2
+        with:
+          path: ~/.npm
+          key: node-${{ hashFiles('**/package-lock.json') }}
+      - name: Install npm dependencies
+        run: npm install
+      - name: Run Commitlint
+        run: npm run commitlint
+      - name: Run Markdownlint
+        run: npm run markdownlint
+
+  syntax:
+    name: Check Rust Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          components: rustfmt
+      - uses: actions/cache@v1
+        with:
+          path: ~/.cargo
+          key: x86_64-unknown-linux-gnu-cargo-nightly
+      - name: Check Formatting
+        run: cargo +nightly fmt --all -- --check
+
+  lint:
+    name: Rust lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          components: rustfmt
+      - uses: actions/cache@v1
+        with:
+          path: ~/.cargo
+          key: x86_64-unknown-linux-gnu-cargo-stable
+      - name: Run Linter
+        run: cargo +stable clippy --all-features
+
+  tests:
+    name: Build and Test
+    needs: [commitlint, syntax, lint]
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, }
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUST_BACKTRACE: '1'
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v1
+        with:
+          path: ~/.cargo
+          key: ${{ matrix.platform.target }}-cargo-stable
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: ${{ matrix.platform.target }}
+      - name: Build
+        shell: bash
+        run: cargo +stable build --verbose --all-features --target ${{ matrix.platform.target }}
+      - name: Build tests
+        shell: bash
+        run: cargo +stable test --no-run --verbose --all-features --target ${{ matrix.platform.target }}
+      - name: Run tests
+        shell: bash
+        run: cargo +stable test --verbose --all-features --no-fail-fast --target ${{ matrix.platform.target }}
+
+  coverage:
+    name: Coverage
+    needs: tests
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, }
+    env:
+      CARGO_INCREMENTAL: '0'
+      RUSTFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
+      RUSTDOCFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
+    runs-on: ${{ matrix.platform.os }}
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/cache@v1
+        with:
+          path: ~/.cargo
+          key: ${{ matrix.platform.target }}-cargo-nightly
+      - name: Install nightly toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          target: ${{ matrix.platform.target }}
+      - name: Build and test
+        shell: bash
+        run: |
+          cargo clean
+          cargo +nightly test --all-features --target ${{ matrix.platform.target }}
+          mkdir ./target/debug/coverage
+      - name: Run grcov
+        uses: actions-rs/grcov@v0.1
+        with:
+          config: grcov.yml
+      - name: Upload to codecov
+        uses: codecov/codecov-action@v1
+        with:
+          files:  ./target/debug/coverage/lcov.info
+          verbose: true
