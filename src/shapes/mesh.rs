@@ -362,13 +362,13 @@ impl Shape for Mesh<'_> {
 fn index_max_component(vec: &Vec3) -> u8 {
     if vec.x > vec.y {
         if vec.x > vec.z {
-            0 as u8
+            0
         } else {
-            2 as u8
+            2
         }
     } else if vec.y > vec.z {
-        1 as u8
+        1
     } else {
-        2 as u8
+        2
     }
 }

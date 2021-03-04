@@ -7,6 +7,3 @@ pub(crate) use self::efloat::gamma;
 pub(crate) use self::efloat::quadratic;
 pub use self::efloat::Ef32;
 pub use self::efloat::NextRepresentable;
-
-#[cfg(test)]
-mod tests;

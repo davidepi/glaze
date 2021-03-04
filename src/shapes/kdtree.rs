@@ -153,7 +153,7 @@ impl<T: Shape> Shape for KdTree<T> {
         if let Some(scene_intersection) = isect(&self.scene_aabb, ray, &inv_dir) {
             let mut best = f32::INFINITY;
             // (kdtree node index, node bounding box front, node bounding box back)
-            let mut jobs = vec![(0 as u32, scene_intersection.0, scene_intersection.1)];
+            let mut jobs = vec![(0, scene_intersection.0, scene_intersection.1)];
             while let Some(node) = jobs.pop() {
                 let index = node.0;
                 let min_distance = node.1;
@@ -222,7 +222,7 @@ impl<T: Shape> Shape for KdTree<T> {
             1.0 / ray.direction.z,
         );
         if let Some(scene_intersection) = isect(&self.scene_aabb, ray, &inv_dir) {
-            let mut jobs = vec![(0 as u32, scene_intersection.0, scene_intersection.1)];
+            let mut jobs = vec![(0, scene_intersection.0, scene_intersection.1)];
             while let Some(node) = jobs.pop() {
                 let index = node.0;
                 let min_distance = node.1;
@@ -390,7 +390,7 @@ fn build_rec<T: Shape>(
             candidates[axis].sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
             // start from bot (so all shapes are on the top side)
-            let mut bot_count = 0 as usize;
+            let mut bot_count = 0;
             let mut top_count = elements.len();
             for i in 0..2 * elements.len() {
                 let top_side = !(candidates[axis][i].1);

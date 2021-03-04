@@ -1,4 +1,4 @@
-//the 0-prefix is extensively used for aligning rows in the matrix
+//the 0-prefix is extensively used for aligning rows in the matrix mod
 #![allow(clippy::zero_prefixed_literal)]
 mod vec;
 pub use self::vec::Normal;
@@ -12,6 +12,3 @@ pub use self::ray::Ray;
 mod matrix;
 pub use self::matrix::Matrix4;
 pub use self::matrix::Transform3;
-
-#[cfg(test)]
-mod tests;
