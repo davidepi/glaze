@@ -1,4 +1,4 @@
-use crate::geometry::{Matrix4, Point3, Transform3};
+use crate::linear::{Matrix4, Point3, Transform3};
 use overload::overload;
 use std::f32::INFINITY;
 use std::ops;
@@ -43,7 +43,7 @@ impl AABB {
     /// Constructs a zero-sized bounding box composed solely by one, given, point.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::point(&Point3::zero());
@@ -62,7 +62,7 @@ impl AABB {
     /// No restriction over the points order or their minimum or maximum component is imposed.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
@@ -79,7 +79,7 @@ impl AABB {
     /// Expands the bounding box by a given amount in every axis, both positive and negative.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
@@ -99,7 +99,7 @@ impl AABB {
     /// point.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
@@ -120,7 +120,7 @@ impl AABB {
     /// the one passed as input parameter.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// use glaze::shapes::AABB;
     ///
     /// let aabb0 = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
@@ -139,7 +139,7 @@ impl AABB {
     /// Returns true if the given point is inside the bounding box, false otherwise.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
@@ -159,7 +159,7 @@ impl AABB {
     /// Returns the total surface of the bounding box.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
@@ -174,7 +174,7 @@ impl AABB {
     /// Returns the total volume of the bounding box.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(2.0, 2.0, 2.0));
@@ -209,7 +209,7 @@ impl AABB {
     /// Returns the point at the center of the bounding box.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// use glaze::shapes::AABB;
     ///
     /// let aabb = AABB::new(&Point3::zero(), &Point3::new(1.0, 1.0, 1.0));
@@ -266,7 +266,7 @@ overload!((a: &mut AABB) += (b: ?AABB)
 
 #[cfg(test)]
 mod tests {
-    use crate::geometry::{Matrix4, Point3, Transform3};
+    use crate::linear::{Matrix4, Point3, Transform3};
     use crate::shapes::AABB;
     use assert_approx_eq::assert_approx_eq;
     use std::f32::INFINITY;

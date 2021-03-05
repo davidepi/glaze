@@ -1,6 +1,6 @@
-use crate::geometry::matrix::{Matrix4, Transform3};
-use crate::geometry::vec::Vec2;
-use crate::geometry::vec::Vec3;
+use crate::linear::matrix::{Matrix4, Transform3};
+use crate::linear::vec::Vec2;
+use crate::linear::vec::Vec3;
 use crate::utility::float_eq;
 use overload::overload;
 use std::fmt::Formatter;
@@ -27,7 +27,7 @@ impl Point2 {
     /// Construct a point in the origin of the cartesian space, with coordinates `(0.0, 0.0)`
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point2;
+    /// use glaze::linear::Point2;
     /// let p = Point2::zero();
     /// assert_eq!(p.x, 0.0);
     /// assert_eq!(p.y, 0.0);
@@ -39,7 +39,7 @@ impl Point2 {
     /// Constructs a point in the space with the given `(x, y)` coordinates
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point2;
+    /// use glaze::linear::Point2;
     /// let p = Point2::new(3.5, -2.2);
     /// assert_eq!(p.x, 3.5);
     /// assert_eq!(p.y, -2.2);
@@ -52,7 +52,7 @@ impl Point2 {
     /// between them
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point2;
+    /// use glaze::linear::Point2;
     /// let p1 = Point2::new(-1., -1.);
     /// let p2 = Point2::new(2., 3.);
     /// assert_eq!(Point2::distance(&p1, &p2), 5.);
@@ -71,7 +71,7 @@ impl Point2 {
     /// values.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point2;
+    /// use glaze::linear::Point2;
     ///
     /// let a = Point2::new(-1.0, 1.0);
     /// let b = Point2::new(-2.0, 2.0);
@@ -95,7 +95,7 @@ impl Point2 {
     /// values.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point2;
+    /// use glaze::linear::Point2;
     ///
     /// let a = Point2::new(-1.0, 1.0);
     /// let b = Point2::new(-2.0, 2.0);
@@ -172,7 +172,7 @@ impl Point3 {
     /// Constructs a point in the Origin of the cartesian space, with coordinates (0.0, 0.0, 0.0)
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// let p = Point3::zero();
     /// assert_eq!(p.x, 0.0);
     /// assert_eq!(p.y, 0.0);
@@ -189,7 +189,7 @@ impl Point3 {
     ///Constructs a point in the space with the given `(x, y, z)` coordinates
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     /// let p = Point3::new(3.5, -2.2, 1.0);
     /// assert_eq!(p.x, 3.5);
     /// assert_eq!(p.y, -2.2);
@@ -203,7 +203,7 @@ impl Point3 {
     /// between them
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point2;
+    /// use glaze::linear::Point2;
     /// let p1 = Point2::new(-1., -1.);
     /// let p2 = Point2::new(2., 3.);
     /// assert_eq!(Point2::distance(&p1, &p2), 5.);
@@ -223,7 +223,7 @@ impl Point3 {
     /// values.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     ///
     /// let a = Point3::new(-1.0, 1.0, 0.0);
     /// let b = Point3::new(-2.0, 2.0, 0.0);
@@ -249,7 +249,7 @@ impl Point3 {
     /// values.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Point3;
+    /// use glaze::linear::Point3;
     ///
     /// let a = Point3::new(-1.0, 1.0, 0.0);
     /// let b = Point3::new(-2.0, 2.0, 0.0);
@@ -326,8 +326,8 @@ overload!((a: &mut Point3) -= (b: ?Point3) {a.x-=b.x;a.y-=b.y;a.z-=b.z;});
 
 #[cfg(test)]
 mod tests {
-    use crate::geometry::matrix::Transform3;
-    use crate::geometry::{Matrix4, Point2, Point3, Vec2, Vec3};
+    use crate::linear::matrix::Transform3;
+    use crate::linear::{Matrix4, Point2, Point3, Vec2, Vec3};
     use assert_approx_eq::assert_approx_eq;
 
     #[test]

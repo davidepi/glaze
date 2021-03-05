@@ -1,4 +1,4 @@
-use crate::geometry::{Point2, Point3, Ray, Vec3};
+use crate::linear::{Point2, Point3, Ray, Vec3};
 use crate::shapes::{HitPoint, Intersection, Shape, AABB};
 use crate::utility::{quadratic, Ef32};
 
@@ -173,7 +173,7 @@ impl Shape for Sphere {
 
 #[cfg(test)]
 mod tests {
-    use crate::geometry::{Point3, Ray, Vec3};
+    use crate::linear::{Point3, Ray, Vec3};
     use crate::shapes::{Shape, Sphere};
 
     #[test]

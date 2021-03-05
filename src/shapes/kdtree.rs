@@ -1,4 +1,4 @@
-use crate::geometry::{Ray, Vec3};
+use crate::linear::{Ray, Vec3};
 use crate::shapes::{Accelerator, Intersection, Shape, AABB};
 use fnv::FnvHashSet;
 use std::f32::NAN;
@@ -68,7 +68,7 @@ impl<T: Shape> KdTree<T> {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::linear::{Point3, Ray, Vec3};
     /// use glaze::shapes::{KdTree, Shape, Sphere};
     ///
     /// let k: KdTree<Sphere> = KdTree::new(1, 1.0, 50.0, true);
@@ -108,7 +108,7 @@ impl<T: Shape> KdTree<T> {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::linear::{Point3, Ray, Vec3};
     /// use glaze::shapes::{KdTree, Shape, Sphere};
     ///
     /// let k: KdTree<Sphere> = KdTree::default();

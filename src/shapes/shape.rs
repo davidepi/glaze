@@ -1,4 +1,4 @@
-use crate::geometry::{Normal, Point2, Point3, Ray, Vec3};
+use crate::linear::{Normal, Point2, Point3, Ray, Vec3};
 use crate::shapes::AABB;
 
 /// Represents the point in space hit by a Ray, along with some properties.
@@ -43,7 +43,7 @@ pub trait Shape {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::linear::{Point3, Ray, Vec3};
     /// use glaze::shapes::{Shape, Sphere};
     ///
     /// let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
@@ -63,7 +63,7 @@ pub trait Shape {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::linear::{Point3, Ray, Vec3};
     /// use glaze::shapes::{Shape, Sphere};
     ///
     /// let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));

@@ -1,4 +1,4 @@
-use crate::geometry::matrix::{Matrix4, Transform3};
+use crate::linear::matrix::{Matrix4, Transform3};
 use log::warn;
 use overload::overload;
 use std::f32;
@@ -23,7 +23,7 @@ impl Vec2 {
     /// Constructs a 2D zero vector, a vector in the form `(0.0, 0.0)`.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let v = Vec2::zero();
     ///
@@ -37,7 +37,7 @@ impl Vec2 {
     /// Constructs a vector with the given `(x, y)` components.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let v = Vec2::new(3.5, -2.2);
     ///
@@ -51,7 +51,7 @@ impl Vec2 {
     /// Constructs a normalized vector pointing *right*, towards `(1.0, 0.0)`.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let v = Vec2::right();
     ///
@@ -65,7 +65,7 @@ impl Vec2 {
     /// Constructs a normalized vector pointing *up*, towards `(0.0, 1.0)`.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let v = Vec2::up();
     ///
@@ -79,7 +79,7 @@ impl Vec2 {
     /// Returns the euclidean length (or magnitude) of the vector.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let v = Vec2::new(3.0, 4.0);
     ///
@@ -92,7 +92,7 @@ impl Vec2 {
     /// Returns the squared euclidean length (or Manhattan length) of the vector.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let v = Vec2::new(3.0, 4.0);
     ///
@@ -106,7 +106,7 @@ impl Vec2 {
     /// euclidean length is equal to 1.0.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let v = Vec2::new(5.0, 5.0);
     /// let normalized = v.normalize();
@@ -135,7 +135,7 @@ impl Vec2 {
     /// Checks whether the vector is normalized or not.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let normalized = Vec2::new(1.0, 0.0);
     /// let not_normalized = Vec2::new(1.5, 0.5);
@@ -151,7 +151,7 @@ impl Vec2 {
     /// Returns the component-wise absolute value for this vector.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let negative = Vec2::new(-1.0, -2.0);
     /// let positive = negative.abs();
@@ -174,7 +174,7 @@ impl Vec2 {
     /// Clamping is performed component-wise.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let v = Vec2::new(1.5, 0.5);
     /// let max = Vec2::new(1.0, 1.0);
@@ -209,7 +209,7 @@ impl Vec2 {
     /// two vectors.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec2;
+    /// use glaze::linear::Vec2;
     ///
     /// let v = Vec2::new(1.0, 2.0);
     /// let v2 = Vec2::new(4.0, -5.0);
@@ -284,7 +284,7 @@ impl Vec3 {
     /// Constructs a 3D zero vector, a vector in the form `(0.0, 0.0, 0.0)`.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::zero();
     ///
@@ -303,7 +303,7 @@ impl Vec3 {
     /// Constructs a vector with the given `(x, y, z)` components.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::new(3.5, -2.2, 1.0);
     ///
@@ -318,7 +318,7 @@ impl Vec3 {
     /// Constructs a normalized vector pointing *right*, towards `(1.0, 0.0, 0.0)`.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::right();
     ///
@@ -337,7 +337,7 @@ impl Vec3 {
     /// Constructs a normalized vector pointing *up*, towards `(0.0, 1.0, 0.0)`.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::up();
     ///
@@ -357,7 +357,7 @@ impl Vec3 {
     /// `(0.0, 0.0, 1.0)`.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::front();
     ///
@@ -376,7 +376,7 @@ impl Vec3 {
     /// Returns the euclidean length (or magnitude) of the vector.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::new(2.0, 3.0, 6.0);
     ///
@@ -389,7 +389,7 @@ impl Vec3 {
     /// Returns the squared euclidean length (or Manhattan length) of the vector.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::new(2.0, 3.0, 6.0);
     ///
@@ -404,7 +404,7 @@ impl Vec3 {
     /// A vector is normalized if its euclidean length is equal to 1.0.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::new(5.0, 0.0, 0.0);
     /// let normalized = v.normalize();
@@ -431,7 +431,7 @@ impl Vec3 {
     /// Checks whether the vector is normalized or not.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let normalized = Vec3::new(0.0, 1.0, 0.0);
     /// let not_normalized = Vec3::new(1.5, 0.5, 25.0);
@@ -447,7 +447,7 @@ impl Vec3 {
     /// Returns the component-wise absolute value for this vector.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let negative = Vec3::new(-1.0, -2.0, -3.0);
     /// let positive = negative.abs();
@@ -472,7 +472,7 @@ impl Vec3 {
     /// Clamping is performed component-wise.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::new(1.5, 0.5, -2.5);
     /// let max = Vec3::new(1.0, 1.0, 1.0);
@@ -516,7 +516,7 @@ impl Vec3 {
     /// not normalized.
     /// # Example
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::new(0.5, 0.3, -0.5);
     /// let centre = Vec3::new(0., 0., 1.);
@@ -548,7 +548,7 @@ impl Vec3 {
     /// In case of Total Internal Reflection, None is returned.
     /// # Example
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v = Vec3::new(0.3, 0.1, 0.8);
     /// let interface = Vec3::new(0., 0., 1.);
@@ -585,7 +585,7 @@ impl Vec3 {
     /// - `θ` represents the angle between the two vectors.
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v0 = Vec3::new(1.0, 2.0, 3.0);
     /// let v1 = Vec3::new(4.0, -5.0, 6.0);
@@ -613,7 +613,7 @@ impl Vec3 {
     /// the functions should be called as `Vec3::cross(&vec_b, &vec_a);`
     /// # Examples
     /// ```
-    /// use glaze::geometry::Vec3;
+    /// use glaze::linear::Vec3;
     ///
     /// let v0 = Vec3::new(3.0, -3.0, 1.0);
     /// let v1 = Vec3::new(4.0, 9.0, 2.0);
@@ -685,8 +685,8 @@ overload!((a: &mut Vec3) *= (b: f32){a.x*=b;a.y*=b;a.z*=b;});
 
 #[cfg(test)]
 mod tests {
-    use crate::geometry::matrix::Transform3;
-    use crate::geometry::{Matrix4, Vec2, Vec3};
+    use crate::linear::matrix::Transform3;
+    use crate::linear::{Matrix4, Vec2, Vec3};
     use assert_approx_eq::assert_approx_eq;
 
     #[test]

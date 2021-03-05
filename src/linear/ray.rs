@@ -1,5 +1,5 @@
-use crate::geometry::matrix::Transform3;
-use crate::geometry::{Matrix4, Point3, Vec3};
+use crate::linear::matrix::Transform3;
+use crate::linear::{Matrix4, Point3, Vec3};
 use crate::utility::{float_eq, gamma};
 use std::fmt::{Display, Formatter};
 
@@ -33,7 +33,7 @@ impl Ray {
     /// Constructs a Ray with origin in (0.0, 0.0, 0.0) and direction towards the positive z axis
     /// # Examples
     /// ```
-    /// use glaze::geometry::Ray;
+    /// use glaze::linear::Ray;
     ///
     /// let ray = Ray::zero();
     ///
@@ -57,7 +57,7 @@ impl Ray {
     /// Constructs a Ray with the given origin and direction
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::linear::{Point3, Ray, Vec3};
     ///
     /// let origin = Point3::new(1.0, 2.0, 3.0);
     /// let direction = Vec3::new(0.0, 1.0, 0.0);
@@ -84,7 +84,7 @@ impl Ray {
     /// the ray.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::linear::{Point3, Ray, Vec3};
     ///
     /// let ray = Ray::new(&Point3::zero(), &Vec3::new(0.0, 1.0, 0.0));
     /// let point_along_ray = ray.point_along(2.5);
@@ -188,8 +188,8 @@ impl Display for Ray {
 
 #[cfg(test)]
 mod tests {
-    use crate::geometry::matrix::Transform3;
-    use crate::geometry::{Matrix4, Point3, Ray, Vec3};
+    use crate::linear::matrix::Transform3;
+    use crate::linear::{Matrix4, Point3, Ray, Vec3};
     use assert_approx_eq::assert_approx_eq;
 
     #[test]

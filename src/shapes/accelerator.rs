@@ -19,7 +19,7 @@ pub trait Accelerator: Shape {
     /// # Examples
     /// Basic usage with Kd-trees:
     /// ```
-    /// use glaze::geometry::{Point3, Ray, Vec3};
+    /// use glaze::linear::{Point3, Ray, Vec3};
     /// use glaze::shapes::{Accelerator, KdTree, Shape, Sphere};
     ///
     /// let shapes = vec![Sphere::new()];

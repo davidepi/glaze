@@ -1,5 +1,5 @@
-use crate::geometry::point::Point3;
-use crate::geometry::vec::Vec3;
+use crate::linear::point::Point3;
+use crate::linear::vec::Vec3;
 use crate::utility::float_eq;
 use overload::overload;
 use std::ops;
@@ -13,7 +13,7 @@ pub trait Transform3 {
     /// # Examples
     /// Basic usage:
     /// ```
-    /// use glaze::geometry::{Matrix4, Point3, Transform3, Vec3};
+    /// use glaze::linear::{Matrix4, Point3, Transform3, Vec3};
     ///
     /// let mov = Vec3::new(0.0, -1.0, 0.0);
     /// let magnitude = Vec3::new(5.0, 1.0, 1.0);
@@ -93,7 +93,7 @@ impl Matrix4 {
     /// The input vector `dir` defines the magnitude and direction of the translation.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Matrix4, Point3, Transform3, Vec3};
+    /// use glaze::linear::{Matrix4, Point3, Transform3, Vec3};
     ///
     /// let dir = Vec3::new(0.0, 1.0, 0.0);
     /// let translate = Matrix4::translation(&dir);
@@ -121,7 +121,7 @@ impl Matrix4 {
     /// method extracts the translation component.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Matrix4, Vec3};
+    /// use glaze::linear::{Matrix4, Vec3};
     ///
     /// let dir = Vec3::new(1.0, 2.0, -3.0);
     /// let translate = Matrix4::translation(&dir);
@@ -145,7 +145,7 @@ impl Matrix4 {
     /// be strictly positives.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Matrix4, Point3, Transform3, Vec3};
+    /// use glaze::linear::{Matrix4, Point3, Transform3, Vec3};
     ///
     /// let magnitude = Vec3::new(5.0, 1.0, 1.0);
     /// let scale = Matrix4::scale(&magnitude);
@@ -176,7 +176,7 @@ impl Matrix4 {
     /// method extracts the scale component.
     /// # Examples
     /// ```
-    /// use glaze::geometry::{Matrix4, Vec3};
+    /// use glaze::linear::{Matrix4, Vec3};
     ///
     /// let magnitude = Vec3::new(1.0, 2.0, 3.0);
     /// let translate = Matrix4::scale(&magnitude);
@@ -200,7 +200,7 @@ impl Matrix4 {
     /// # Examples
     /// ```
     /// use assert_approx_eq::assert_approx_eq;
-    /// use glaze::geometry::{Matrix4, Point3, Transform3, Vec3};
+    /// use glaze::linear::{Matrix4, Point3, Transform3, Vec3};
     ///
     /// let roll = 90.0_f32.to_radians();
     /// let rot = Matrix4::rotate_x(roll);
@@ -232,7 +232,7 @@ impl Matrix4 {
     /// # Examples
     /// ```
     /// use assert_approx_eq::assert_approx_eq;
-    /// use glaze::geometry::{Matrix4, Point3, Transform3, Vec3};
+    /// use glaze::linear::{Matrix4, Point3, Transform3, Vec3};
     ///
     /// let pitch = 90.0_f32.to_radians();
     /// let rot = Matrix4::rotate_y(pitch);
@@ -263,7 +263,7 @@ impl Matrix4 {
     /// # Examples
     /// ```
     /// use assert_approx_eq::assert_approx_eq;
-    /// use glaze::geometry::{Matrix4, Point3, Transform3, Vec3};
+    /// use glaze::linear::{Matrix4, Point3, Transform3, Vec3};
     ///
     /// let yaw = 90.0_f32.to_radians();
     /// let rot = Matrix4::rotate_z(yaw);
@@ -575,7 +575,7 @@ a.m[08]=m08;a.m[09]=m09;a.m[10]=m10;a.m[11]=m11;a.m[12]=m12;a.m[13]=m13;a.m[14]=
 
 #[cfg(test)]
 mod tests {
-    use crate::geometry::{Matrix4, Point3, Vec3};
+    use crate::linear::{Matrix4, Point3, Vec3};
     use assert_approx_eq::assert_approx_eq;
 
     #[test]

@@ -1,4 +1,4 @@
-use crate::geometry::{Normal, Point2, Point3, Ray, Vec3};
+use crate::linear::{Normal, Point2, Point3, Ray, Vec3};
 use crate::shapes::{Accelerator, HitPoint, Intersection, KdTree, Shape, AABB};
 use crate::utility::gamma;
 
