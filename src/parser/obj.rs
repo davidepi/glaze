@@ -16,8 +16,8 @@ pub struct Obj {
 }
 
 impl Obj {
-    pub fn new(file: String) -> Obj {
-        Obj { file }
+    pub fn new<S: Into<String>>(file: S) -> Obj {
+        Obj { file: file.into() }
     }
 }
 
@@ -123,7 +123,7 @@ fn triangulate(ngon: Vec<&str>) -> Result<Vec<[i32; 9]>, String> {
             .take(ngon.len() - 2)
             .map(|x| vec![ngon[0], ngon[x - 1], ngon[x]])
             .collect::<Vec<_>>();
-        // convert v/vn/vt into [v0,vt0,vn0,v1,vt1,vn1,v2,vt2,vn2]
+        // convert v/vt/vn into [v0,vt0,vn0,v1,vt1,vn1,v2,vt2,vn2]
         let mut res = Vec::new();
         for tris in triangles {
             let mut face = Vec::new();
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn obj_two_vertices_face() {
         let filename = get_resource("2vertface.obj");
-        let parsed = Obj::new(filename.clone()).parse();
+        let parsed = Obj::new(&filename).parse();
         assert!(parsed.is_err(), "Expected error, nothing was raised");
         let err = parsed.err().unwrap();
         match &err {
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn obj_no_name() {
         let filename = get_resource("noname.obj");
-        let parsed = Obj::new(filename.clone()).parse();
+        let parsed = Obj::new(filename).parse();
         assert!(parsed.is_ok());
         let res = parsed.unwrap();
         assert_eq!(res[0].name, "");
@@ -227,7 +227,7 @@ mod tests {
     #[test]
     fn obj_float_in_face() {
         let filename = get_resource("float_in_face.obj");
-        let parsed = Obj::new(filename.clone()).parse();
+        let parsed = Obj::new(&filename).parse();
         assert!(parsed.is_err(), "Expected error, nothing was raised");
         let err = parsed.err().unwrap();
         match &err {
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn obj_multispace() {
         let filename = get_resource("multispace.obj");
-        let parsed = Obj::new(filename.clone()).parse();
+        let parsed = Obj::new(filename).parse();
         assert!(parsed.is_ok());
         let res = parsed.unwrap();
         assert_eq!(res[0].vv.len(), 3);
@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn obj_triangulate() {
         let filename = get_resource("ngon.obj");
-        let parsed = Obj::new(filename.clone()).parse();
+        let parsed = Obj::new(filename).parse();
         assert!(parsed.is_ok());
         let res = parsed.unwrap();
         assert_eq!(res[0].ff.len(), 14);
@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn obj_negative_tris_index() {
         let filename = get_resource("neg_vertices.obj");
-        let parsed = Obj::new(filename.clone()).parse();
+        let parsed = Obj::new(filename).parse();
         assert!(parsed.is_ok());
         let res = parsed.unwrap();
         assert_eq!(res[0].ff.len(), 1);
@@ -278,7 +278,7 @@ mod tests {
     #[test]
     fn obj_vertex_parse() {
         let filename = get_resource("pyramid.obj");
-        let parsed = Obj::new(filename.clone()).parse();
+        let parsed = Obj::new(filename).parse();
         assert!(parsed.is_ok());
         let res = parsed.unwrap();
         assert_eq!(res[0].name, "SquarePyr");
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn obj_missing_vt() {
         let filename = get_resource("pyramid.obj");
-        let parsed = Obj::new(filename.clone()).parse();
+        let parsed = Obj::new(filename).parse();
         assert!(parsed.is_ok());
         let res = parsed.unwrap();
         assert_eq!(res[0].name, "SquarePyr");
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn obj_multiple_objects() {
         let filename = get_resource("multi.obj");
-        let parsed = Obj::new(filename.clone()).parse();
+        let parsed = Obj::new(filename).parse();
         assert!(parsed.is_ok());
         let res = parsed.unwrap();
         assert_ne!(res[0].name, res[1].name);
