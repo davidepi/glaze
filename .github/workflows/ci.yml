@@ -71,7 +71,7 @@ jobs:
 
   tests:
     name: Build and Test
-    needs: [commitlint, syntax, lint]
+    needs: [ commitlint, syntax, lint ]
     strategy:
       fail-fast: false
       matrix:
@@ -94,53 +94,51 @@ jobs:
           toolchain: stable
           target: ${{ matrix.platform.target }}
       - name: Build
-        shell: bash
         run: cargo +stable build --verbose --all-features --target ${{ matrix.platform.target }}
       - name: Build tests
-        shell: bash
         run: cargo +stable test --no-run --verbose --all-features --target ${{ matrix.platform.target }}
       - name: Run tests
-        shell: bash
         run: cargo +stable test --verbose --all-features --no-fail-fast --target ${{ matrix.platform.target }}
 
   coverage:
     name: Coverage
     needs: tests
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, }
-    env:
-      CARGO_INCREMENTAL: '0'
-      RUSTFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
-      RUSTDOCFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - uses: actions/cache@v1
         with:
           path: ~/.cargo
-          key: ${{ matrix.platform.target }}-cargo-nightly
+          key: x86_64-unknown-linux-gnu-cargo-nightly
       - name: Install nightly toolchain
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: nightly
           override: true
-          target: ${{ matrix.platform.target }}
-      - name: Build and test
-        shell: bash
+          target: x86_64-unknown-linux-gnu
+      - name: Install grcov
+        run: curl -L https://github.com/mozilla/grcov/releases/download/v0.7.1/grcov-linux-x86_64.tar.bz2 | tar xjf -
+      - name: Install rust-covfix
+        run: |
+          curl -L https://github.com/Kogia-sima/rust-covfix/releases/download/v0.2.2/rust-covfix-linux-x86_64.tar.xz > rust-covfix.tar.xz
+          tar xJf rust-covfix.tar.xz rust-covfix-linux-x86_64/rust-covfix --strip-components 1
+      - name: Run tests
+        env:
+          CARGO_INCREMENTAL: 0
+          RUSTFLAGS: -Zprofile -Ccodegen-units=1 -Copt-level=0 -Cinline-threshold=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -C panic=abort
+          RUSTDOCFLAGS: -C panic=abort
         run: |
           cargo clean
-          cargo +nightly test --all-features --target ${{ matrix.platform.target }}
+          cargo +nightly test --all-features
+      - name: Collect coverage
+        run: |
           mkdir ./target/debug/coverage
-      - name: Run grcov
-        uses: actions-rs/grcov@v0.1
-        with:
-          config: grcov.yml
+          ./grcov ./target/debug/ -s . --llvm --ignore-not-existing --ignore="/*" -t lcov -o ./target/debug/coverage/lcov.info
+      - name: Fix coverage
+        run: ./rust-covfix ./target/debug/coverage/lcov.info -o ./target/debug/coverage/lcov_fix.info
       - name: Upload to codecov
         uses: codecov/codecov-action@v1
         with:
-          files:  ./target/debug/coverage/lcov.info
+          files: ./target/debug/coverage/lcov_fix.info
           verbose: true
