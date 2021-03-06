@@ -817,12 +817,26 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
+    fn vec2_index_oob() {
+        let v = Vec2::new(0.5, 0.7);
+        let _val = v[2];
+    }
+
+    #[test]
     fn vec2_index_mut() {
         let mut v = Vec2::new(0.8, 0.4);
         v[0] = 0.4;
         v[1] = 0.9;
         assert_eq!(v.x, 0.4);
         assert_eq!(v.y, 0.9);
+    }
+
+    #[test]
+    #[should_panic]
+    fn vec2_index_mut_oob() {
+        let mut v = Vec2::new(0.8, 0.4);
+        v[2] = 0.0;
     }
 
     #[test]
@@ -1114,6 +1128,13 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
+    fn vec3_index_oob() {
+        let v = Vec3::new(0.3, 0.1, 0.8);
+        let _val = v[3];
+    }
+
+    #[test]
     fn vec3_index_mut() {
         let mut v = Vec3::new(0.3, 0.1, 0.8);
         v[0] = 0.1;
@@ -1122,6 +1143,13 @@ mod tests {
         assert_eq!(v.x, 0.1);
         assert_eq!(v.y, 0.8);
         assert_eq!(v.z, 0.3);
+    }
+
+    #[test]
+    #[should_panic]
+    fn vec3_index_mut_oob() {
+        let mut v = Vec3::new(0.3, 0.1, 0.8);
+        v[3] = 0.0;
     }
 
     #[test]
