@@ -97,7 +97,9 @@ impl<T: Shape> KdTree<T> {
             settings,
         }
     }
+}
 
+impl<T: Shape> Default for KdTree<T> {
     /// Creates a KdTree with default settings.
     ///
     /// The default settings are the following:
@@ -118,7 +120,7 @@ impl<T: Shape> KdTree<T> {
     /// let ray = Ray::new(&Point3::zero(), &Vec3::up());
     /// assert!(!k.intersect_fast(&ray));
     /// ```
-    pub fn default() -> KdTree<T> {
+    fn default() -> Self {
         let settings = KdTreeSettings {
             leaf_min: 3,
             extensive_search: false,

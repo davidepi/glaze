@@ -5,7 +5,7 @@ use std::slice::Iter;
 ///
 /// The purpose of these structures is to reduces the number of intersection required by discarding
 /// groups of shapes that the ray will never intersect without trying the actual intersection.
-pub trait Accelerator: Shape {
+pub trait Accelerator: Shape + Default {
     /// The types contained in the accelerator structure.
     ///
     /// **Must** implement Shape for obvious reason, as any structure implementing Accelerator will

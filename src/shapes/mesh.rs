@@ -1,17 +1,22 @@
-use crate::linear::{Normal, Point2, Point3, Ray, Vec3};
+use crate::linear::{Normal, Point2, Point3, Ray, Vec2, Vec3};
+use crate::parser::ParsedGeometry;
 use crate::shapes::{Accelerator, HitPoint, Intersection, KdTree, Shape, AABB};
 use crate::utility::gamma;
+use std::cmp::max;
 
 /// Struct representing a vertex.
 ///
 /// The vertex is indexed over some buffers (not contained in this struct).
-struct VertexIndex {
+struct VertexIndex<T>
+where
+    T: Into<usize> + Copy,
+{
     /// Index for the vertex coordinate.
-    p: u32,
+    p: T,
     /// Index for the vertex normal.
-    n: u32,
+    n: T,
     /// Index for the vertex texture coordinate.
-    t: u32,
+    t: T,
 }
 
 /// Struct representing a triangle.
@@ -19,32 +24,38 @@ struct VertexIndex {
 /// The triangle is closely coupled with the mesh containing it. Its object space is the same of the
 /// Mesh object space (the triangle coordinates won't change when transforming from the Mesh object
 /// space to the Triangle object space).
-struct Triangle<'a> {
+struct Triangle<'a, T>
+where
+    T: Into<usize> + Copy,
+{
     /// The mesh containing this Triangle.
-    mesh: &'a Mesh<'a>,
+    buffer: &'a VertexBuffer,
     /// Struct containing indices for the `a` vertex, in the Mesh buffers.
-    a: VertexIndex,
+    a: VertexIndex<T>,
     /// Struct containing indices for the `b` vertex, in the Mesh buffers.
-    b: VertexIndex,
+    b: VertexIndex<T>,
     /// Struct containing indices for the `c` vertex, in the Mesh buffers.
-    c: VertexIndex,
+    c: VertexIndex<T>,
 }
 
-impl Triangle<'_> {
+impl<T> Triangle<'_, T>
+where
+    T: Into<usize> + Copy,
+{
     /// Calculates the partial derivatives ∂p/∂u and ∂p/∂v.
     ///
     /// Note that this value is always the same for each triangle and does not depend on a specific
     /// point (and thus on a specific Ray).
     fn get_partial_derivatives(&self) -> (Vec3, Vec3) {
         let uv = [
-            self.mesh.t[self.a.t as usize],
-            self.mesh.t[self.b.t as usize],
-            self.mesh.t[self.c.t as usize],
+            self.buffer.t[self.a.t.into()],
+            self.buffer.t[self.b.t.into()],
+            self.buffer.t[self.c.t.into()],
         ];
         let p = [
-            self.mesh.p[self.a.p as usize],
-            self.mesh.p[self.b.p as usize],
-            self.mesh.p[self.c.p as usize],
+            self.buffer.p[self.a.p.into()],
+            self.buffer.p[self.b.p.into()],
+            self.buffer.p[self.c.p.into()],
         ];
         let delta = [uv[0] - uv[2], uv[1] - uv[2]];
         let determinant = delta[0].x * delta[1].y - delta[0].y * delta[1].x;
@@ -62,9 +73,9 @@ impl Triangle<'_> {
 
     /// Coverts the triangle points from object space to ray space, with the ray origin in (0,0,0).
     fn object_to_ray(&self, ray: &Ray) -> [Point3; 3] {
-        let a = self.mesh.p[self.a.p as usize];
-        let b = self.mesh.p[self.b.p as usize];
-        let c = self.mesh.p[self.c.p as usize];
+        let a = self.buffer.p[self.a.p.into()];
+        let b = self.buffer.p[self.b.p.into()];
+        let c = self.buffer.p[self.c.p.into()];
         // transform the vertices so ray origin is at (0, 0, 0)
         let origin_as_vec = Vec3::new(ray.origin.x, ray.origin.y, ray.origin.z);
         let mut a_translated = a - origin_as_vec;
@@ -182,26 +193,29 @@ impl Triangle<'_> {
     }
 }
 
-impl Shape for Triangle<'_> {
+impl<T> Shape for Triangle<'_, T>
+where
+    T: Into<usize> + Copy,
+{
     fn intersect(&self, ray: &Ray) -> Option<Intersection> {
         match self.hit_barycentric_coords(&ray) {
             Some(data) => {
                 let distance = data.0;
                 let b = data.1;
                 let p = [
-                    self.mesh.p[self.a.p as usize],
-                    self.mesh.p[self.b.p as usize],
-                    self.mesh.p[self.c.p as usize],
+                    self.buffer.p[self.a.p.into()],
+                    self.buffer.p[self.b.p.into()],
+                    self.buffer.p[self.c.p.into()],
                 ];
                 let n = [
-                    self.mesh.n[self.a.n as usize],
-                    self.mesh.n[self.b.n as usize],
-                    self.mesh.n[self.c.n as usize],
+                    self.buffer.n[self.a.n.into()],
+                    self.buffer.n[self.b.n.into()],
+                    self.buffer.n[self.c.n.into()],
                 ];
                 let uv = [
-                    self.mesh.t[self.a.t as usize],
-                    self.mesh.t[self.b.t as usize],
-                    self.mesh.t[self.c.t as usize],
+                    self.buffer.t[self.a.t.into()],
+                    self.buffer.t[self.b.t.into()],
+                    self.buffer.t[self.c.t.into()],
                 ];
                 let derivatives = self.get_partial_derivatives();
                 let hit = HitPoint {
@@ -229,118 +243,75 @@ impl Shape for Triangle<'_> {
     }
 
     fn bounding_box(&self) -> AABB {
-        let a = self.mesh.p[self.a.p as usize];
-        let b = self.mesh.p[self.b.p as usize];
-        let c = self.mesh.p[self.c.p as usize];
+        let a = self.buffer.p[self.a.p.into()];
+        let b = self.buffer.p[self.b.p.into()];
+        let c = self.buffer.p[self.c.p.into()];
         let bot = Point3::min(&Point3::min(&a, &b), &c);
         let top = Point3::max(&Point3::max(&a, &b), &c);
         AABB { bot, top }
     }
 }
 
-/// A shape formed by a collection of triangles.
-///
-/// A mesh uses vertex, normal and vertex texture buffers for efficient storage and an acceleration
-/// structure, a KdTree in this implementation for faster intersections.
-pub struct Mesh<'a> {
+fn new_triangles_u8<'a, T>(data: ParsedGeometry) -> (Vec<Triangle<'a, T>>, VertexBuffer)
+where
+    T: Into<usize> + Copy,
+{
+    unimplemented!()
+}
+
+fn new_triangles_u16<'a, T>(data: ParsedGeometry) -> (Vec<Triangle<'a, T>>, VertexBuffer)
+where
+    T: Into<usize> + Copy,
+{
+    unimplemented!()
+}
+
+fn new_triangles_u32<'a, T>(data: ParsedGeometry) -> (Vec<Triangle<'a, T>>, VertexBuffer)
+where
+    T: Into<usize> + Copy,
+{
+    unimplemented!()
+}
+
+struct VertexBuffer {
     /// Vertex coordinates buffer.
     p: Vec<Point3>,
     /// Normal buffer.
     n: Vec<Normal>,
     /// Vertex textures buffer.
     t: Vec<Point2>,
-    /// Acceleration structure
-    f: KdTree<Triangle<'a>>,
 }
 
-impl Mesh<'_> {
-    /// Converts the current mesh to an OBJ file.
-    ///
-    /// Returns a String representing the current Mesh as the content of a
-    /// [Wavefront OBJ file](http://www.martinreddy.net/gfx/3d/OBJ.spec).
-    pub fn to_obj(&self) -> String {
-        let software_name = option_env!("CARGO_PKG_NAME").unwrap_or("<Missing name>");
-        let version = option_env!("CARGO_PKG_VERSION").unwrap_or("<Missing version>");
+/// A shape formed by a collection of triangles.
+///
+/// A mesh uses vertex, normal and vertex texture buffers for efficient storage and an acceleration
+/// structure, a KdTree in this implementation for faster intersections.
+pub struct Mesh<'a, T: Into<usize> + Copy> {
+    data: VertexBuffer,
+    /// Acceleration structure
+    f: KdTree<Triangle<'a, T>>,
+}
 
-        let header = vec![
-            "# Wavefront OBJ created by ",
-            software_name,
-            " version ",
-            version,
-        ]
-        .into_iter()
-        .collect::<String>();
-
-        let vertices = self
-            .p
-            .iter()
-            .map(|p| {
-                vec![p.x, p.y, p.z]
-                    .into_iter()
-                    .map(|component| component.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .flat_map(|str| vec!["v ".to_string(), str, "\n".to_string()])
-            .collect::<String>();
-
-        let textures = self
-            .t
-            .iter()
-            .map(|t| {
-                vec![t.x, t.y]
-                    .into_iter()
-                    .map(|component| component.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .flat_map(|str| vec!["vt ".to_string(), str, "\n".to_string()])
-            .collect::<String>();
-
-        let normals = self
-            .n
-            .iter()
-            .map(|n| {
-                vec![n.x, n.y, n.z]
-                    .into_iter()
-                    .map(|component| component.to_string())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .flat_map(|str| vec!["vn ".to_string(), str, "\n".to_string()])
-            .collect::<String>();
-
-        let faces = self
-            .f
-            .iter()
-            .map(|tris| {
-                let a = vec![tris.a.p + 1, tris.a.t + 1, tris.a.n + 1]
-                    .into_iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join("/");
-                let b = vec![tris.b.p + 1, tris.b.t + 1, tris.b.n + 1]
-                    .into_iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join("/");
-                let c = vec![tris.c.p + 1, tris.c.t + 1, tris.c.n + 1]
-                    .into_iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join("/");
-                vec![a, b, c].join(" ")
-            })
-            .flat_map(|str| vec!["f ".to_string(), str, "\n".to_string()])
-            .collect::<String>();
-
-        vec![header, vertices, textures, normals, faces]
-            .into_iter()
-            .collect::<_>()
+impl<'a, T: Into<usize> + Copy> Mesh<'a, T> {
+    fn new(geom: ParsedGeometry) -> Mesh<'a, T> {
+        let max = max(max(geom.vv.len(), geom.vt.len()), geom.vn.len());
+        let create = if max < 256 {
+            new_triangles_u8
+        } else if max < 65536 {
+            new_triangles_u16
+        } else {
+            new_triangles_u32
+        };
+        let data = create(geom);
+        let accel = KdTree::default().build(data.0);
+        Mesh {
+            data: data.1,
+            f: accel,
+        }
     }
 }
 
-impl Shape for Mesh<'_> {
+impl<T: Into<usize> + Copy> Shape for Mesh<'_, T> {
     fn intersect(&self, ray: &Ray) -> Option<Intersection> {
         self.f.intersect(&ray)
     }
