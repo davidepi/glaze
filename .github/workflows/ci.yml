@@ -67,7 +67,7 @@ jobs:
           path: ~/.cargo
           key: x86_64-unknown-linux-gnu-cargo-stable
       - name: Run Linter
-        run: cargo +stable clippy --all-features
+        run: cargo +stable clippy --all-features -- -Dwarnings
 
   tests:
     name: Build and Test
