@@ -4,6 +4,7 @@ mod shape;
 pub use crate::shapes::shape::HitPoint;
 pub use crate::shapes::shape::Intersection;
 pub use crate::shapes::shape::Shape;
+pub use crate::shapes::shape::VertexBuffer;
 mod sphere;
 pub use crate::shapes::sphere::Sphere;
 mod accelerator;

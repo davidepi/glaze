@@ -1,6 +1,6 @@
-use crate::linear::{Normal, Point2, Point3, Ray, Vec2, Vec3};
+use crate::linear::{Point2, Point3, Ray, Vec3};
 use crate::parser::ParsedGeometry;
-use crate::shapes::{Accelerator, HitPoint, Intersection, KdTree, Shape, AABB};
+use crate::shapes::{Accelerator, HitPoint, Intersection, KdTree, Shape, VertexBuffer, AABB};
 use crate::utility::gamma;
 use std::cmp::max;
 
@@ -24,12 +24,10 @@ where
 /// The triangle is closely coupled with the mesh containing it. Its object space is the same of the
 /// Mesh object space (the triangle coordinates won't change when transforming from the Mesh object
 /// space to the Triangle object space).
-struct Triangle<'a, T>
+struct Triangle<T>
 where
     T: Into<usize> + Copy,
 {
-    /// The mesh containing this Triangle.
-    buffer: &'a VertexBuffer,
     /// Struct containing indices for the `a` vertex, in the Mesh buffers.
     a: VertexIndex<T>,
     /// Struct containing indices for the `b` vertex, in the Mesh buffers.
@@ -38,7 +36,7 @@ where
     c: VertexIndex<T>,
 }
 
-impl<T> Triangle<'_, T>
+impl<T> Triangle<T>
 where
     T: Into<usize> + Copy,
 {
@@ -46,16 +44,16 @@ where
     ///
     /// Note that this value is always the same for each triangle and does not depend on a specific
     /// point (and thus on a specific Ray).
-    fn get_partial_derivatives(&self) -> (Vec3, Vec3) {
+    fn get_partial_derivatives(&self, vb: &VertexBuffer) -> (Vec3, Vec3) {
         let uv = [
-            self.buffer.t[self.a.t.into()],
-            self.buffer.t[self.b.t.into()],
-            self.buffer.t[self.c.t.into()],
+            vb.texture_buffer[self.a.t.into()],
+            vb.texture_buffer[self.b.t.into()],
+            vb.texture_buffer[self.c.t.into()],
         ];
         let p = [
-            self.buffer.p[self.a.p.into()],
-            self.buffer.p[self.b.p.into()],
-            self.buffer.p[self.c.p.into()],
+            vb.point_buffer[self.a.p.into()],
+            vb.point_buffer[self.b.p.into()],
+            vb.point_buffer[self.c.p.into()],
         ];
         let delta = [uv[0] - uv[2], uv[1] - uv[2]];
         let determinant = delta[0].x * delta[1].y - delta[0].y * delta[1].x;
@@ -72,10 +70,10 @@ where
     }
 
     /// Coverts the triangle points from object space to ray space, with the ray origin in (0,0,0).
-    fn object_to_ray(&self, ray: &Ray) -> [Point3; 3] {
-        let a = self.buffer.p[self.a.p.into()];
-        let b = self.buffer.p[self.b.p.into()];
-        let c = self.buffer.p[self.c.p.into()];
+    fn object_to_ray(&self, ray: &Ray, vb: &VertexBuffer) -> [Point3; 3] {
+        let a = vb.point_buffer[self.a.p.into()];
+        let b = vb.point_buffer[self.b.p.into()];
+        let c = vb.point_buffer[self.c.p.into()];
         // transform the vertices so ray origin is at (0, 0, 0)
         let origin_as_vec = Vec3::new(ray.origin.x, ray.origin.y, ray.origin.z);
         let mut a_translated = a - origin_as_vec;
@@ -133,8 +131,8 @@ where
     /// happened.
     ///
     /// The returned tuple contains the distance and a Point3 with the coordinates.
-    fn hit_barycentric_coords(&self, ray: &Ray) -> Option<(f32, Point3)> {
-        let data = self.object_to_ray(&ray);
+    fn hit_barycentric_coords(&self, ray: &Ray, vb: &VertexBuffer) -> Option<(f32, Point3)> {
+        let data = self.object_to_ray(&ray, vb);
         let a = data[0];
         let b = data[1];
         let c = data[2];
@@ -193,31 +191,33 @@ where
     }
 }
 
-impl<T> Shape for Triangle<'_, T>
+impl<T> Shape for Triangle<T>
 where
     T: Into<usize> + Copy,
 {
-    fn intersect(&self, ray: &Ray) -> Option<Intersection> {
-        match self.hit_barycentric_coords(&ray) {
+    fn intersect(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> Option<Intersection> {
+        let buffer = vb.unwrap();
+        match self.hit_barycentric_coords(&ray, buffer) {
             Some(data) => {
                 let distance = data.0;
+                let buffer = vb.unwrap();
                 let b = data.1;
                 let p = [
-                    self.buffer.p[self.a.p.into()],
-                    self.buffer.p[self.b.p.into()],
-                    self.buffer.p[self.c.p.into()],
+                    buffer.point_buffer[self.a.p.into()],
+                    buffer.point_buffer[self.b.p.into()],
+                    buffer.point_buffer[self.c.p.into()],
                 ];
                 let n = [
-                    self.buffer.n[self.a.n.into()],
-                    self.buffer.n[self.b.n.into()],
-                    self.buffer.n[self.c.n.into()],
+                    buffer.normal_buffer[self.a.n.into()],
+                    buffer.normal_buffer[self.b.n.into()],
+                    buffer.normal_buffer[self.c.n.into()],
                 ];
                 let uv = [
-                    self.buffer.t[self.a.t.into()],
-                    self.buffer.t[self.b.t.into()],
-                    self.buffer.t[self.c.t.into()],
+                    buffer.texture_buffer[self.a.t.into()],
+                    buffer.texture_buffer[self.b.t.into()],
+                    buffer.texture_buffer[self.c.t.into()],
                 ];
-                let derivatives = self.get_partial_derivatives();
+                let derivatives = self.get_partial_derivatives(buffer);
                 let hit = HitPoint {
                     point: Point3::new(
                         p[0].x * b.x + p[1].x * b.y + p[2].x * b.z,
@@ -238,62 +238,55 @@ where
         }
     }
 
-    fn intersect_fast(&self, ray: &Ray) -> bool {
-        self.hit_barycentric_coords(&ray).is_some()
+    fn intersect_fast(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> bool {
+        let buffer = vb.unwrap();
+        self.hit_barycentric_coords(&ray, buffer).is_some()
     }
 
-    fn bounding_box(&self) -> AABB {
-        let a = self.buffer.p[self.a.p.into()];
-        let b = self.buffer.p[self.b.p.into()];
-        let c = self.buffer.p[self.c.p.into()];
+    fn bounding_box(&self, vb: Option<&VertexBuffer>) -> AABB {
+        let buffer = vb.unwrap();
+        let a = buffer.point_buffer[self.a.p.into()];
+        let b = buffer.point_buffer[self.b.p.into()];
+        let c = buffer.point_buffer[self.c.p.into()];
         let bot = Point3::min(&Point3::min(&a, &b), &c);
         let top = Point3::max(&Point3::max(&a, &b), &c);
         AABB { bot, top }
     }
 }
 
-fn new_triangles_u8<'a, T>(data: ParsedGeometry) -> (Vec<Triangle<'a, T>>, VertexBuffer)
+fn new_triangles_u8<T>(data: ParsedGeometry) -> (Vec<Triangle<T>>, VertexBuffer)
 where
     T: Into<usize> + Copy,
 {
     unimplemented!()
 }
 
-fn new_triangles_u16<'a, T>(data: ParsedGeometry) -> (Vec<Triangle<'a, T>>, VertexBuffer)
+fn new_triangles_u16<T>(data: ParsedGeometry) -> (Vec<Triangle<T>>, VertexBuffer)
 where
     T: Into<usize> + Copy,
 {
     unimplemented!()
 }
 
-fn new_triangles_u32<'a, T>(data: ParsedGeometry) -> (Vec<Triangle<'a, T>>, VertexBuffer)
+fn new_triangles_u32<T>(data: ParsedGeometry) -> (Vec<Triangle<T>>, VertexBuffer)
 where
     T: Into<usize> + Copy,
 {
     unimplemented!()
-}
-
-struct VertexBuffer {
-    /// Vertex coordinates buffer.
-    p: Vec<Point3>,
-    /// Normal buffer.
-    n: Vec<Normal>,
-    /// Vertex textures buffer.
-    t: Vec<Point2>,
 }
 
 /// A shape formed by a collection of triangles.
 ///
 /// A mesh uses vertex, normal and vertex texture buffers for efficient storage and an acceleration
 /// structure, a KdTree in this implementation for faster intersections.
-pub struct Mesh<'a, T: Into<usize> + Copy> {
+pub struct Mesh<T: Into<usize> + Copy> {
     data: VertexBuffer,
     /// Acceleration structure
-    f: KdTree<Triangle<'a, T>>,
+    f: KdTree<Triangle<T>>,
 }
 
-impl<'a, T: Into<usize> + Copy> Mesh<'a, T> {
-    fn new(geom: ParsedGeometry) -> Mesh<'a, T> {
+impl<'a, T: Into<usize> + Copy> Mesh<T> {
+    fn new(geom: ParsedGeometry) -> Mesh<T> {
         let max = max(max(geom.vv.len(), geom.vt.len()), geom.vn.len());
         let create = if max < 256 {
             new_triangles_u8
@@ -303,7 +296,7 @@ impl<'a, T: Into<usize> + Copy> Mesh<'a, T> {
             new_triangles_u32
         };
         let data = create(geom);
-        let accel = KdTree::default().build(data.0);
+        let accel = KdTree::default().build(data.0, Some(&data.1));
         Mesh {
             data: data.1,
             f: accel,
@@ -311,17 +304,17 @@ impl<'a, T: Into<usize> + Copy> Mesh<'a, T> {
     }
 }
 
-impl<T: Into<usize> + Copy> Shape for Mesh<'_, T> {
-    fn intersect(&self, ray: &Ray) -> Option<Intersection> {
-        self.f.intersect(&ray)
+impl<T: Into<usize> + Copy> Shape for Mesh<T> {
+    fn intersect(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> Option<Intersection> {
+        self.f.intersect(&ray, vb)
     }
 
-    fn intersect_fast(&self, ray: &Ray) -> bool {
-        self.f.intersect_fast(&ray)
+    fn intersect_fast(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> bool {
+        self.f.intersect_fast(&ray, vb)
     }
 
-    fn bounding_box(&self) -> AABB {
-        self.f.bounding_box()
+    fn bounding_box(&self, vb: Option<&VertexBuffer>) -> AABB {
+        self.f.bounding_box(vb)
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::linear::{Ray, Vec3};
+use crate::shapes::shape::VertexBuffer;
 use crate::shapes::{Accelerator, Intersection, Shape, AABB};
 use fnv::FnvHashSet;
 use std::f32::NAN;
@@ -138,7 +139,7 @@ impl<T: Shape> Default for KdTree<T> {
 
 impl<T: Shape> Shape for KdTree<T> {
     #[allow(clippy::float_cmp)] //yep, I REALLY want a strict comparison. It's a corner case.
-    fn intersect(&self, ray: &Ray) -> Option<Intersection> {
+    fn intersect(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> Option<Intersection> {
         // the idea for this method is :
         // - find the order in which the ray intersects the tree children, front to back. (first the
         //   left child or the right child?)
@@ -199,7 +200,7 @@ impl<T: Shape> Shape for KdTree<T> {
                         for i in 0..*count {
                             let elem_idx = (*offset + i) as usize;
                             let shape = &self.elements[elem_idx];
-                            if let Some(intersection) = shape.intersect(ray) {
+                            if let Some(intersection) = shape.intersect(ray, vb) {
                                 if intersection.distance < best {
                                     best = intersection.distance;
                                     found = Some(intersection);
@@ -215,7 +216,7 @@ impl<T: Shape> Shape for KdTree<T> {
     }
 
     #[allow(clippy::float_cmp)]
-    fn intersect_fast(&self, ray: &Ray) -> bool {
+    fn intersect_fast(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> bool {
         // mostly identical to the intersect method, but return as soon as the first intersection is
         // found
         let inv_dir = Vec3::new(
@@ -258,7 +259,7 @@ impl<T: Shape> Shape for KdTree<T> {
                         for i in 0..*count {
                             let elem_idx = (*offset + i) as usize;
                             let shape = &self.elements[elem_idx];
-                            if shape.intersect_fast(ray) {
+                            if shape.intersect_fast(ray, vb) {
                                 // in this variant early exit as soon as one intersection is found
                                 return true;
                             }
@@ -270,14 +271,14 @@ impl<T: Shape> Shape for KdTree<T> {
         false
     }
 
-    fn bounding_box(&self) -> AABB {
+    fn bounding_box(&self, vb: Option<&VertexBuffer>) -> AABB {
         self.scene_aabb
     }
 }
 
 impl<T: Shape> Accelerator for KdTree<T> {
     type Item = T;
-    fn build(self, elements: Vec<Self::Item>) -> Self {
+    fn build(self, elements: Vec<Self::Item>, vb: Option<&VertexBuffer>) -> Self {
         if elements.len() > MAX_SHAPES as usize {
             panic!(
                 "Too many shapes! Maximum number per kd-tree is {}",
@@ -286,8 +287,8 @@ impl<T: Shape> Accelerator for KdTree<T> {
         }
         let scene_aabb = elements
             .iter()
-            .fold(AABB::zero(), |acc, elem| acc.merge(&elem.bounding_box()));
-        let tree = build_rec(elements, scene_aabb, 0, 0, self.settings);
+            .fold(AABB::zero(), |acc, elem| acc.merge(&elem.bounding_box(vb)));
+        let tree = build_rec(elements, scene_aabb, 0, 0, vb, self.settings);
         let compact = finalize_rec(tree, Vec::new(), Vec::new());
         KdTree {
             tree: compact.1,
@@ -337,6 +338,7 @@ fn build_rec<T: Shape>(
     node_aabb: AABB,
     depth: usize,
     bad: usize,
+    vb: Option<&VertexBuffer>,
     settings: KdTreeSettings,
 ) -> KdBuildNode<T> {
     if depth == MAX_DEPTH || elements.len() <= settings.leaf_min as usize {
@@ -379,7 +381,7 @@ fn build_rec<T: Shape>(
                 .enumerate()
                 .flat_map(|x| {
                     // not super efficient (I could store aabbs beforehand) but it's construction time
-                    let elem_aabb = x.1.bounding_box();
+                    let elem_aabb = x.1.bounding_box(vb);
                     // TODO: replace vec! with https://github.com/rust-lang/rust/issues/65798
                     vec![
                         // (split value, bottom_side, shape index)
@@ -494,8 +496,22 @@ fn build_rec<T: Shape>(
             let mut top_aabb = node_aabb;
             top_aabb.bot[best_axis as u8] = split;
             // continue recursion
-            let left = build_rec(bot_elems, bot_aabb, depth + 1, expensive_split, settings);
-            let right = build_rec(top_elems, top_aabb, depth + 1, expensive_split, settings);
+            let left = build_rec(
+                bot_elems,
+                bot_aabb,
+                depth + 1,
+                expensive_split,
+                vb,
+                settings,
+            );
+            let right = build_rec(
+                top_elems,
+                top_aabb,
+                depth + 1,
+                expensive_split,
+                vb,
+                settings,
+            );
             KdBuildNode {
                 split,
                 axis: best_axis as u8,

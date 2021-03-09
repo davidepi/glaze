@@ -1,4 +1,4 @@
-use crate::shapes::Shape;
+use crate::shapes::{Shape, VertexBuffer};
 use std::slice::Iter;
 
 /// A trait for structs used to speed up Ray - Shape intersections.
@@ -32,7 +32,7 @@ pub trait Accelerator: Shape + Default {
     /// assert!(kdtree.intersect_fast(&ray));
     /// ```
     #[must_use]
-    fn build(self, elements: Vec<Self::Item>) -> Self;
+    fn build(self, elements: Vec<Self::Item>, vb: Option<&VertexBuffer>) -> Self;
 
     /// Iterates all the elements contained inside the accelerator structure.
     ///

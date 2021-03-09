@@ -1,4 +1,5 @@
 use crate::linear::{Point2, Point3, Ray, Vec3};
+use crate::shapes::shape::VertexBuffer;
 use crate::shapes::{HitPoint, Intersection, Shape, AABB};
 use crate::utility::{quadratic, Ef32};
 
@@ -69,7 +70,7 @@ fn compute_interaction(hit: &Point3) -> (Point2, Vec3, Vec3) {
 }
 
 impl Shape for Sphere {
-    fn intersect(&self, ray: &Ray) -> Option<Intersection> {
+    fn intersect(&self, ray: &Ray, _: Option<&VertexBuffer>) -> Option<Intersection> {
         // sphere equation is x² + y² + z² - 1 = 0
         // ray equation is origin + distance * direction where distance >= 0
         // we replace each term x, y and z with the particular component of the ray equation and
@@ -140,7 +141,7 @@ impl Shape for Sphere {
         }
     }
 
-    fn intersect_fast(&self, ray: &Ray) -> bool {
+    fn intersect_fast(&self, ray: &Ray, _: Option<&VertexBuffer>) -> bool {
         // just check the intersect method for explanation
         let origin_x = Ef32::new(ray.origin.x, ray.error_origin.x);
         let origin_y = Ef32::new(ray.origin.y, ray.error_origin.y);
@@ -163,7 +164,7 @@ impl Shape for Sphere {
         }
     }
 
-    fn bounding_box(&self) -> AABB {
+    fn bounding_box(&self, vb: Option<&VertexBuffer>) -> AABB {
         AABB {
             bot: Point3::new(-1.0, -1.0, -1.0),
             top: Point3::new(1.0, 1.0, 1.0),
