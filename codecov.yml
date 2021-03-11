@@ -2,6 +2,16 @@ ignore:
    - "**/tests/*"
 coverage:
   status:
+    patch:
+      default:
+        target: 75
+        base: auto
+        paths:
+          - "src/"
+        branches:
+          - master
+        if_ci_failed: error
+        only_pulls: true
     project:
       default:
         target: 95
