@@ -27,7 +27,7 @@ pub struct Intersection {
     pub hit: HitPoint,
 }
 
-/// A trait used to represent a geometric primitive (sphere, triangle, etc.) in object-space.
+/// A trait used to represent a geometric primitive in object-space.
 pub trait Shape {
     /// Intersects a Ray with the current shape.
     ///
@@ -40,9 +40,6 @@ pub trait Shape {
     /// is necessary for `far_distance`.
     ///
     /// The ray should be in the object space of the primitive being intersected
-    ///
-    /// The second parameter of this method expects a reference to a vertex buffer object.
-    /// This is used in case of Triangle intersections.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -51,21 +48,18 @@ pub trait Shape {
     ///
     /// let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
     /// let sphere = Sphere::new();
-    /// let intersection = sphere.intersect(&ray, None);
+    /// let intersection = sphere.intersect(&ray);
     ///
     /// assert!(intersection.is_some());
     /// assert_eq!(intersection.unwrap().distance, 9.0);
     /// ```
     // TODO: add MaskBoolean as parameter for alpha masking after porting the textures
-    fn intersect(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> Option<Intersection>;
+    fn intersect(&self, ray: &Ray) -> Option<Intersection>;
 
     /// Intersects a Ray with the current shape.
     ///
     /// Unlike the intersect method, this one should return just true or false if any kind of
     /// intersection happened. Setting the Intersection value is expensive and sometimes not needed.
-    ///
-    /// The second parameter of this method expects a reference to a vertex buffer object.
-    /// This is used in case of Triangle intersections.
     /// # Examples
     /// Basic usage:
     /// ```
@@ -74,12 +68,12 @@ pub trait Shape {
     ///
     /// let ray = Ray::new(&Point3::new(0.0, -10.0, 0.0), &Vec3::new(0.0, 1.0, 0.0));
     /// let sphere = Sphere::new();
-    /// let intersection = sphere.intersect_fast(&ray, None);
+    /// let intersection = sphere.intersect_fast(&ray);
     ///
     /// assert!(intersection);
     /// ```
     // TODO: add MaskBoolean as parameter for alpha masking after porting the textures
-    fn intersect_fast(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> bool;
+    fn intersect_fast(&self, ray: &Ray) -> bool;
 
     /// Returns the AABB for this shape.
     ///
@@ -95,7 +89,21 @@ pub trait Shape {
     ///
     /// assert_eq!(aabb.volume(), 8.0);
     /// ```
-    fn bounding_box(&self, vb: Option<&VertexBuffer>) -> AABB;
+    fn bounding_box(&self) -> AABB;
+}
+
+/// Exactly like the Shape trait, but accepts an optional buffer parameter in every method
+///
+/// Useful for shapes like Triangle that needs a buffer containing the actual data.
+///
+/// Since Triangle is private, so is this trait.
+pub(crate) trait BufferedShape {
+    /// Same as [Shape::intersect] but with an extra VertexBuffer parameter
+    fn intersect(&self, ray: &Ray, vb: &VertexBuffer) -> Option<Intersection>;
+    /// Same as [Shape::intersect_fast] but with an extra VertexBuffer parameter
+    fn intersect_fast(&self, ray: &Ray, vb: &VertexBuffer) -> bool;
+    /// Same as [Shape::bounding_box] but with an extra VertexBuffer parameter
+    fn bounding_box(&self, vb: &VertexBuffer) -> AABB;
 }
 
 /// Struct used to store vertices of a triangle

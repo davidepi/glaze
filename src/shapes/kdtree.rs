@@ -1,5 +1,6 @@
 use crate::linear::{Ray, Vec3};
-use crate::shapes::shape::VertexBuffer;
+use crate::shapes::accelerator::BufferedAccelerator;
+use crate::shapes::shape::{BufferedShape, VertexBuffer};
 use crate::shapes::{Accelerator, Intersection, Shape, AABB};
 use fnv::FnvHashSet;
 use std::f32::NAN;
@@ -30,7 +31,7 @@ const MAX_SHAPES: u32 = 0x3FFFFFFF;
 /// the primitives or descending further down the tree. The tree is built considering the
 /// probability of hitting a region of space with the Ray and the cost of the action performed after
 /// hit, minimizing this cost.
-pub struct KdTree<T: Shape> {
+pub struct KdTree<T> {
     // the memory layout of this tree is uncommon, check the finalize_rec function doc
     tree: Vec<KdNode>,
     elements: Vec<T>,
@@ -51,7 +52,7 @@ struct KdTreeSettings {
     descend_cost: f32,
 }
 
-impl<T: Shape> KdTree<T> {
+impl<T> KdTree<T> {
     /// Creates a KdTree with customized settings.
     ///
     /// The `leaf_min` parameter controls the minimum number of shapes necessary to form a leaf.
@@ -100,7 +101,7 @@ impl<T: Shape> KdTree<T> {
     }
 }
 
-impl<T: Shape> Default for KdTree<T> {
+impl<T> Default for KdTree<T> {
     /// Creates a KdTree with default settings.
     ///
     /// The default settings are the following:
@@ -137,9 +138,8 @@ impl<T: Shape> Default for KdTree<T> {
     }
 }
 
-impl<T: Shape> Shape for KdTree<T> {
-    #[allow(clippy::float_cmp)] //yep, I REALLY want a strict comparison. It's a corner case.
-    fn intersect(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> Option<Intersection> {
+macro_rules! intersect {
+    ($self: ident, $ray: ident, $args: tt) => {
         // the idea for this method is :
         // - find the order in which the ray intersects the tree children, front to back. (first the
         //   left child or the right child?)
@@ -148,12 +148,12 @@ impl<T: Shape> Shape for KdTree<T> {
         // - Since we are processing front to back, at this point will be IMPOSSIBLE to find a
         //   closer shape intersection.
         let inv_dir = Vec3::new(
-            1.0 / ray.direction.x,
-            1.0 / ray.direction.y,
-            1.0 / ray.direction.z,
+            1.0 / $ray.direction.x,
+            1.0 / $ray.direction.y,
+            1.0 / $ray.direction.z,
         );
         let mut found = None;
-        if let Some(scene_intersection) = isect(&self.scene_aabb, ray, &inv_dir) {
+        if let Some(scene_intersection) = isect(&$self.scene_aabb, $ray, &inv_dir) {
             let mut best = f32::INFINITY;
             // (kdtree node index, node bounding box front, node bounding box back)
             let mut jobs = vec![(0, scene_intersection.0, scene_intersection.1)];
@@ -166,11 +166,11 @@ impl<T: Shape> Shape for KdTree<T> {
                 if best < min_distance {
                     break;
                 }
-                match &self.tree[index as usize] {
+                match &$self.tree[index as usize] {
                     KdNode::Node { split, data } => {
                         let axis = (data & 0xC0000000) >> 30;
-                        let origin = ray.origin[axis as u8];
-                        let direction = ray.direction[axis as u8];
+                        let origin = $ray.origin[axis as u8];
+                        let direction = $ray.direction[axis as u8];
                         let front;
                         let back;
                         // maintain a front-to-back order of visit
@@ -184,11 +184,11 @@ impl<T: Shape> Shape for KdTree<T> {
                         }
                         let split_distance = (split - origin) * inv_dir[axis as u8];
                         if split_distance > max_distance || split_distance <= 0.0 {
-                            // split is intersected after the bounds exit => ray don't enter
+                            // split is intersected after the bounds exit => ray doesn't enter
                             // the back child
                             jobs.push((front, min_distance, max_distance));
                         } else if split_distance < min_distance {
-                            // split is intersected before the bounds start => ray don't enter
+                            // split is intersected before the bounds start => ray doesn't enter
                             // the front child
                             jobs.push((back, min_distance, max_distance));
                         } else {
@@ -199,8 +199,8 @@ impl<T: Shape> Shape for KdTree<T> {
                     KdNode::Leaf { offset, count } => {
                         for i in 0..*count {
                             let elem_idx = (*offset + i) as usize;
-                            let shape = &self.elements[elem_idx];
-                            if let Some(intersection) = shape.intersect(ray, vb) {
+                            let shape = &$self.elements[elem_idx];
+                            if let Some(intersection) = shape.intersect$args {
                                 if intersection.distance < best {
                                     best = intersection.distance;
                                     found = Some(intersection);
@@ -212,29 +212,31 @@ impl<T: Shape> Shape for KdTree<T> {
                 }
             }
         }
-        found
-    }
+        return found;
+    };
+}
 
-    #[allow(clippy::float_cmp)]
-    fn intersect_fast(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> bool {
+macro_rules! intersect_fast {
+    ($self: ident, $ray: ident, $args: tt) => {
         // mostly identical to the intersect method, but return as soon as the first intersection is
-        // found
+        // found. Can't make a single macro due to hygienic rules. Proc macros looks overkill
+        // only for this one
         let inv_dir = Vec3::new(
-            1.0 / ray.direction.x,
-            1.0 / ray.direction.y,
-            1.0 / ray.direction.z,
+            1.0 / $ray.direction.x,
+            1.0 / $ray.direction.y,
+            1.0 / $ray.direction.z,
         );
-        if let Some(scene_intersection) = isect(&self.scene_aabb, ray, &inv_dir) {
+        if let Some(scene_intersection) = isect(&$self.scene_aabb, $ray, &inv_dir) {
             let mut jobs = vec![(0, scene_intersection.0, scene_intersection.1)];
             while let Some(node) = jobs.pop() {
                 let index = node.0;
                 let min_distance = node.1;
                 let max_distance = node.2;
-                match &self.tree[index as usize] {
+                match &$self.tree[index as usize] {
                     KdNode::Node { split, data } => {
                         let axis = (data & 0xC0000000) >> 30;
-                        let origin = ray.origin[axis as u8];
-                        let direction = ray.direction[axis as u8];
+                        let origin = $ray.origin[axis as u8];
+                        let direction = $ray.direction[axis as u8];
                         let front;
                         let back;
                         let first_left = origin < *split || origin == *split && direction <= 0.0;
@@ -258,8 +260,8 @@ impl<T: Shape> Shape for KdTree<T> {
                     KdNode::Leaf { offset, count } => {
                         for i in 0..*count {
                             let elem_idx = (*offset + i) as usize;
-                            let shape = &self.elements[elem_idx];
-                            if shape.intersect_fast(ray, vb) {
+                            let shape = &$self.elements[elem_idx];
+                            if shape.intersect_fast$args {
                                 // in this variant early exit as soon as one intersection is found
                                 return true;
                             }
@@ -268,34 +270,84 @@ impl<T: Shape> Shape for KdTree<T> {
                 }
             }
         }
-        false
+        return false
+    };
+}
+
+impl<T: Shape> Shape for KdTree<T> {
+    fn intersect(&self, ray: &Ray) -> Option<Intersection> {
+        intersect!(self, ray, (ray));
     }
 
-    fn bounding_box(&self, vb: Option<&VertexBuffer>) -> AABB {
+    #[allow(clippy::float_cmp)]
+    fn intersect_fast(&self, ray: &Ray) -> bool {
+        intersect_fast!(self, ray, (ray));
+    }
+
+    fn bounding_box(&self) -> AABB {
         self.scene_aabb
     }
 }
 
-impl<T: Shape> Accelerator for KdTree<T> {
-    type Item = T;
-    fn build(self, elements: Vec<Self::Item>, vb: Option<&VertexBuffer>) -> Self {
-        if elements.len() > MAX_SHAPES as usize {
+impl<T: BufferedShape> BufferedShape for KdTree<T> {
+    fn intersect(&self, ray: &Ray, vb: &VertexBuffer) -> Option<Intersection> {
+        intersect!(self, ray, (ray, vb));
+    }
+
+    fn intersect_fast(&self, ray: &Ray, vb: &VertexBuffer) -> bool {
+        intersect_fast!(self, ray, (ray, vb));
+    }
+
+    fn bounding_box(&self, _: &VertexBuffer) -> AABB {
+        self.scene_aabb
+    }
+}
+
+macro_rules! build {
+    ($self: ident, $elements: ident, $vb: ident, $args: tt, $name: ident) => {
+        if $elements.len() > MAX_SHAPES as usize {
             panic!(
                 "Too many shapes! Maximum number per kd-tree is {}",
                 MAX_SHAPES
             )
         }
-        let scene_aabb = elements
+        let scene_aabb = $elements
             .iter()
-            .fold(AABB::zero(), |acc, elem| acc.merge(&elem.bounding_box(vb)));
-        let tree = build_rec(elements, scene_aabb, 0, 0, vb, self.settings);
+            .fold(AABB::zero(), |acc, elem| acc.merge(&elem.bounding_box$args));
+        let tree = $name($elements, scene_aabb, 0, 0, $self.settings, $vb);
         let compact = finalize_rec(tree, Vec::new(), Vec::new());
-        KdTree {
+        return KdTree {
             tree: compact.1,
             elements: compact.2,
             scene_aabb,
-            settings: self.settings,
+            settings: $self.settings,
         }
+    };
+}
+
+impl<T: Shape> Accelerator for KdTree<T> {
+    type Item = T;
+    fn build(self, elements: Vec<Self::Item>) -> Self {
+        build!(self, elements, None, (), build_rec_shape);
+    }
+
+    fn iter(&self) -> Iter<Self::Item> {
+        self.elements.iter()
+    }
+}
+
+impl<T: BufferedShape> BufferedAccelerator for KdTree<T> {
+    type Item = T;
+
+    fn build(self, elements: Vec<Self::Item>, vb: &VertexBuffer) -> Self {
+        let maybe_vb = Some(vb);
+        build!(
+            self,
+            elements,
+            maybe_vb,
+            (maybe_vb.unwrap()),
+            build_rec_buffer
+        );
     }
 
     fn iter(&self) -> Iter<Self::Item> {
@@ -323,30 +375,14 @@ struct KdBuildNode<T> {
     right: Option<Box<KdBuildNode<T>>>,
 }
 
-/// build the kd tree, non-compact version
-/// - elements: vector of Shapes managed by the current kd-tree node
-/// - depth: used to keep track of recursion depth. Starts with 0
-/// - node_aabb: bounding box of the current kd-tree node
-/// - bad: how many bad refines has been made until now. A bad refine is a non-optimal split, in the
-/// hope of finding an optimal split later. Starts with 0.
-/// - extensive: true if an extensive search among all axes should be performed. Mostly useless, as
-/// the longest axis is usually the best option.
-/// - cost(intersect, descend): kdtree parameters, check constructor description
-/// - leaf_min: minimum number of primitives per node
-fn build_rec<T: Shape>(
-    elements: Vec<T>,
-    node_aabb: AABB,
-    depth: usize,
-    bad: usize,
-    vb: Option<&VertexBuffer>,
-    settings: KdTreeSettings,
-) -> KdBuildNode<T> {
-    if depth == MAX_DEPTH || elements.len() <= settings.leaf_min as usize {
+macro_rules! build_rec {
+($elements:ident, $node_aabb:ident, $depth: ident, $bad: ident, $settings: ident, $vb: ident, $args: tt, $name: ident) => {
+    if $depth == MAX_DEPTH || $elements.len() <= $settings.leaf_min as usize {
         KdBuildNode {
             split: NAN,
             axis: 0xFF,
             leaf: true,
-            elements: Some(elements),
+            elements: Some($elements),
             left: None,
             right: None,
         }
@@ -361,50 +397,50 @@ fn build_rec<T: Shape>(
         // the best cost for splitting (based in term of SAH_INTERSECT and SAH_DESCEND)
         let mut best_cost = f32::INFINITY;
         // cost of arriving here
-        let arrival_cost = settings.intersect_cost * elements.len() as f32;
+        let arrival_cost = $settings.intersect_cost * $elements.len() as f32;
         // how many imperfect splits have been made until now. A split is imperfect if the cost of
         // splitting is higher than the cost of doing nothing.
-        let mut expensive_split = bad;
+        let mut expensive_split = $bad;
         // total surface of the node
-        let total_surface = node_aabb.surface();
+        let total_surface = $node_aabb.surface();
         let inv_surface = 1.0 / total_surface;
         // diagonal of the node
-        let aabb_diagonal = node_aabb.top - node_aabb.bot;
+        let aabb_diagonal = $node_aabb.top - $node_aabb.bot;
         // The axis we are searching. Start with the longest which is usually the best
-        let mut axis = node_aabb.longest_axis() as usize;
+        let mut axis = $node_aabb.longest_axis() as usize;
 
         // this loop searches the best candidate for split
         while searching > 0 {
             // use bounding boxes of shapes to generate all possible splits for this axis
-            candidates[axis] = elements
+            candidates[axis] = $elements
                 .iter()
                 .enumerate()
                 .flat_map(|x| {
                     // not super efficient (I could store aabbs beforehand) but it's construction time
-                    let elem_aabb = x.1.bounding_box(vb);
+                    let elem_aabb = x.1.bounding_box$args;
                     // TODO: replace vec! with https://github.com/rust-lang/rust/issues/65798
                     vec![
                         // (split value, bottom_side, shape index)
                         (elem_aabb.bot[axis as u8], true, x.0),
                         (elem_aabb.top[axis as u8], false, x.0),
                     ]
-                    .into_iter()
+                        .into_iter()
                 })
                 .collect::<Vec<_>>();
             candidates[axis].sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
             // start from bot (so all shapes are on the top side)
             let mut bot_count = 0;
-            let mut top_count = elements.len();
-            for i in 0..2 * elements.len() {
+            let mut top_count = $elements.len();
+            for i in 0..2 * $elements.len() {
                 let top_side = !(candidates[axis][i].1);
                 // decrease the amount of elements on top when crossing the top side of the AABB
                 if top_side {
                     top_count -= 1;
                 }
                 // if the candidate is inside the area managed by this node
-                if candidates[axis][i].0 > node_aabb.bot[axis as u8]
-                    && candidates[axis][i].0 < node_aabb.top[axis as u8]
+                if candidates[axis][i].0 > $node_aabb.bot[axis as u8]
+                    && candidates[axis][i].0 < $node_aabb.top[axis as u8]
                 {
                     let other_axes = [
                         ((axis + 1) % DIMENSIONS) as u8,
@@ -413,12 +449,12 @@ fn build_rec<T: Shape>(
                     // calculate the surface of the AABBs resulting from the current split
                     let area_bot = 2.0
                         * (aabb_diagonal[other_axes[0]] * aabb_diagonal[other_axes[1]]
-                            + (candidates[axis][i].0 - node_aabb.bot[axis as u8])
-                                * (aabb_diagonal[other_axes[0]] + aabb_diagonal[other_axes[1]]));
+                        + (candidates[axis][i].0 - $node_aabb.bot[axis as u8])
+                        * (aabb_diagonal[other_axes[0]] + aabb_diagonal[other_axes[1]]));
                     let area_top = 2.0
                         * (aabb_diagonal[other_axes[0]] * aabb_diagonal[other_axes[1]]
-                            + (node_aabb.top[axis as u8] - candidates[axis][i].0)
-                                * (aabb_diagonal[other_axes[0]] + aabb_diagonal[other_axes[1]]));
+                        + ($node_aabb.top[axis as u8] - candidates[axis][i].0)
+                        * (aabb_diagonal[other_axes[0]] + aabb_diagonal[other_axes[1]]));
                     // calculate the percentage corresponding to the total area
                     let perc_bot = area_bot * inv_surface;
                     let perc_top = area_top * inv_surface;
@@ -431,10 +467,10 @@ fn build_rec<T: Shape>(
                     // calculate the cost of descending and intersecting each shape, considering
                     // the size of the area resulting from the split over the total area as the
                     // probability of having to intersect all the shapes inside it
-                    let cost = settings.descend_cost
-                        + settings.intersect_cost
-                            * (1.0 - bonus)
-                            * (perc_bot * bot_count as f32 + perc_top * top_count as f32);
+                    let cost = $settings.descend_cost
+                        + $settings.intersect_cost
+                        * (1.0 - bonus)
+                        * (perc_bot * bot_count as f32 + perc_top * top_count as f32);
                     // record the best cost
                     if cost < best_cost {
                         best_cost = cost;
@@ -448,7 +484,7 @@ fn build_rec<T: Shape>(
                 }
             }
             // no decent cost for splitting on this axis or extensive search, try next axis
-            if best_axis == 0xFF || settings.extensive_search {
+            if best_axis == 0xFF || $settings.extensive_search {
                 searching -= 1;
                 axis = (axis + 1) % DIMENSIONS;
             } else {
@@ -461,14 +497,14 @@ fn build_rec<T: Shape>(
         }
         // time to end the recursion, this split is garbage
         if best_axis == 0xFF
-            || (best_cost > 4.0 * arrival_cost && elements.len() < 16)
+            || (best_cost > 4.0 * arrival_cost && $elements.len() < 16)
             || expensive_split > IMPERFECT_SPLIT_TOLERANCE
         {
             KdBuildNode {
                 split: NAN,
                 axis: 0xFF,
                 leaf: true,
-                elements: Some(elements),
+                elements: Some($elements),
                 left: None,
                 right: None,
             }
@@ -483,7 +519,7 @@ fn build_rec<T: Shape>(
                 .collect::<FnvHashSet<_>>();
             let mut bot_elems = Vec::new();
             let mut top_elems = Vec::new();
-            for (index, element) in elements.into_iter().enumerate() {
+            for (index, element) in $elements.into_iter().enumerate() {
                 if bot_ids.contains(&index) {
                     bot_elems.push(element);
                 } else {
@@ -491,26 +527,26 @@ fn build_rec<T: Shape>(
                 }
             }
             // split also the node aabb
-            let mut bot_aabb = node_aabb;
+            let mut bot_aabb = $node_aabb;
             bot_aabb.top[best_axis as u8] = split;
-            let mut top_aabb = node_aabb;
+            let mut top_aabb = $node_aabb;
             top_aabb.bot[best_axis as u8] = split;
             // continue recursion
-            let left = build_rec(
+            let left = $name(
                 bot_elems,
                 bot_aabb,
-                depth + 1,
+                $depth + 1,
                 expensive_split,
-                vb,
-                settings,
+                $settings,
+                $vb
             );
-            let right = build_rec(
+            let right = $name(
                 top_elems,
                 top_aabb,
-                depth + 1,
+                $depth + 1,
                 expensive_split,
-                vb,
-                settings,
+                $settings,
+                $vb
             );
             KdBuildNode {
                 split,
@@ -522,6 +558,57 @@ fn build_rec<T: Shape>(
             }
         }
     }
+}
+}
+
+/// build the kd tree, non-compact version
+/// - elements: vector of Shapes managed by the current kd-tree node
+/// - depth: used to keep track of recursion depth. Starts with 0
+/// - node_aabb: bounding box of the current kd-tree node
+/// - bad: how many bad refines has been made until now. A bad refine is a non-optimal split, in the
+/// hope of finding an optimal split later. Starts with 0.
+/// - extensive: true if an extensive search among all axes should be performed. Mostly useless, as
+/// the longest axis is usually the best option.
+/// - cost(intersect, descend): kdtree parameters, check constructor description
+/// - leaf_min: minimum number of primitives per node
+fn build_rec_shape<T: Shape>(
+    elements: Vec<T>,
+    node_aabb: AABB,
+    depth: usize,
+    bad: usize,
+    settings: KdTreeSettings,
+    vb: Option<&VertexBuffer>,
+) -> KdBuildNode<T> {
+    build_rec!(
+        elements,
+        node_aabb,
+        depth,
+        bad,
+        settings,
+        vb,
+        (),
+        build_rec_shape
+    )
+}
+
+fn build_rec_buffer<T: BufferedShape>(
+    elements: Vec<T>,
+    node_aabb: AABB,
+    depth: usize,
+    bad: usize,
+    settings: KdTreeSettings,
+    vb: Option<&VertexBuffer>,
+) -> KdBuildNode<T> {
+    build_rec!(
+        elements,
+        node_aabb,
+        depth,
+        bad,
+        settings,
+        vb,
+        (vb.unwrap()),
+        build_rec_buffer
+    )
 }
 
 /// Opaque structure containing a node for the kd-tree (compact version).
@@ -550,7 +637,7 @@ enum KdNode {
 /// - 0: index of the inserted element in the vector (tree)
 /// - 1: vector (tree) of nodes
 /// - 2: all the shapes manages by this kd-tree
-fn finalize_rec<T: Shape>(
+fn finalize_rec<T>(
     node: KdBuildNode<T>,
     tree: Vec<KdNode>,
     elems: Vec<T>,

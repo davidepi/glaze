@@ -1,8 +1,9 @@
 use crate::linear::{Normal, Point2, Point3, Ray, Vec3};
 use crate::parser::ParsedGeometry;
-use crate::shapes::{Accelerator, HitPoint, Intersection, KdTree, Shape, VertexBuffer, AABB};
+use crate::shapes::accelerator::BufferedAccelerator;
+use crate::shapes::shape::BufferedShape;
+use crate::shapes::{HitPoint, Intersection, KdTree, Shape, VertexBuffer, AABB};
 use crate::utility::gamma;
-use std::cmp::max;
 
 /// Struct representing a vertex.
 ///
@@ -24,7 +25,7 @@ where
 /// The triangle is closely coupled with the mesh containing it. Its object space is the same of the
 /// Mesh object space (the triangle coordinates won't change when transforming from the Mesh object
 /// space to the Triangle object space).
-struct Triangle<T>
+pub(crate) struct Triangle<T>
 where
     T: Into<u32> + Copy,
 {
@@ -191,33 +192,31 @@ where
     }
 }
 
-impl<T> Shape for Triangle<T>
+impl<T> BufferedShape for Triangle<T>
 where
     T: Into<u32> + Copy,
 {
-    fn intersect(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> Option<Intersection> {
-        let buffer = vb.unwrap();
-        match self.hit_barycentric_coords(&ray, buffer) {
+    fn intersect(&self, ray: &Ray, vb: &VertexBuffer) -> Option<Intersection> {
+        match self.hit_barycentric_coords(&ray, vb) {
             Some(data) => {
                 let distance = data.0;
-                let buffer = vb.unwrap();
                 let b = data.1;
                 let p = [
-                    buffer.point_buffer[self.a.p.into() as usize],
-                    buffer.point_buffer[self.b.p.into() as usize],
-                    buffer.point_buffer[self.c.p.into() as usize],
+                    vb.point_buffer[self.a.p.into() as usize],
+                    vb.point_buffer[self.b.p.into() as usize],
+                    vb.point_buffer[self.c.p.into() as usize],
                 ];
                 let n = [
-                    buffer.normal_buffer[self.a.n.into() as usize],
-                    buffer.normal_buffer[self.b.n.into() as usize],
-                    buffer.normal_buffer[self.c.n.into() as usize],
+                    vb.normal_buffer[self.a.n.into() as usize],
+                    vb.normal_buffer[self.b.n.into() as usize],
+                    vb.normal_buffer[self.c.n.into() as usize],
                 ];
                 let uv = [
-                    buffer.texture_buffer[self.a.t.into() as usize],
-                    buffer.texture_buffer[self.b.t.into() as usize],
-                    buffer.texture_buffer[self.c.t.into() as usize],
+                    vb.texture_buffer[self.a.t.into() as usize],
+                    vb.texture_buffer[self.b.t.into() as usize],
+                    vb.texture_buffer[self.c.t.into() as usize],
                 ];
-                let derivatives = self.get_partial_derivatives(buffer);
+                let derivatives = self.get_partial_derivatives(vb);
                 let hit = HitPoint {
                     point: Point3::new(
                         p[0].x * b.x + p[1].x * b.y + p[2].x * b.z,
@@ -238,16 +237,14 @@ where
         }
     }
 
-    fn intersect_fast(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> bool {
-        let buffer = vb.unwrap();
-        self.hit_barycentric_coords(&ray, buffer).is_some()
+    fn intersect_fast(&self, ray: &Ray, vb: &VertexBuffer) -> bool {
+        self.hit_barycentric_coords(&ray, vb).is_some()
     }
 
-    fn bounding_box(&self, vb: Option<&VertexBuffer>) -> AABB {
-        let buffer = vb.unwrap();
-        let a = buffer.point_buffer[self.a.p.into() as usize];
-        let b = buffer.point_buffer[self.b.p.into() as usize];
-        let c = buffer.point_buffer[self.c.p.into() as usize];
+    fn bounding_box(&self, vb: &VertexBuffer) -> AABB {
+        let a = vb.point_buffer[self.a.p.into() as usize];
+        let b = vb.point_buffer[self.b.p.into() as usize];
+        let c = vb.point_buffer[self.c.p.into() as usize];
         let bot = Point3::min(&Point3::min(&a, &b), &c);
         let top = Point3::max(&Point3::max(&a, &b), &c);
         AABB { bot, top }
@@ -345,54 +342,61 @@ where
 ///
 /// A mesh uses vertex, normal and vertex texture buffers for efficient storage and an acceleration
 /// structure, a KdTree in this implementation for faster intersections.
-pub struct Mesh<T: Into<u32> + Copy> {
+pub struct Mesh<T>
+where
+    T: Into<u32> + Copy,
+{
     data: VertexBuffer,
     /// Acceleration structure
     f: KdTree<Triangle<T>>,
 }
 
-impl<T: Into<u32> + Copy> Mesh<T> {
-    fn new_u8(geom: ParsedGeometry) -> Mesh<u8> {
+impl<T> Mesh<T>
+where
+    T: Into<u32> + Copy,
+{
+    pub fn new_u8(geom: ParsedGeometry) -> Mesh<u8> {
         let mut mesh = Mesh {
             data: new_vertex_buffer(&geom),
             f: KdTree::default(),
         };
-        let triangles = new_triangles(geom, &mesh.data, new_vertex_index_u8::<T>);
-        mesh.f = mesh.f.build(triangles, Some(&mesh.data));
+        let triangles = new_triangles(geom, &mesh.data, new_vertex_index_u8::<u8>);
+        mesh.f = mesh.f.build(triangles, &mesh.data);
         mesh
     }
 
-    fn new_u16(geom: ParsedGeometry) -> Mesh<u16> {
+    pub fn new_u16(geom: ParsedGeometry) -> Mesh<u16> {
         let mut mesh = Mesh {
             data: new_vertex_buffer(&geom),
             f: KdTree::default(),
         };
-        let triangles = new_triangles(geom, &mesh.data, new_vertex_index_u16::<T>);
-        mesh.f = mesh.f.build(triangles, Some(&mesh.data));
+        let triangles = new_triangles(geom, &mesh.data, new_vertex_index_u16::<u16>);
+        mesh.f = mesh.f.build(triangles, &mesh.data);
         mesh
     }
-    fn new_u32(geom: ParsedGeometry) -> Mesh<u32> {
+
+    pub fn new_u32(geom: ParsedGeometry) -> Mesh<u32> {
         let mut mesh = Mesh {
             data: new_vertex_buffer(&geom),
             f: KdTree::default(),
         };
-        let triangles = new_triangles(geom, &mesh.data, new_vertex_index_u32::<T>);
-        mesh.f = mesh.f.build(triangles, Some(&mesh.data));
+        let triangles = new_triangles(geom, &mesh.data, new_vertex_index_u32::<u32>);
+        mesh.f = mesh.f.build(triangles, &mesh.data);
         mesh
     }
 }
 
 impl<T: Into<u32> + Copy> Shape for Mesh<T> {
-    fn intersect(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> Option<Intersection> {
-        self.f.intersect(&ray, vb)
+    fn intersect(&self, ray: &Ray) -> Option<Intersection> {
+        self.f.intersect(&ray, &self.data)
     }
 
-    fn intersect_fast(&self, ray: &Ray, vb: Option<&VertexBuffer>) -> bool {
-        self.f.intersect_fast(&ray, vb)
+    fn intersect_fast(&self, ray: &Ray) -> bool {
+        self.f.intersect_fast(&ray, &self.data)
     }
 
-    fn bounding_box(&self, vb: Option<&VertexBuffer>) -> AABB {
-        self.f.bounding_box(vb)
+    fn bounding_box(&self) -> AABB {
+        self.f.bounding_box(&self.data)
     }
 }
 

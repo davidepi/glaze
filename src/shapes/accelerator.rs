@@ -1,3 +1,4 @@
+use crate::shapes::shape::BufferedShape;
 use crate::shapes::{Shape, VertexBuffer};
 use std::slice::Iter;
 
@@ -32,7 +33,7 @@ pub trait Accelerator: Shape + Default {
     /// assert!(kdtree.intersect_fast(&ray));
     /// ```
     #[must_use]
-    fn build(self, elements: Vec<Self::Item>, vb: Option<&VertexBuffer>) -> Self;
+    fn build(self, elements: Vec<Self::Item>) -> Self;
 
     /// Iterates all the elements contained inside the accelerator structure.
     ///
@@ -49,5 +50,18 @@ pub trait Accelerator: Shape + Default {
     /// assert!(iterator.next().is_some());
     /// assert!(iterator.next().is_none());
     /// ```
+    fn iter(&self) -> Iter<Self::Item>;
+}
+
+/// Exactly like the Accelerator trait, but accepts an optional buffer parameter in every method
+///
+/// Useful for shapes like Triangle that needs a buffer containing the actual data.
+///
+/// Since Triangle is private, so is this trait.
+pub(crate) trait BufferedAccelerator: BufferedShape + Default {
+    type Item: BufferedShape;
+    /// Same as [Accelerator::build] but with an extra VertexBuffer parameter
+    fn build(self, elements: Vec<Self::Item>, vb: &VertexBuffer) -> Self;
+    /// Same as [Accelerator::iter]
     fn iter(&self) -> Iter<Self::Item>;
 }

@@ -9,6 +9,8 @@ mod sphere;
 pub use crate::shapes::sphere::Sphere;
 mod accelerator;
 pub use crate::shapes::accelerator::Accelerator;
+// This mod contains some corner case that REQUIRES strict comparisons to avoid NaN values
+#[allow(clippy::float_cmp)]
 mod kdtree;
 pub use crate::shapes::kdtree::KdTree;
 mod mesh;
