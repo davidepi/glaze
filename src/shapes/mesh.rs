@@ -64,8 +64,8 @@ where
         } else {
             let invdet = 1.0 / determinant;
             let dp = [p[0] - p[2], p[1] - p[2]];
-            let dpdu = (dp[0] * delta[1].y - dp[1] * delta[1].x) * invdet;
-            let dpdv = (dp[1] * delta[0].x - dp[0] * delta[0].y) * invdet;
+            let dpdu = (dp[0] * delta[1].y - dp[1] * delta[0].y) * invdet;
+            let dpdv = (dp[1] * delta[0].x - dp[0] * delta[1].x) * invdet;
             (dpdu, dpdv)
         }
     }
@@ -416,5 +416,131 @@ fn index_max_component(vec: &Vec3) -> u8 {
         1
     } else {
         2
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::linear::{Normal, Point2, Point3, Ray, Vec3};
+    use crate::shapes::mesh::{Triangle, VertexIndex};
+    use crate::shapes::shape::BufferedShape;
+    use crate::shapes::VertexBuffer;
+    use assert_approx_eq::assert_approx_eq;
+
+    fn default_triangle() -> (VertexBuffer, Triangle<u8>) {
+        let vb = VertexBuffer {
+            point_buffer: vec![
+                Point3::new(-1., 0., 0.),
+                Point3::new(1., 0., 0.),
+                Point3::new(0.5, 1., 0.),
+            ],
+            texture_buffer: vec![
+                Point2::new(0., 0.),
+                Point2::new(1., 0.),
+                Point2::new(1., 1.),
+            ],
+            normal_buffer: vec![Normal::new(0., 0., 1.)],
+        };
+        let tri = Triangle {
+            a: VertexIndex { p: 0, n: 0, t: 0 },
+            b: VertexIndex { p: 1, n: 0, t: 1 },
+            c: VertexIndex { p: 2, n: 0, t: 2 },
+        };
+        (vb, tri)
+    }
+
+    fn failed_intersection_fixture(origin: &Point3, direction: &Vec3) {
+        let data = default_triangle();
+        let vb = data.0;
+        let triangle = data.1;
+        let ray = Ray::new(origin, direction);
+        let isect = triangle.intersect(&ray, &vb);
+        assert!(isect.is_none());
+    }
+
+    #[test]
+    fn triangle_aabb() {
+        let data = default_triangle();
+        let vb = data.0;
+        let triangle = data.1;
+        let aabb = triangle.bounding_box(&vb);
+        assert_eq!(aabb.bot.x, -1.0);
+        assert_eq!(aabb.bot.y, 0.0);
+        assert_eq!(aabb.bot.z, 0.0);
+        assert_eq!(aabb.top.x, 1.0);
+        assert_eq!(aabb.top.y, 1.0);
+        assert_eq!(aabb.top.z, 0.0);
+    }
+
+    #[test]
+    fn triangle_intersect_parallel() {
+        // ray parallel to triangle
+        let origin = Point3::new(0., -10., 1.);
+        let direction = Vec3::new(0.0, 1.0, 0.0);
+        failed_intersection_fixture(&origin, &direction);
+    }
+
+    #[test]
+    fn triangle_intersect_parallel_oleft() {
+        // ray parallel to triangle, origin left of it (u<0)
+        let origin = Point3::new(-2., 0., 1.);
+        let direction = Vec3::new(0.0, 0.0, -1.0);
+        failed_intersection_fixture(&origin, &direction);
+    }
+
+    #[test]
+    fn triangle_intersect_parallel_oright() {
+        // ray parallel to triangle, origin right of it (u>0)
+        let origin = Point3::new(1.1, 0., 1.);
+        let direction = Vec3::new(0.0, 1.0, 0.0);
+        failed_intersection_fixture(&origin, &direction);
+    }
+
+    #[test]
+    fn triangle_intersect_nearhit_left() {
+        //ray origin near the border, dir almost touches the edge of the triangle
+        //v<0
+        let origin = Point3::new(0.3, 0.1, 1.);
+        let direction = Vec3::new(-0.57735, -0.57735, -0.57735);
+        failed_intersection_fixture(&origin, &direction);
+    }
+    #[test]
+    fn triangle_intersect_nearhit_right() {
+        //ray origin near the border, dir almost touches the edge of the triangle
+        //u+v>1
+        let origin = Point3::new(0.3, 0.1, 1.);
+        let direction = Vec3::new(0.57735, 0.57735, -0.57735);
+        failed_intersection_fixture(&origin, &direction);
+    }
+
+    #[test]
+    fn triangle_intersect() {
+        //hit but I already have a closer hit
+        let origin = Point3::new(0.5, 0.5, 1.);
+        let direction = Vec3::new(0., 0., -1.);
+        let data = default_triangle();
+        let vb = data.0;
+        let triangle = data.1;
+        let ray = Ray::new(&origin, &direction);
+        let isect = triangle.intersect(&ray, &vb);
+        assert!(isect.is_some());
+        let intersection = isect.unwrap();
+        assert_approx_eq!(intersection.distance, 1.);
+        assert_approx_eq!(intersection.hit.point.x, 0.5);
+        assert_approx_eq!(intersection.hit.point.y, 0.5);
+        assert_approx_eq!(intersection.hit.point.z, 0.);
+        assert_approx_eq!(intersection.hit.normal.x, 0.);
+        assert_approx_eq!(intersection.hit.normal.y, 0.);
+        assert_approx_eq!(intersection.hit.normal.z, 1.);
+        assert_approx_eq!(intersection.hit.uv.x, 0.875);
+        assert_approx_eq!(intersection.hit.uv.y, 0.5);
+        let dpdu_normalized = intersection.hit.dpdu.normalize();
+        assert_approx_eq!(dpdu_normalized.x, 1.);
+        assert_approx_eq!(dpdu_normalized.y, 0.);
+        assert_approx_eq!(dpdu_normalized.z, 0.);
+        let dpdv_normalized = intersection.hit.dpdv.normalize();
+        assert_approx_eq!(dpdv_normalized.x, -0.447214);
+        assert_approx_eq!(dpdv_normalized.y, 0.894427);
+        assert_approx_eq!(dpdv_normalized.z, 0.);
     }
 }
