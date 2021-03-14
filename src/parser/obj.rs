@@ -1,14 +1,13 @@
 use crate::parser::parser::GeometryParser;
-use crate::parser::{GeometryError, ParseGeometryError, ParsedGeometry};
+use crate::parser::{GeometryError, ParseGeometryError, ParsedGeometry, MISSING_INDEX};
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::str::{FromStr, SplitWhitespace};
 
-const MAX_I32: &str = "2147483647";
-
 const FACE_2VERT: &str = "face should have at least 3 vertices";
 const PARSE_FAIL: &str = "failed to parse float";
 const MISSING_VALUE: &str = "missing value";
+const INDEX_ERR: &str = "index refers to non-existing value";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Obj {
@@ -31,29 +30,39 @@ impl GeometryParser for Obj {
         let mut vt = Vec::new();
         let mut vn = Vec::new();
         let mut ff = Vec::new();
+        let mut buf_sizes = [0, 0, 0];
         for line in split.into_iter().enumerate() {
             let mut iterator = line.1.split_whitespace();
             if let Err(err) = match iterator.next() {
-                Some(_letter @ "v") => parse_float_line(&mut iterator, true, &mut vv),
-                Some(_letter @ "vn") => parse_float_line(&mut iterator, true, &mut vn),
-                Some(_letter @ "vt") => parse_float_line(&mut iterator, false, &mut vt),
-                Some(_letter @ "f") => parse_face_line(&mut iterator, &mut ff),
+                Some(_letter @ "v") => {
+                    let res = parse_float_line(&mut iterator, true, &mut vv);
+                    buf_sizes[0] = vv.len() as u32;
+                    res
+                }
+                Some(_letter @ "vt") => {
+                    let res = parse_float_line(&mut iterator, false, &mut vt);
+                    buf_sizes[1] = vt.len() as u32;
+                    res
+                }
+                Some(_letter @ "vn") => {
+                    let res = parse_float_line(&mut iterator, true, &mut vn);
+                    buf_sizes[2] = vn.len() as u32;
+                    res
+                }
+                Some(_letter @ "f") => parse_face_line(&mut iterator, &mut ff, &buf_sizes),
                 Some(_letter @ "o") => {
                     // if v is filled create the 3d object, then clear all the data and start anew
                     if !vv.is_empty() {
-                        res.push(ParsedGeometry {
+                        res.push(to_0_based(ParsedGeometry {
                             name,
-                            vv,
-                            vn,
-                            vt: vt.into_iter().map(|x| [x[0], x[1]]).collect::<Vec<_>>(),
+                            vv: vv.clone(),
+                            vn: vn.clone(),
+                            vt: vt.iter().map(|x| [x[0], x[1]]).collect::<Vec<_>>(),
                             ff,
-                        });
+                        }));
                     }
                     name = iterator.next().unwrap_or("").to_string();
-                    vv = Vec::new();
-                    vt = Vec::new();
-                    vn = Vec::new();
-                    ff = Vec::new();
+                    ff = Vec::new(); // vv, vn and vt are shared between different objects
                     Ok(())
                 }
                 _ => {
@@ -69,16 +78,28 @@ impl GeometryParser for Obj {
         }
         // use the remainder data to fill the last object before returning
         if !vv.is_empty() {
-            res.push(ParsedGeometry {
+            res.push(to_0_based(ParsedGeometry {
                 name,
                 vv,
                 vn,
                 vt: vt.into_iter().map(|x| [x[0], x[1]]).collect::<Vec<_>>(),
                 ff,
-            });
+            }));
         }
         Ok(res)
     }
+}
+
+fn to_0_based(mut geom: ParsedGeometry) -> ParsedGeometry {
+    // converts 1 based indices to 0 based
+    for face in geom.ff.iter_mut() {
+        for index in face {
+            if *index > 0 && *index != MISSING_INDEX {
+                *index -= 1
+            }
+        }
+    }
+    geom
 }
 
 fn parse_float_line(
@@ -108,10 +129,18 @@ fn parse_float_line(
 fn parse_face_line(
     split: &mut SplitWhitespace,
     container: &mut Vec<[i32; 9]>,
+    buf_sizes: &[u32; 3],
 ) -> Result<(), String> {
     let faces = triangulate(split.collect::<Vec<_>>())?;
-    container.extend(faces);
-    Ok(())
+    let indices_ok = faces
+        .iter()
+        .fold(true, |acc, x| acc & face_indices_ok(x, buf_sizes));
+    if !indices_ok {
+        Err(INDEX_ERR.to_string())
+    } else {
+        container.extend(faces);
+        Ok(())
+    }
 }
 
 fn triangulate(ngon: Vec<&str>) -> Result<Vec<[i32; 9]>, String> {
@@ -125,14 +154,21 @@ fn triangulate(ngon: Vec<&str>) -> Result<Vec<[i32; 9]>, String> {
             .collect::<Vec<_>>();
         // convert v/vt/vn into [v0,vt0,vn0,v1,vt1,vn1,v2,vt2,vn2]
         let mut res = Vec::new();
+        let missing_index_str = MISSING_INDEX.to_string();
         for tris in triangles {
             let mut face = Vec::new();
             for val in tris {
                 let split = val
                     .split('/')
-                    .chain(vec![MAX_I32; 3])
+                    .chain(vec![&missing_index_str[..]; 3])
                     .take(3)
-                    .map(|x| if x.is_empty() { MAX_I32 } else { x })
+                    .map(|x| {
+                        if x.is_empty() {
+                            &missing_index_str[..]
+                        } else {
+                            x
+                        }
+                    })
                     .map(i32::from_str)
                     .collect::<Result<Vec<_>, _>>();
                 match split {
@@ -146,48 +182,27 @@ fn triangulate(ngon: Vec<&str>) -> Result<Vec<[i32; 9]>, String> {
     }
 }
 
-// OBJ TO STRING
-// TODO: maybe this can be reused in the Mesh class, it is nicer than current implementation
-// fn to_string(&self) -> String {
-//     let p_str = self
-//         .v
-//         .iter()
-//         .map(|x| to_obj_line(x, "v ", 3))
-//         .collect::<Vec<_>>()
-//         .join("\n");
-//     let n_str = self
-//         .n
-//         .iter()
-//         .map(|x| to_obj_line(x, "vn ", 3))
-//         .collect::<Vec<_>>()
-//         .join("\n");
-//     let t_str = self
-//         .t
-//         .iter()
-//         .map(|x| to_obj_line(x, "vt ", 2))
-//         .collect::<Vec<_>>()
-//         .join("\n");
-//     [self.header.clone(), p_str, n_str, t_str].join("\n")
-// }
-//
-// fn to_obj_line<T: Index<u8>>(p: &T, begin: &str, values: usize) -> String
-//     where
-//         <T as Index<u8>>::Output: ToString,
-// {
-//     let string = (0 as u8..)
-//         .take(values)
-//         .map(|x| p[x].to_string())
-//         .collect::<Vec<_>>()
-//         .join(" ");
-//     [String::from(begin), string].join("\n")
-// }
+/// Checks whether indices are inside vv/vt/vn buffer bounds. len is the size of vv/vt/vn
+fn face_indices_ok(face: &[i32; 9], len: &[u32; 3]) -> bool {
+    let mut ok = true;
+    for (i, index) in face.iter().enumerate() {
+        if *index != MISSING_INDEX {
+            let index_abs = index.abs() as u32;
+            ok &= index_abs > 0;
+            ok &= index_abs <= len[(i % 3) as usize];
+        }
+    }
+    ok
+}
 
 #[cfg(test)]
 mod tests {
-    use crate::parser::obj::FACE_2VERT;
+    use crate::parser::obj::{FACE_2VERT, INDEX_ERR};
     use crate::parser::parser::GeometryParser;
-    use crate::parser::{GeometryError, Obj};
+    use crate::parser::{GeometryError, Obj, MISSING_INDEX};
     use std::path::PathBuf;
+
+    const NIL: i32 = MISSING_INDEX;
 
     // robust enough for tests
     fn get_resource(filename: &'static str) -> String {
@@ -299,31 +314,30 @@ mod tests {
         let res = parsed.unwrap();
         assert_eq!(res[0].name, "SquarePyr");
         assert!(res[0].vt.is_empty());
-        assert_eq!(
-            res[0].ff[0],
-            [5, 2147483647, 1, 2, 2147483647, 1, 3, 2147483647, 1]
-        );
-        assert_eq!(
-            res[0].ff[1],
-            [4, 2147483647, 2, 5, 2147483647, 2, 3, 2147483647, 2]
-        );
-        assert_eq!(
-            res[0].ff[2],
-            [1, 2147483647, 3, 3, 2147483647, 3, 2, 2147483647, 3]
-        );
-        assert_eq!(
-            res[0].ff[3],
-            [5, 2147483647, 4, 1, 2147483647, 4, 2, 2147483647, 4]
-        );
-        assert_eq!(
-            res[0].ff[4],
-            [4, 2147483647, 5, 1, 2147483647, 5, 5, 2147483647, 5]
-        );
-        assert_eq!(
-            res[0].ff[5],
-            [1, 2147483647, 6, 4, 2147483647, 6, 3, 2147483647, 6]
-        );
+        assert_eq!(res[0].ff[0], [4, NIL, 0, 1, NIL, 0, 2, NIL, 0]);
+        assert_eq!(res[0].ff[1], [3, NIL, 1, 4, NIL, 1, 2, NIL, 1]);
+        assert_eq!(res[0].ff[2], [0, NIL, 2, 2, NIL, 2, 1, NIL, 2]);
+        assert_eq!(res[0].ff[3], [4, NIL, 3, 0, NIL, 3, 1, NIL, 3]);
+        assert_eq!(res[0].ff[4], [3, NIL, 4, 0, NIL, 4, 4, NIL, 4]);
+        assert_eq!(res[0].ff[5], [0, NIL, 5, 3, NIL, 5, 2, NIL, 5]);
     }
+
+    #[test]
+    fn obj_missing_vn() {
+        let filename = get_resource("pyramid_novn.obj");
+        let parsed = Obj::new(filename).parse();
+        assert!(parsed.is_ok());
+        let res = parsed.unwrap();
+        assert_eq!(res[0].name, "SquarePyr");
+        assert!(res[0].vn.is_empty());
+        assert_eq!(res[0].ff[0], [4, 0, NIL, 1, 0, NIL, 2, 0, NIL]);
+        assert_eq!(res[0].ff[1], [3, 1, NIL, 4, 1, NIL, 2, 1, NIL]);
+        assert_eq!(res[0].ff[2], [0, 2, NIL, 2, 2, NIL, 1, 2, NIL]);
+        assert_eq!(res[0].ff[3], [4, 3, NIL, 0, 3, NIL, 1, 3, NIL]);
+        assert_eq!(res[0].ff[4], [3, 4, NIL, 0, 4, NIL, 4, 4, NIL]);
+        assert_eq!(res[0].ff[5], [0, 5, NIL, 3, 5, NIL, 2, 5, NIL]);
+    }
+
     #[test]
     fn obj_multiple_objects() {
         let filename = get_resource("multi.obj");
@@ -340,5 +354,23 @@ mod tests {
         assert_eq!(res[0].vt.len(), 0);
         assert_eq!(res[0].vn.len(), 6);
         assert_eq!(res[0].ff.len(), 12);
+    }
+
+    #[test]
+    fn obj_wrong_indices() {
+        let filename = get_resource("wrong_indices.obj");
+        let parsed = Obj::new(&filename).parse();
+        assert!(parsed.is_err(), "Expected error, nothing was raised");
+        let err = parsed.err().unwrap();
+        match &err {
+            GeometryError::IoError(_) => {
+                assert!(false, "wrong error type")
+            }
+            GeometryError::ParseError(err) => {
+                assert_eq!(err.file, filename);
+                assert_eq!(err.line, 9);
+                assert_eq!(err.cause, INDEX_ERR)
+            }
+        }
     }
 }
