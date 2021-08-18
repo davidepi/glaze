@@ -14,25 +14,6 @@ on:
 
 jobs:
 
-  commitlint:
-    name: Commit name lint and Markdown lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Use Node.js
-        uses: actions/setup-node@v1
-      - name: Cache Node.js modules
-        uses: actions/cache@v2
-        with:
-          path: ~/.npm
-          key: node-${{ hashFiles('**/package-lock.json') }}
-      - name: Install npm dependencies
-        run: npm install
-      - name: Run Commitlint
-        run: npm run commitlint
-      - name: Run Markdownlint
-        run: npm run markdownlint
-
   syntax:
     name: Check Rust Syntax
     runs-on: ubuntu-latest
@@ -71,7 +52,7 @@ jobs:
 
   tests:
     name: Build and Test
-    needs: [commitlint, syntax, lint]
+    needs: [syntax, lint]
     strategy:
       fail-fast: false
       matrix:
