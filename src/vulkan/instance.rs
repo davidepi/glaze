@@ -1,4 +1,4 @@
-use crate::vulkan::platform::required_extension_names;
+use crate::vulkan::platform::{self, required_extension_names};
 use crate::vulkan::validations::ValidationsRequested;
 use ash::vk;
 use std::{
@@ -6,22 +6,30 @@ use std::{
     ffi::{CStr, CString},
     ptr,
 };
+use winit::window::Window;
 
 pub struct VkInstance {
     _entry: ash::Entry,
     instance: ash::Instance,
+    surface: vk::SurfaceKHR,
+    surface_loader: ash::extensions::khr::Surface,
 }
 
 impl VkInstance {
-    pub fn new(required_extensions: &[&'static CStr]) -> Self {
+    pub fn new(required_extensions: &[&'static CStr], window: &Window) -> Self {
         let entry = match unsafe { ash::Entry::new() } {
             Ok(entry) => entry,
             Err(err) => panic!("Failed to create entry: {}", err),
         };
         let instance = create_instance(&entry, required_extensions);
+        let surface = unsafe { platform::create_surface(&entry, &instance, window) }
+            .expect("Failed to create surface");
+        let surface_loader = ash::extensions::khr::Surface::new(&entry, &instance);
         VkInstance {
             _entry: entry,
             instance,
+            surface,
+            surface_loader,
         }
     }
 }
@@ -29,6 +37,7 @@ impl VkInstance {
 impl Drop for VkInstance {
     fn drop(&mut self) {
         unsafe {
+            self.surface_loader.destroy_surface(self.surface, None);
             self.instance.destroy_instance(None);
         }
     }
