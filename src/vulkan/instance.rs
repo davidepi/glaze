@@ -11,8 +11,7 @@ use winit::window::Window;
 pub struct VkInstance {
     _entry: ash::Entry,
     instance: ash::Instance,
-    surface: vk::SurfaceKHR,
-    surface_loader: ash::extensions::khr::Surface,
+    surface: Surface,
 }
 
 impl VkInstance {
@@ -22,14 +21,11 @@ impl VkInstance {
             Err(err) => panic!("Failed to create entry: {}", err),
         };
         let instance = create_instance(&entry, required_extensions);
-        let surface = unsafe { platform::create_surface(&entry, &instance, window) }
-            .expect("Failed to create surface");
-        let surface_loader = ash::extensions::khr::Surface::new(&entry, &instance);
+        let surface = Surface::new(&entry, &instance, window);
         VkInstance {
             _entry: entry,
             instance,
             surface,
-            surface_loader,
         }
     }
 }
@@ -37,8 +33,33 @@ impl VkInstance {
 impl Drop for VkInstance {
     fn drop(&mut self) {
         unsafe {
-            self.surface_loader.destroy_surface(self.surface, None);
+            drop(self.surface);
             self.instance.destroy_instance(None);
+        }
+    }
+}
+
+pub(super) struct Surface {
+    pub(super) surface: vk::SurfaceKHR,
+    pub(super) loader: ash::extensions::khr::Surface,
+}
+
+impl Surface {
+    fn new(entry: &ash::Entry, instance: &ash::Instance, window: &Window) -> Self {
+        let surface = unsafe { platform::create_surface(entry, instance, window) }
+            .expect("Failed to create surface");
+        let surface_loader = ash::extensions::khr::Surface::new(entry, instance);
+        Surface {
+            surface,
+            loader: surface_loader,
+        }
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        unsafe {
+            self.loader.destroy_surface(self.surface, None);
         }
     }
 }

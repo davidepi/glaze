@@ -4,13 +4,13 @@ use std::{
     os::raw::c_char,
 };
 
-pub struct ValidationsRequested {
+pub(super) struct ValidationsRequested {
     names: Vec<CString>,
     pointers: Vec<*const i8>,
 }
 
 impl ValidationsRequested {
-    pub fn new(names: &[&str]) -> ValidationsRequested {
+    pub(super) fn new(names: &[&str]) -> ValidationsRequested {
         let names = names
             .iter()
             .map(|x| CString::new(*x).unwrap())
@@ -19,11 +19,11 @@ impl ValidationsRequested {
         ValidationsRequested { names, pointers }
     }
 
-    pub fn layers_ptr(&self) -> &[*const i8] {
+    pub(super) fn layers_ptr(&self) -> &[*const i8] {
         &self.pointers
     }
 
-    pub fn check_support(&self, entry: &ash::Entry) -> bool {
+    pub(super) fn check_support(&self, entry: &ash::Entry) -> bool {
         let layer_properties = entry
             .enumerate_instance_layer_properties()
             .expect("Failed to enumerate layer properties");
@@ -41,7 +41,7 @@ impl ValidationsRequested {
     }
 }
 
-pub fn cchars_to_string(cchars: &[c_char]) -> String {
+pub(super) fn cchars_to_string(cchars: &[c_char]) -> String {
     let raw_string = unsafe {
         let pointer = cchars.as_ptr();
         CStr::from_ptr(pointer)
