@@ -6,11 +6,6 @@ on:
       - '**.rs'
       - '**.toml'
       - '.github/workflows/ci.yml'
-  push:
-    paths:
-      - '**.rs'
-      - '**.toml'
-      - '.github/workflows/ci.yml'
 
 jobs:
 
@@ -83,45 +78,3 @@ jobs:
       - name: Run tests
         shell: bash
         run: cargo +stable test --verbose --all-features --no-fail-fast --target ${{ matrix.platform.target }}
-
-  coverage:
-    name: Coverage
-    needs: tests
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, }
-    env:
-      CARGO_INCREMENTAL: '0'
-      RUSTFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
-      RUSTDOCFLAGS: '-Zprofile -Ccodegen-units=1 -Cinline-threshold=0 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Cpanic=abort -Zpanic_abort_tests'
-    runs-on: ${{ matrix.platform.os }}
-    steps:
-      - uses: actions/checkout@v2
-      - uses: actions/cache@v1
-        with:
-          path: ~/.cargo
-          key: ${{ matrix.platform.target }}-cargo-nightly
-      - name: Install nightly toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: nightly
-          override: true
-          target: ${{ matrix.platform.target }}
-      - name: Build and test
-        shell: bash
-        run: |
-          cargo clean
-          cargo +nightly test --all-features --target ${{ matrix.platform.target }}
-          mkdir ./target/debug/coverage
-      - name: Run grcov
-        uses: actions-rs/grcov@v0.1
-        with:
-          config: grcov.yml
-      - name: Upload to codecov
-        uses: codecov/codecov-action@v1
-        with:
-          files:  ./target/debug/coverage/lcov.info
-          verbose: true
