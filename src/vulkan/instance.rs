@@ -1,3 +1,4 @@
+use crate::vulkan::device::{create_logical_device, PhysicalDevice};
 use crate::vulkan::platform::{self, required_extension_names};
 use crate::vulkan::validations::ValidationsRequested;
 use ash::vk;
@@ -12,6 +13,8 @@ pub struct VkInstance {
     _entry: ash::Entry,
     instance: ash::Instance,
     surface: Surface,
+    physical_device: PhysicalDevice,
+    device: ash::Device,
 }
 
 impl VkInstance {
@@ -20,12 +23,30 @@ impl VkInstance {
             Ok(entry) => entry,
             Err(err) => panic!("Failed to create entry: {}", err),
         };
-        let instance = create_instance(&entry, required_extensions);
+        let validations = ValidationsRequested::new(&["VK_LAYER_KHRONOS_validation"]);
+        let instance = create_instance(&entry, required_extensions, &validations);
         let surface = Surface::new(&entry, &instance, window);
+        let physical_device =
+            PhysicalDevice::list_compatible(&instance, &surface, required_extensions)
+                .into_iter()
+                .filter(|x| {
+                    x.surface_capabilities(&surface)
+                        .has_formats_and_present_modes()
+                })
+                .last()
+                .expect("No compatible devices found");
+        let device = create_logical_device(
+            &instance,
+            &physical_device,
+            required_extensions,
+            &validations,
+        );
         VkInstance {
             _entry: entry,
             instance,
             surface,
+            physical_device,
+            device,
         }
     }
 }
@@ -33,6 +54,7 @@ impl VkInstance {
 impl Drop for VkInstance {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_device(None);
             self.surface
                 .loader
                 .destroy_surface(self.surface.surface, None);
@@ -41,9 +63,9 @@ impl Drop for VkInstance {
     }
 }
 
-pub(super) struct Surface {
-    pub(super) surface: vk::SurfaceKHR,
-    pub(super) loader: ash::extensions::khr::Surface,
+pub struct Surface {
+    pub surface: vk::SurfaceKHR,
+    pub loader: ash::extensions::khr::Surface,
 }
 
 impl Surface {
@@ -58,11 +80,13 @@ impl Surface {
     }
 }
 
-fn create_instance(entry: &ash::Entry, required_extensions: &[&'static CStr]) -> ash::Instance {
-    let validations: ValidationsRequested;
+fn create_instance(
+    entry: &ash::Entry,
+    required_extensions: &[&'static CStr],
+    validations: &ValidationsRequested,
+) -> ash::Instance {
     #[cfg(debug_assertions)]
     {
-        validations = ValidationsRequested::new(&["VK_LAYER_KHRONOS_validation"]);
         if !validations.check_support(entry) {
             panic!("Some validation layers requested are not available");
         }

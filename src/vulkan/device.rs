@@ -1,12 +1,22 @@
-use super::validations::cchars_to_string;
+use super::validations::{cchars_to_string, ValidationsRequested};
 use crate::vulkan::instance::Surface;
 use ash::vk;
-use std::{collections::HashSet, ffi::CStr};
+use std::{
+    collections::{BTreeSet, HashSet},
+    ffi::CStr,
+    ptr,
+};
 
-struct SurfaceSupport {
+pub struct SurfaceSupport {
     capabilities: vk::SurfaceCapabilitiesKHR,
     formats: Vec<vk::SurfaceFormatKHR>,
     present_modes: Vec<vk::PresentModeKHR>,
+}
+
+impl SurfaceSupport {
+    pub fn has_formats_and_present_modes(&self) -> bool {
+        !self.formats.is_empty() && !self.present_modes.is_empty()
+    }
 }
 
 struct QueueFamilyIndices {
@@ -20,7 +30,7 @@ impl QueueFamilyIndices {
     }
 }
 
-struct PhysicalDevice {
+pub struct PhysicalDevice {
     device: vk::PhysicalDevice,
     properties: vk::PhysicalDeviceProperties,
     features: vk::PhysicalDeviceFeatures,
@@ -28,7 +38,7 @@ struct PhysicalDevice {
 }
 
 impl PhysicalDevice {
-    fn list_compatible(
+    pub fn list_compatible(
         instance: &ash::Instance,
         surface: &Surface,
         extensions: &[&'static CStr],
@@ -45,7 +55,7 @@ impl PhysicalDevice {
         wscores.into_iter().map(|(_, device)| device).collect()
     }
 
-    fn surface_capabilities(&self, surface: &Surface) -> SurfaceSupport {
+    pub fn surface_capabilities(&self, surface: &Surface) -> SurfaceSupport {
         let capabilities = unsafe {
             surface
                 .loader
@@ -146,4 +156,61 @@ fn find_queue_families(
     } else {
         None
     }
+}
+
+pub fn create_logical_device(
+    instance: &ash::Instance,
+    device: &PhysicalDevice,
+    extensions: &[&'static CStr],
+    validations: &ValidationsRequested,
+) -> ash::Device {
+    let physical_device = device.device;
+    let queue_families = &device.queue_indices;
+    let queue_families_set = queue_families
+        .as_array()
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut queue_create_infos = Vec::with_capacity(queue_families_set.len());
+    let queue_priorities = [1.0];
+    for queue_index in queue_families_set {
+        let queue_create_info = vk::DeviceQueueCreateInfo {
+            s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::DeviceQueueCreateFlags::empty(),
+            queue_family_index: queue_index,
+            queue_count: queue_priorities.len() as u32,
+            p_queue_priorities: queue_priorities.as_ptr(),
+        };
+        queue_create_infos.push(queue_create_info);
+    }
+    //TODO: find a way to set this array (when I have a clearer vision of the overall structure)
+    let mut physical_features = vk::PhysicalDeviceFeatures {
+        ..Default::default()
+    };
+    let required_device_extensions = extensions
+        .into_iter()
+        .map(|x| x.as_ptr())
+        .collect::<Vec<_>>();
+    let device_create_info = vk::DeviceCreateInfo {
+        s_type: vk::StructureType::DEVICE_CREATE_INFO,
+        p_next: ptr::null(),
+        flags: vk::DeviceCreateFlags::empty(),
+        queue_create_info_count: queue_create_infos.len() as u32,
+        p_queue_create_infos: queue_create_infos.as_ptr(),
+        #[cfg(debug_assertions)]
+        enabled_layer_count: validations.layers_ptr().len() as u32,
+        #[cfg(not(debug_assertions))]
+        enabled_layer_count: 0,
+        #[cfg(debug_assertions)]
+        pp_enabled_layer_names: validations.layers_ptr().as_ptr(),
+        #[cfg(not(debug_assertions))]
+        pp_enabled_layer_names: ptr::null(),
+        enabled_extension_count: required_device_extensions.len() as u32,
+        pp_enabled_extension_names: required_device_extensions.as_ptr(),
+        p_enabled_features: &physical_features,
+    };
+    let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
+        .expect("Failed to create logical device");
+    device
 }
