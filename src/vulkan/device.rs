@@ -1,4 +1,4 @@
-use super::validations::{cchars_to_string, ValidationLayers};
+use super::debug::{cchars_to_string, ValidationLayers};
 use crate::vulkan::instance::Surface;
 use ash::vk;
 use std::{

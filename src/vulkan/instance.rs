@@ -1,6 +1,6 @@
+use crate::vulkan::debug::ValidationLayers;
 use crate::vulkan::device::{create_logical_device, PhysicalDevice};
 use crate::vulkan::platform::{self, required_extension_names};
-use crate::vulkan::validations::ValidationLayers;
 use ash::vk;
 use std::{
     collections::HashSet,
@@ -9,7 +9,12 @@ use std::{
 };
 use winit::window::Window;
 
+#[cfg(debug_assertions)]
+use crate::vulkan::debug::logger::VkDebugLogger;
+
 pub struct VkInstance {
+    #[cfg(debug_assertions)]
+    logger: VkDebugLogger,
     _entry: ash::Entry,
     instance: ash::Instance,
     surface: Surface,
@@ -23,7 +28,6 @@ impl VkInstance {
             Ok(entry) => entry,
             Err(err) => panic!("Failed to create entry: {}", err),
         };
-        let validations = ValidationLayers::application_default();
         let instance = create_instance(&entry, required_extensions);
         let surface = Surface::new(&entry, &instance, window);
         let physical_device =
@@ -37,6 +41,8 @@ impl VkInstance {
                 .expect("No compatible devices found");
         let device = create_logical_device(&instance, &physical_device, required_extensions);
         VkInstance {
+            #[cfg(debug_assertions)]
+            logger: VkDebugLogger::create(&entry, &instance),
             _entry: entry,
             instance,
             surface,
@@ -53,6 +59,8 @@ impl Drop for VkInstance {
             self.surface
                 .loader
                 .destroy_surface(self.surface.surface, None);
+            #[cfg(debug_assertions)]
+            self.logger.destroy();
             self.instance.destroy_instance(None);
         }
     }
@@ -76,12 +84,13 @@ impl Surface {
 }
 
 fn create_instance(entry: &ash::Entry, required_extensions: &[&'static CStr]) -> ash::Instance {
+    let extensions = required_extensions;
     let validations = ValidationLayers::application_default();
     if !validations.check_support(entry) {
         panic!("Some validation layers requested are not available");
     }
     let app_name_string = format!("{}-app", env!("CARGO_PKG_NAME"));
-    let engine_name_string = format!("{}", env!("CARGO_PKG_NAME"));
+    let engine_name_string = env!("CARGO_PKG_NAME");
     let ver_major = env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap();
     let ver_minor = env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap();
     let ver_patch = env!("CARGO_PKG_VERSION_PATCH").parse::<u32>().unwrap();
@@ -96,7 +105,7 @@ fn create_instance(entry: &ash::Entry, required_extensions: &[&'static CStr]) ->
         engine_version: vk::make_api_version(0, ver_major, ver_minor, ver_patch),
         api_version: vk::API_VERSION_1_2,
     };
-    let extensions = required_extensions
+    let extensions = extensions
         .iter()
         .cloned()
         .chain(required_extension_names().into_iter())
