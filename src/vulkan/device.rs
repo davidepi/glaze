@@ -2,6 +2,13 @@ use super::validations::cchars_to_string;
 use crate::vulkan::instance::Surface;
 use ash::vk;
 use std::{collections::HashSet, ffi::CStr};
+
+struct SurfaceSupport {
+    capabilities: vk::SurfaceCapabilitiesKHR,
+    formats: Vec<vk::SurfaceFormatKHR>,
+    present_modes: Vec<vk::PresentModeKHR>,
+}
+
 struct QueueFamilyIndices {
     graphics_family: u32,
     present_family: u32,
@@ -21,16 +28,47 @@ struct PhysicalDevice {
 }
 
 impl PhysicalDevice {
-    pub fn new(instance: &ash::Instance, surface: &Surface, extensions: &[&'static CStr]) -> Self {
+    fn list_compatible(
+        instance: &ash::Instance,
+        surface: &Surface,
+        extensions: &[&'static CStr],
+    ) -> Vec<Self> {
         let physical_devices =
             unsafe { instance.enumerate_physical_devices() }.expect("No physical devices found");
-        physical_devices
+        let mut wscores = physical_devices
             .into_iter()
             .map(|device| rate_physical_device_suitability(instance, device, surface, extensions))
             .flatten()
-            .max_by_key(|(score, _)| *score)
-            .expect("No compatible physical devices found")
-            .1
+            .filter(|(score, _)| *score > 0)
+            .collect::<Vec<_>>();
+        wscores.sort_by_key(|(score, _)| *score);
+        wscores.into_iter().map(|(_, device)| device).collect()
+    }
+
+    fn surface_capabilities(&self, surface: &Surface) -> SurfaceSupport {
+        let capabilities = unsafe {
+            surface
+                .loader
+                .get_physical_device_surface_capabilities(self.device, surface.surface)
+        }
+        .expect("could not get surface capabilities");
+        let formats = unsafe {
+            surface
+                .loader
+                .get_physical_device_surface_formats(self.device, surface.surface)
+        }
+        .expect("Could not get surface formats");
+        let present_modes = unsafe {
+            surface
+                .loader
+                .get_physical_device_surface_present_modes(self.device, surface.surface)
+        }
+        .expect("Failed to get present modes");
+        SurfaceSupport {
+            capabilities,
+            formats,
+            present_modes,
+        }
     }
 }
 
@@ -46,8 +84,7 @@ fn rate_physical_device_suitability(
         vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
         vk::PhysicalDeviceType::INTEGRATED_GPU => 100,
         vk::PhysicalDeviceType::CPU => 1,
-        vk::PhysicalDeviceType::OTHER => 10,
-        _ => 10,
+        vk::PhysicalDeviceType::OTHER | _ => 0,
     };
     if device_supports_requested_extensions(instance, physical_device, extensions) {
         let queue_family = find_queue_families(instance, physical_device, surface);

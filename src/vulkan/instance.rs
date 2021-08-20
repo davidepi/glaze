@@ -33,7 +33,9 @@ impl VkInstance {
 impl Drop for VkInstance {
     fn drop(&mut self) {
         unsafe {
-            drop(self.surface);
+            self.surface
+                .loader
+                .destroy_surface(self.surface.surface, None);
             self.instance.destroy_instance(None);
         }
     }
@@ -52,14 +54,6 @@ impl Surface {
         Surface {
             surface,
             loader: surface_loader,
-        }
-    }
-}
-
-impl Drop for Surface {
-    fn drop(&mut self) {
-        unsafe {
-            self.loader.destroy_surface(self.surface, None);
         }
     }
 }
