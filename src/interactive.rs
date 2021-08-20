@@ -4,14 +4,14 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-use crate::vulkan::VkInstance;
+use crate::vulkan::{VkInstance, VkPresentedInstance};
 
 pub const DEFAULT_WIDTH: u32 = 800;
 pub const DEFAULT_HEIGHT: u32 = 600;
 
 pub struct GlazeApp {
     window: Window,
-    instance: VkInstance,
+    instance: VkPresentedInstance,
 }
 
 impl GlazeApp {
@@ -21,11 +21,12 @@ impl GlazeApp {
             .with_inner_size(winit::dpi::LogicalSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT))
             .build(event_loop)
             .unwrap();
-        let instance = VkInstance::new(&[], &window);
+        let instance = VkInstance::new(&[]);
+        let instance = VkPresentedInstance::new(instance, &window);
         GlazeApp { window, instance }
     }
 
-    pub fn main_loop(mut self, event_loop: EventLoop<()>) -> ! {
+    pub fn main_loop(self, event_loop: EventLoop<()>) -> ! {
         event_loop.run(move |event, _, control_flow| match event {
             Event::WindowEvent {
                 event,

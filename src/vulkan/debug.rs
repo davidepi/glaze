@@ -87,6 +87,8 @@ pub mod logger {
         ptr,
     };
 
+    use crate::vulkan::VkInstance;
+
     pub unsafe extern "system" fn debug_print_callback(
         severity: vk::DebugUtilsMessageSeverityFlagsEXT,
         mtype: vk::DebugUtilsMessageTypeFlagsEXT,
@@ -123,8 +125,9 @@ pub mod logger {
     }
 
     impl VkDebugLogger {
-        pub fn create(entry: &ash::Entry, instance: &ash::Instance) -> VkDebugLogger {
-            let debug_loader = ash::extensions::ext::DebugUtils::new(entry, instance);
+        pub fn new(instance: &VkInstance) -> VkDebugLogger {
+            let debug_loader =
+                ash::extensions::ext::DebugUtils::new(&instance.entry, &instance.instance);
             let ci = vk::DebugUtilsMessengerCreateInfoEXT {
                 s_type: vk::StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
                 p_next: ptr::null(),
@@ -148,7 +151,11 @@ pub mod logger {
             }
         }
 
-        pub fn destroy(&self) {
+        pub fn destroy(&self) {}
+    }
+
+    impl Drop for VkDebugLogger {
+        fn drop(&mut self) {
             unsafe {
                 self.debug_loader
                     .destroy_debug_utils_messenger(self.debug_messenger, None);

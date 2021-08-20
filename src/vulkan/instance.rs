@@ -1,6 +1,7 @@
+use super::surface::Surface;
 use crate::vulkan::debug::ValidationLayers;
 use crate::vulkan::device::{create_logical_device, PhysicalDevice};
-use crate::vulkan::platform::{self, required_extension_names};
+use crate::vulkan::platform::required_extension_names;
 use ash::vk;
 use std::{
     collections::HashSet,
@@ -12,38 +13,30 @@ use winit::window::Window;
 #[cfg(debug_assertions)]
 use crate::vulkan::debug::logger::VkDebugLogger;
 
-pub struct VkInstance {
+pub struct VkPresentedInstance {
     #[cfg(debug_assertions)]
     logger: VkDebugLogger,
-    _entry: ash::Entry,
-    instance: ash::Instance,
     surface: Surface,
     physical_device: PhysicalDevice,
     device: ash::Device,
+    instance: VkInstance,
 }
 
-impl VkInstance {
-    pub fn new(required_extensions: &[&'static CStr], window: &Window) -> Self {
-        let entry = match unsafe { ash::Entry::new() } {
-            Ok(entry) => entry,
-            Err(err) => panic!("Failed to create entry: {}", err),
-        };
-        let instance = create_instance(&entry, required_extensions);
-        let surface = Surface::new(&entry, &instance, window);
-        let physical_device =
-            PhysicalDevice::list_compatible(&instance, &surface, required_extensions)
-                .into_iter()
-                .filter(|x| {
-                    x.surface_capabilities(&surface)
-                        .has_formats_and_present_modes()
-                })
-                .last()
-                .expect("No compatible devices found");
-        let device = create_logical_device(&instance, &physical_device, required_extensions);
-        VkInstance {
+impl VkPresentedInstance {
+    pub fn new(instance: VkInstance, window: &Window) -> Self {
+        let surface = Surface::new(&instance, &window);
+        let physical_device = PhysicalDevice::list_compatible(&instance, &surface)
+            .into_iter()
+            .filter(|x| {
+                x.surface_capabilities(&surface)
+                    .has_formats_and_present_modes()
+            })
+            .last()
+            .expect("No compatible devices found");
+        let device = create_logical_device(&instance, &physical_device);
+        VkPresentedInstance {
             #[cfg(debug_assertions)]
-            logger: VkDebugLogger::create(&entry, &instance),
-            _entry: entry,
+            logger: VkDebugLogger::new(&instance),
             instance,
             surface,
             physical_device,
@@ -52,33 +45,36 @@ impl VkInstance {
     }
 }
 
-impl Drop for VkInstance {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_device(None);
-            self.surface
-                .loader
-                .destroy_surface(self.surface.surface, None);
-            #[cfg(debug_assertions)]
-            self.logger.destroy();
-            self.instance.destroy_instance(None);
+pub struct VkInstance {
+    pub entry: ash::Entry,
+    pub instance: ash::Instance,
+    pub required_extensions: Vec<&'static CStr>,
+}
+
+impl VkInstance {
+    pub fn new(required_extensions: &[&'static CStr]) -> Self {
+        let entry = match unsafe { ash::Entry::new() } {
+            Ok(entry) => entry,
+            Err(err) => panic!("Failed to create entry: {}", err),
+        };
+        let instance = create_instance(&entry, required_extensions);
+        let required_extensions = required_extensions.into_iter().copied().collect::<Vec<_>>();
+        VkInstance {
+            entry,
+            instance,
+            required_extensions,
         }
+    }
+
+    pub fn required_extensions(&self) -> &[&'static CStr] {
+        &self.required_extensions
     }
 }
 
-pub struct Surface {
-    pub surface: vk::SurfaceKHR,
-    pub loader: ash::extensions::khr::Surface,
-}
-
-impl Surface {
-    fn new(entry: &ash::Entry, instance: &ash::Instance, window: &Window) -> Self {
-        let surface = unsafe { platform::create_surface(entry, instance, window) }
-            .expect("Failed to create surface");
-        let surface_loader = ash::extensions::khr::Surface::new(entry, instance);
-        Surface {
-            surface,
-            loader: surface_loader,
+impl Drop for VkInstance {
+    fn drop(&mut self) {
+        unsafe {
+            self.instance.destroy_instance(None);
         }
     }
 }
