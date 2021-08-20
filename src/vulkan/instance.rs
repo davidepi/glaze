@@ -1,6 +1,6 @@
 use crate::vulkan::device::{create_logical_device, PhysicalDevice};
 use crate::vulkan::platform::{self, required_extension_names};
-use crate::vulkan::validations::ValidationsRequested;
+use crate::vulkan::validations::ValidationLayers;
 use ash::vk;
 use std::{
     collections::HashSet,
@@ -23,8 +23,8 @@ impl VkInstance {
             Ok(entry) => entry,
             Err(err) => panic!("Failed to create entry: {}", err),
         };
-        let validations = ValidationsRequested::new(&["VK_LAYER_KHRONOS_validation"]);
-        let instance = create_instance(&entry, required_extensions, &validations);
+        let validations = ValidationLayers::application_default();
+        let instance = create_instance(&entry, required_extensions);
         let surface = Surface::new(&entry, &instance, window);
         let physical_device =
             PhysicalDevice::list_compatible(&instance, &surface, required_extensions)
@@ -35,12 +35,7 @@ impl VkInstance {
                 })
                 .last()
                 .expect("No compatible devices found");
-        let device = create_logical_device(
-            &instance,
-            &physical_device,
-            required_extensions,
-            &validations,
-        );
+        let device = create_logical_device(&instance, &physical_device, required_extensions);
         VkInstance {
             _entry: entry,
             instance,
@@ -80,16 +75,10 @@ impl Surface {
     }
 }
 
-fn create_instance(
-    entry: &ash::Entry,
-    required_extensions: &[&'static CStr],
-    validations: &ValidationsRequested,
-) -> ash::Instance {
-    #[cfg(debug_assertions)]
-    {
-        if !validations.check_support(entry) {
-            panic!("Some validation layers requested are not available");
-        }
+fn create_instance(entry: &ash::Entry, required_extensions: &[&'static CStr]) -> ash::Instance {
+    let validations = ValidationLayers::application_default();
+    if !validations.check_support(entry) {
+        panic!("Some validation layers requested are not available");
     }
     let app_name_string = format!("{}-app", env!("CARGO_PKG_NAME"));
     let engine_name_string = format!("{}", env!("CARGO_PKG_NAME"));
@@ -120,14 +109,8 @@ fn create_instance(
         p_next: ptr::null(),
         flags: vk::InstanceCreateFlags::empty(),
         p_application_info: &app_info,
-        #[cfg(debug_assertions)]
-        enabled_layer_count: validations.layers_ptr().len() as u32,
-        #[cfg(debug_assertions)]
-        pp_enabled_layer_names: validations.layers_ptr().as_ptr(),
-        #[cfg(not(debug_assertions))]
-        enabled_layer_count: 0,
-        #[cfg(not(debug_assertions))]
-        pp_enabled_layer_names: ptr::null(),
+        enabled_layer_count: validations.len() as u32,
+        pp_enabled_layer_names: validations.as_ptr(),
         enabled_extension_count: extensions_array.len() as u32,
         pp_enabled_extension_names: extensions_array.as_ptr(),
     };

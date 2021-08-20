@@ -1,4 +1,4 @@
-use super::validations::{cchars_to_string, ValidationsRequested};
+use super::validations::{cchars_to_string, ValidationLayers};
 use crate::vulkan::instance::Surface;
 use ash::vk;
 use std::{
@@ -162,8 +162,8 @@ pub fn create_logical_device(
     instance: &ash::Instance,
     device: &PhysicalDevice,
     extensions: &[&'static CStr],
-    validations: &ValidationsRequested,
 ) -> ash::Device {
+    let validations = ValidationLayers::application_default();
     let physical_device = device.device;
     let queue_families = &device.queue_indices;
     let queue_families_set = queue_families
@@ -198,14 +198,8 @@ pub fn create_logical_device(
         flags: vk::DeviceCreateFlags::empty(),
         queue_create_info_count: queue_create_infos.len() as u32,
         p_queue_create_infos: queue_create_infos.as_ptr(),
-        #[cfg(debug_assertions)]
-        enabled_layer_count: validations.layers_ptr().len() as u32,
-        #[cfg(not(debug_assertions))]
-        enabled_layer_count: 0,
-        #[cfg(debug_assertions)]
-        pp_enabled_layer_names: validations.layers_ptr().as_ptr(),
-        #[cfg(not(debug_assertions))]
-        pp_enabled_layer_names: ptr::null(),
+        enabled_layer_count: validations.len() as u32,
+        pp_enabled_layer_names: validations.as_ptr(),
         enabled_extension_count: required_device_extensions.len() as u32,
         pp_enabled_extension_names: required_device_extensions.as_ptr(),
         p_enabled_features: &physical_features,
