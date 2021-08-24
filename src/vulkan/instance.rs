@@ -1,3 +1,4 @@
+use super::device::SurfaceSupport;
 use super::surface::Surface;
 use crate::vulkan::debug::ValidationLayers;
 use crate::vulkan::device::{create_logical_device, PhysicalDevice};
@@ -13,65 +14,94 @@ use winit::window::Window;
 #[cfg(debug_assertions)]
 use crate::vulkan::debug::logger::VkDebugLogger;
 
-pub struct VkPresentedInstance {
+pub trait Instance {
+    fn entry(&self) -> &ash::Entry;
+    fn instance(&self) -> &ash::Instance;
+    fn device(&self) -> &ash::Device;
+    fn required_extensions(&self) -> &[&'static CStr];
+}
+
+pub struct PresentedInstance {
     #[cfg(debug_assertions)]
     logger: VkDebugLogger,
     surface: Surface,
     physical_device: PhysicalDevice,
     device: ash::Device,
-    instance: VkInstance,
+    //the following one must be destroyed for last
+    instance: BasicInstance,
 }
 
-impl VkPresentedInstance {
-    pub fn new(instance: VkInstance, window: &Window) -> Self {
-        let surface = Surface::new(&instance, &window);
-        let physical_device = PhysicalDevice::list_compatible(&instance, &surface)
-            .into_iter()
-            .filter(|x| {
-                x.surface_capabilities(&surface)
-                    .has_formats_and_present_modes()
-            })
-            .last()
-            .expect("No compatible devices found");
-        let device = create_logical_device(&instance, &physical_device);
-        VkPresentedInstance {
+impl PresentedInstance {
+    pub fn new(required_extensions: &[&'static CStr], window: &Window) -> Self {
+        let instance = BasicInstance::new(required_extensions);
+        let surface = Surface::new(&instance.entry, &instance.instance, &window);
+        let physical_device =
+            PhysicalDevice::list_compatible(&instance.instance, required_extensions, &surface)
+                .into_iter()
+                .filter(|x| {
+                    x.surface_capabilities(&surface)
+                        .has_formats_and_present_modes()
+                })
+                .last()
+                .expect("No compatible devices found");
+        let device =
+            create_logical_device(&instance.instance, required_extensions, &physical_device);
+        PresentedInstance {
             #[cfg(debug_assertions)]
-            logger: VkDebugLogger::new(&instance),
+            logger: VkDebugLogger::new(&instance.entry, &instance.instance),
             instance,
             surface,
             physical_device,
             device,
         }
     }
+
+    pub fn surface_capabilities(&self) -> SurfaceSupport {
+        self.physical_device.surface_capabilities(&self.surface)
+    }
 }
 
-pub struct VkInstance {
-    pub entry: ash::Entry,
-    pub instance: ash::Instance,
-    pub required_extensions: Vec<&'static CStr>,
+impl Instance for PresentedInstance {
+    fn device(&self) -> &ash::Device {
+        &self.device
+    }
+
+    fn entry(&self) -> &ash::Entry {
+        &self.instance.entry
+    }
+
+    fn instance(&self) -> &ash::Instance {
+        &self.instance.instance
+    }
+
+    fn required_extensions(&self) -> &[&'static CStr] {
+        &self.instance.required_extensions
+    }
 }
 
-impl VkInstance {
-    pub fn new(required_extensions: &[&'static CStr]) -> Self {
+struct BasicInstance {
+    entry: ash::Entry,
+    instance: ash::Instance,
+    required_extensions: Vec<&'static CStr>,
+}
+
+impl BasicInstance {
+    fn new(required_extensions: &[&'static CStr]) -> Self {
         let entry = match unsafe { ash::Entry::new() } {
             Ok(entry) => entry,
             Err(err) => panic!("Failed to create entry: {}", err),
         };
         let instance = create_instance(&entry, required_extensions);
         let required_extensions = required_extensions.into_iter().copied().collect::<Vec<_>>();
-        VkInstance {
+        BasicInstance {
             entry,
             instance,
             required_extensions,
         }
     }
-
-    pub fn required_extensions(&self) -> &[&'static CStr] {
-        &self.required_extensions
-    }
 }
 
-impl Drop for VkInstance {
+impl Drop for BasicInstance {
     fn drop(&mut self) {
         unsafe {
             self.instance.destroy_instance(None);

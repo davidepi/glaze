@@ -1,11 +1,11 @@
 use super::{
     debug::{cchars_to_string, ValidationLayers},
     surface::Surface,
-    VkInstance,
 };
 use ash::vk;
 use std::{
     collections::{BTreeSet, HashSet},
+    ffi::CStr,
     ptr,
 };
 
@@ -21,9 +21,9 @@ impl SurfaceSupport {
     }
 }
 
-struct QueueFamilyIndices {
-    graphics_family: u32,
-    present_family: u32,
+pub struct QueueFamilyIndices {
+    pub graphics_family: u32,
+    pub present_family: u32,
 }
 
 impl QueueFamilyIndices {
@@ -33,20 +33,23 @@ impl QueueFamilyIndices {
 }
 
 pub struct PhysicalDevice {
-    device: vk::PhysicalDevice,
-    properties: vk::PhysicalDeviceProperties,
-    features: vk::PhysicalDeviceFeatures,
-    queue_indices: QueueFamilyIndices,
+    pub device: vk::PhysicalDevice,
+    pub properties: vk::PhysicalDeviceProperties,
+    pub features: vk::PhysicalDeviceFeatures,
+    pub queue_indices: QueueFamilyIndices,
 }
 
 impl PhysicalDevice {
-    pub fn list_compatible(instance: &VkInstance, surface: &Surface) -> Vec<Self> {
-        let vkinstance = &instance.instance;
+    pub fn list_compatible(
+        instance: &ash::Instance,
+        ext: &[&'static CStr],
+        surface: &Surface,
+    ) -> Vec<Self> {
         let physical_devices =
-            unsafe { vkinstance.enumerate_physical_devices() }.expect("No physical devices found");
+            unsafe { instance.enumerate_physical_devices() }.expect("No physical devices found");
         let mut wscores = physical_devices
             .into_iter()
-            .map(|device| rate_physical_device_suitability(instance, device, surface))
+            .map(|device| rate_physical_device_suitability(instance, ext, device, surface))
             .flatten()
             .filter(|(score, _)| *score > 0)
             .collect::<Vec<_>>();
@@ -82,11 +85,12 @@ impl PhysicalDevice {
 }
 
 fn rate_physical_device_suitability(
-    instance: &VkInstance,
+    instance: &ash::Instance,
+    ext: &[&'static CStr],
     physical_device: vk::PhysicalDevice,
     surface: &Surface,
 ) -> Option<(u32, PhysicalDevice)> {
-    let vkinstance = &instance.instance;
+    let vkinstance = &instance;
     let device_properties = unsafe { vkinstance.get_physical_device_properties(physical_device) };
     let device_features = unsafe { vkinstance.get_physical_device_features(physical_device) };
     let score = match device_properties.device_type {
@@ -95,7 +99,7 @@ fn rate_physical_device_suitability(
         vk::PhysicalDeviceType::CPU => 1,
         vk::PhysicalDeviceType::OTHER | _ => 0,
     };
-    if device_supports_requested_extensions(instance, physical_device) {
+    if device_supports_requested_extensions(instance, ext, physical_device) {
         let queue_family = find_queue_families(vkinstance, physical_device, surface);
         if let Some(queue_family) = queue_family {
             Some((
@@ -115,19 +119,17 @@ fn rate_physical_device_suitability(
     }
 }
 
-fn device_supports_requested_extensions(instance: &VkInstance, device: vk::PhysicalDevice) -> bool {
-    let available_extensions = unsafe {
-        instance
-            .instance
-            .enumerate_device_extension_properties(device)
-    }
-    .expect("Failed to get device extensions")
-    .into_iter()
-    .map(|x| cchars_to_string(&x.extension_name))
-    .collect::<HashSet<_>>();
-    !instance
-        .required_extensions()
-        .iter()
+fn device_supports_requested_extensions(
+    instance: &ash::Instance,
+    ext: &[&'static CStr],
+    device: vk::PhysicalDevice,
+) -> bool {
+    let available_extensions = unsafe { instance.enumerate_device_extension_properties(device) }
+        .expect("Failed to get device extensions")
+        .into_iter()
+        .map(|x| cchars_to_string(&x.extension_name))
+        .collect::<HashSet<_>>();
+    !ext.iter()
         .map(|x| x.to_str().unwrap().to_string())
         .any(|x| !available_extensions.contains(&x))
 }
@@ -158,7 +160,11 @@ fn find_queue_families(
     }
 }
 
-pub fn create_logical_device(instance: &VkInstance, device: &PhysicalDevice) -> ash::Device {
+pub fn create_logical_device(
+    instance: &ash::Instance,
+    ext: &[&'static CStr],
+    device: &PhysicalDevice,
+) -> ash::Device {
     let validations = ValidationLayers::application_default();
     let physical_device = device.device;
     let queue_families = &device.queue_indices;
@@ -184,11 +190,7 @@ pub fn create_logical_device(instance: &VkInstance, device: &PhysicalDevice) -> 
     let mut physical_features = vk::PhysicalDeviceFeatures {
         ..Default::default()
     };
-    let required_device_extensions = instance
-        .required_extensions()
-        .into_iter()
-        .map(|x| x.as_ptr())
-        .collect::<Vec<_>>();
+    let required_device_extensions = ext.into_iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
     let device_create_info = vk::DeviceCreateInfo {
         s_type: vk::StructureType::DEVICE_CREATE_INFO,
         p_next: ptr::null(),
@@ -201,11 +203,7 @@ pub fn create_logical_device(instance: &VkInstance, device: &PhysicalDevice) -> 
         pp_enabled_extension_names: required_device_extensions.as_ptr(),
         p_enabled_features: &physical_features,
     };
-    let device = unsafe {
-        instance
-            .instance
-            .create_device(physical_device, &device_create_info, None)
-    }
-    .expect("Failed to create logical device");
+    let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
+        .expect("Failed to create logical device");
     device
 }

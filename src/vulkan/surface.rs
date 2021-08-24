@@ -1,4 +1,4 @@
-use super::{platform, VkInstance};
+use super::platform;
 use ash::vk;
 use winit::window::Window;
 
@@ -8,12 +8,10 @@ pub struct Surface {
 }
 
 impl Surface {
-    pub fn new(instance: &VkInstance, window: &Window) -> Self {
-        let surface =
-            unsafe { platform::create_surface(&instance.entry, &instance.instance, window) }
-                .expect("Failed to create surface");
-        let surface_loader =
-            ash::extensions::khr::Surface::new(&instance.entry, &instance.instance);
+    pub fn new(entry: &ash::Entry, instance: &ash::Instance, window: &Window) -> Self {
+        let surface = unsafe { platform::create_surface(&entry, &instance, window) }
+            .expect("Failed to create surface");
+        let surface_loader = ash::extensions::khr::Surface::new(&entry, &instance);
         Surface {
             surface,
             loader: surface_loader,
