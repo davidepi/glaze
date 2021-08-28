@@ -18,6 +18,7 @@ pub trait Instance {
     fn entry(&self) -> &ash::Entry;
     fn instance(&self) -> &ash::Instance;
     fn device(&self) -> &ash::Device;
+    fn physical_device(&self) -> &PhysicalDevice;
     fn required_extensions(&self) -> &[&'static CStr];
 }
 
@@ -56,22 +57,30 @@ impl PresentedInstance {
         }
     }
 
+    pub fn surface(&self) -> &Surface {
+        &self.surface
+    }
+
     pub fn surface_capabilities(&self) -> SurfaceSupport {
         self.physical_device.surface_capabilities(&self.surface)
     }
 }
 
 impl Instance for PresentedInstance {
-    fn device(&self) -> &ash::Device {
-        &self.device
-    }
-
     fn entry(&self) -> &ash::Entry {
         &self.instance.entry
     }
 
     fn instance(&self) -> &ash::Instance {
         &self.instance.instance
+    }
+
+    fn device(&self) -> &ash::Device {
+        &self.device
+    }
+
+    fn physical_device(&self) -> &PhysicalDevice {
+        &self.physical_device
     }
 
     fn required_extensions(&self) -> &[&'static CStr] {

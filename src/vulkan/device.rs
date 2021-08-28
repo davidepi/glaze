@@ -21,6 +21,7 @@ impl SurfaceSupport {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct QueueFamilyIndices {
     pub graphics_family: u32,
     pub present_family: u32,

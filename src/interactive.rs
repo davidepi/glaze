@@ -1,4 +1,6 @@
-use crate::vulkan::PresentedInstance;
+use std::rc::Rc;
+
+use crate::vulkan::{PresentedInstance, Swapchain};
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -10,7 +12,8 @@ pub const DEFAULT_HEIGHT: u32 = 600;
 
 pub struct GlazeApp {
     window: Window,
-    instance: PresentedInstance,
+    instance: Rc<PresentedInstance>,
+    swapchain: Swapchain,
 }
 
 impl GlazeApp {
@@ -20,8 +23,13 @@ impl GlazeApp {
             .with_inner_size(winit::dpi::LogicalSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT))
             .build(event_loop)
             .unwrap();
-        let instance = PresentedInstance::new(&[], &window);
-        GlazeApp { window, instance }
+        let instance = Rc::new(PresentedInstance::new(&[], &window));
+        let swapchain = Swapchain::create(instance.clone(), DEFAULT_WIDTH, DEFAULT_HEIGHT);
+        GlazeApp {
+            window,
+            instance,
+            swapchain,
+        }
     }
 
     pub fn main_loop(self, event_loop: EventLoop<()>) -> ! {
@@ -36,5 +44,11 @@ impl GlazeApp {
             Event::MainEventsCleared => self.window.request_redraw(),
             _ => (),
         })
+    }
+}
+
+impl Drop for GlazeApp {
+    fn drop(&mut self) {
+        &self.swapchain.destroy();
     }
 }
