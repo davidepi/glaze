@@ -1,13 +1,11 @@
-use super::{
-    debug::{cchars_to_string, ValidationLayers},
-    surface::Surface,
-};
+use super::debug::cchars_to_string;
+use super::debug::ValidationLayers;
+use super::surface::Surface;
 use ash::vk;
-use std::{
-    collections::{BTreeSet, HashSet},
-    ffi::CStr,
-    ptr,
-};
+use std::collections::BTreeSet;
+use std::collections::HashSet;
+use std::ffi::CStr;
+use std::ptr;
 
 pub struct SurfaceSupport {
     pub capabilities: vk::SurfaceCapabilitiesKHR,

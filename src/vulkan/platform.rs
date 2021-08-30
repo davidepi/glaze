@@ -1,5 +1,6 @@
 use ash::vk;
-use std::{ffi::CStr, ptr};
+use std::ffi::CStr;
+use std::ptr;
 use winit::window::Window;
 
 pub fn required_extensions() -> Vec<&'static CStr> {
@@ -41,7 +42,8 @@ pub unsafe fn create_surface(
 ) -> Result<vk::SurfaceKHR, vk::Result> {
     #[cfg(target_os = "macos")]
     {
-        use cocoa::appkit::{NSView, NSWindow};
+        use cocoa::appkit::NSView;
+        use cocoa::appkit::NSWindow;
         use metal::CoreAnimationLayer;
         use std::mem;
         use std::os::raw::c_void;

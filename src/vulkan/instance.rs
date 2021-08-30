@@ -2,13 +2,12 @@ use super::device::SurfaceSupport;
 use super::platform;
 use super::surface::Surface;
 use crate::vulkan::debug::ValidationLayers;
-use crate::vulkan::device::{create_logical_device, PhysicalDevice};
-use crate::vulkan::platform::required_extensions;
+use crate::vulkan::device::create_logical_device;
+use crate::vulkan::device::PhysicalDevice;
 use ash::vk;
-use std::{
-    ffi::{CStr, CString},
-    ptr,
-};
+use std::ffi::CStr;
+use std::ffi::CString;
+use std::ptr;
 use winit::window::Window;
 
 #[cfg(debug_assertions)]

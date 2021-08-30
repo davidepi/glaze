@@ -1,10 +1,12 @@
-use crate::vulkan::{PresentedInstance, Swapchain};
+use crate::vulkan::PresentedInstance;
+use crate::vulkan::Swapchain;
 use std::rc::Rc;
-use winit::{
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::{Window, WindowBuilder},
-};
+use winit::event::Event;
+use winit::event::WindowEvent;
+use winit::event_loop::ControlFlow;
+use winit::event_loop::EventLoop;
+use winit::window::Window;
+use winit::window::WindowBuilder;
 
 pub const DEFAULT_WIDTH: u32 = 800;
 pub const DEFAULT_HEIGHT: u32 = 600;

@@ -1,7 +1,9 @@
 use ash::vk;
-use std::{mem::swap, ptr, rc::Rc};
+use std::ptr;
+use std::rc::Rc;
 
-use super::{Instance, PresentedInstance};
+use super::Instance;
+use super::PresentedInstance;
 
 pub struct Swapchain {
     swapchain: vk::SwapchainKHR,

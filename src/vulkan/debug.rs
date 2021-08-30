@@ -1,9 +1,8 @@
-use std::{
-    collections::HashSet,
-    ffi::{CStr, CString},
-    os::raw::c_char,
-    ptr,
-};
+use std::collections::HashSet;
+use std::ffi::CStr;
+use std::ffi::CString;
+use std::os::raw::c_char;
+use std::ptr;
 
 pub const DEFAULT_VALIDATIONS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
 
@@ -82,10 +81,9 @@ pub fn cchars_to_string(cchars: &[c_char]) -> String {
 #[cfg(debug_assertions)]
 pub mod logger {
     use ash::vk;
-    use std::{
-        ffi::{c_void, CStr},
-        ptr,
-    };
+    use std::ffi::c_void;
+    use std::ffi::CStr;
+    use std::ptr;
 
     pub unsafe extern "system" fn debug_print_callback(
         severity: vk::DebugUtilsMessageSeverityFlagsEXT,
@@ -147,8 +145,6 @@ pub mod logger {
                 debug_loader,
             }
         }
-
-        pub fn destroy(&self) {}
     }
 
     impl Drop for VkDebugLogger {
