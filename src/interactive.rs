@@ -45,9 +45,3 @@ impl GlazeApp {
         })
     }
 }
-
-impl Drop for GlazeApp {
-    fn drop(&mut self) {
-        &self.swapchain.destroy();
-    }
-}

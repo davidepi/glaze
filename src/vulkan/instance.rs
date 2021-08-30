@@ -67,6 +67,14 @@ impl PresentedInstance {
     }
 }
 
+impl Drop for PresentedInstance {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_device(None);
+        }
+    }
+}
+
 impl Instance for PresentedInstance {
     fn entry(&self) -> &ash::Entry {
         &self.instance.entry
