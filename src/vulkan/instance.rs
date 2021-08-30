@@ -1,11 +1,11 @@
 use super::device::SurfaceSupport;
+use super::platform;
 use super::surface::Surface;
 use crate::vulkan::debug::ValidationLayers;
 use crate::vulkan::device::{create_logical_device, PhysicalDevice};
-use crate::vulkan::platform::required_extension_names;
+use crate::vulkan::platform::required_extensions;
 use ash::vk;
 use std::{
-    collections::HashSet,
     ffi::{CStr, CString},
     ptr,
 };
@@ -19,7 +19,6 @@ pub trait Instance {
     fn instance(&self) -> &ash::Instance;
     fn device(&self) -> &ash::Device;
     fn physical_device(&self) -> &PhysicalDevice;
-    fn required_extensions(&self) -> &[&'static CStr];
 }
 
 pub struct PresentedInstance {
@@ -33,11 +32,13 @@ pub struct PresentedInstance {
 }
 
 impl PresentedInstance {
-    pub fn new(required_extensions: &[&'static CStr], window: &Window) -> Self {
-        let instance = BasicInstance::new(required_extensions);
+    pub fn new(window: &Window) -> Self {
+        let instance_extensions = platform::required_extensions();
+        let device_extensions = vec![ash::extensions::khr::Swapchain::name()];
+        let instance = BasicInstance::new(&instance_extensions);
         let surface = Surface::new(&instance.entry, &instance.instance, &window);
         let physical_device =
-            PhysicalDevice::list_compatible(&instance.instance, required_extensions, &surface)
+            PhysicalDevice::list_compatible(&instance.instance, &device_extensions, &surface)
                 .into_iter()
                 .filter(|x| {
                     x.surface_capabilities(&surface)
@@ -46,7 +47,7 @@ impl PresentedInstance {
                 .last()
                 .expect("No compatible devices found");
         let device =
-            create_logical_device(&instance.instance, required_extensions, &physical_device);
+            create_logical_device(&instance.instance, &device_extensions, &physical_device);
         PresentedInstance {
             #[cfg(debug_assertions)]
             logger: VkDebugLogger::new(&instance.entry, &instance.instance),
@@ -82,31 +83,21 @@ impl Instance for PresentedInstance {
     fn physical_device(&self) -> &PhysicalDevice {
         &self.physical_device
     }
-
-    fn required_extensions(&self) -> &[&'static CStr] {
-        &self.instance.required_extensions
-    }
 }
 
 struct BasicInstance {
     entry: ash::Entry,
     instance: ash::Instance,
-    required_extensions: Vec<&'static CStr>,
 }
 
 impl BasicInstance {
-    fn new(required_extensions: &[&'static CStr]) -> Self {
+    fn new(extensions: &[&'static CStr]) -> Self {
         let entry = match unsafe { ash::Entry::new() } {
             Ok(entry) => entry,
             Err(err) => panic!("Failed to create entry: {}", err),
         };
-        let instance = create_instance(&entry, required_extensions);
-        let required_extensions = required_extensions.into_iter().copied().collect::<Vec<_>>();
-        BasicInstance {
-            entry,
-            instance,
-            required_extensions,
-        }
+        let instance = create_instance(&entry, extensions);
+        BasicInstance { entry, instance }
     }
 }
 
@@ -118,8 +109,7 @@ impl Drop for BasicInstance {
     }
 }
 
-fn create_instance(entry: &ash::Entry, required_extensions: &[&'static CStr]) -> ash::Instance {
-    let extensions = required_extensions;
+fn create_instance(entry: &ash::Entry, extensions: &[&'static CStr]) -> ash::Instance {
     let validations = ValidationLayers::application_default();
     if !validations.check_support(entry) {
         panic!("Some validation layers requested are not available");
@@ -140,13 +130,6 @@ fn create_instance(entry: &ash::Entry, required_extensions: &[&'static CStr]) ->
         engine_version: vk::make_api_version(0, ver_major, ver_minor, ver_patch),
         api_version: vk::API_VERSION_1_2,
     };
-    let extensions = extensions
-        .iter()
-        .cloned()
-        .chain(required_extension_names().into_iter())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
     let extensions_array = extensions.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
     let creation_info = vk::InstanceCreateInfo {
         s_type: vk::StructureType::INSTANCE_CREATE_INFO,

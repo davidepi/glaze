@@ -95,11 +95,6 @@ fn swapchain_init(
         } else {
             (vk::SharingMode::EXCLUSIVE, 0, ptr::null())
         };
-    let old_swapchain = if let Some(old) = old {
-        old
-    } else {
-        vk::SwapchainKHR::null()
-    };
     let ci = vk::SwapchainCreateInfoKHR {
         s_type: vk::StructureType::SWAPCHAIN_CREATE_INFO_KHR,
         p_next: ptr::null(),
@@ -118,16 +113,15 @@ fn swapchain_init(
         composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
         present_mode: present_mode,
         clipped: vk::TRUE,
-        old_swapchain,
+        old_swapchain: old.unwrap_or(vk::SwapchainKHR::null()),
     };
     let loader = ash::extensions::khr::Swapchain::new(instance.instance(), instance.device());
     let swapchain =
         unsafe { loader.create_swapchain(&ci, None) }.expect("Failed to create swapchain");
     let images = unsafe { loader.get_swapchain_images(swapchain) }.expect("Failed to get images");
-    let device = instance.device();
     let image_views = images
         .into_iter()
-        .map(|i| create_image_views(device, i, format.format))
+        .map(|i| create_image_views(instance.device(), i, format.format))
         .collect();
     Swapchain {
         swapchain,

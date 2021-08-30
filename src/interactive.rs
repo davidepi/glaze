@@ -1,6 +1,5 @@
-use std::rc::Rc;
-
 use crate::vulkan::{PresentedInstance, Swapchain};
+use std::rc::Rc;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
@@ -23,7 +22,7 @@ impl GlazeApp {
             .with_inner_size(winit::dpi::LogicalSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT))
             .build(event_loop)
             .unwrap();
-        let instance = Rc::new(PresentedInstance::new(&[], &window));
+        let instance = Rc::new(PresentedInstance::new(&window));
         let swapchain = Swapchain::create(instance.clone(), DEFAULT_WIDTH, DEFAULT_HEIGHT);
         GlazeApp {
             window,
