@@ -1,9 +1,8 @@
 use ash::vk;
 use std::ptr;
-use std::rc::Rc;
-
+use super::Device;
 use super::Instance;
-use super::PresentedInstance;
+use super::PresentInstance;
 
 pub struct Swapchain {
     swapchain: vk::SwapchainKHR,
@@ -13,11 +12,10 @@ pub struct Swapchain {
     image_views: Vec<vk::ImageView>,
     renderpass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
-    instance: Rc<PresentedInstance>,
 }
 
 impl Swapchain {
-    pub fn create(instance: Rc<PresentedInstance>, width: u32, height: u32) -> Self {
+    pub fn create(instance: &PresentInstance, width: u32, height: u32) -> Self {
         swapchain_init(instance, width, height, None)
     }
 
@@ -25,33 +23,32 @@ impl Swapchain {
         self.image_format
     }
 
-    pub fn re_create(self, width: u32, height: u32) -> Self {
-        swapchain_destroy(&self, true);
-        swapchain_init(self.instance.clone(), width, height, Some(self.swapchain))
+    pub fn re_create(self, instance: &PresentInstance, width: u32, height: u32) -> Self {
+        swapchain_destroy(&self, instance, true);
+        swapchain_init(instance, width, height, Some(self.swapchain))
     }
 
     pub fn image_views(&self) -> &[vk::ImageView] {
         &self.image_views
     }
-}
 
-impl Drop for Swapchain {
-    fn drop(&mut self) {
-        swapchain_destroy(&self, false);
+    pub fn destroy(&self, instance: &PresentInstance) {
+        swapchain_destroy(&self, instance, false);
     }
 }
 
-fn swapchain_destroy(swap: &Swapchain, partial: bool) {
+fn swapchain_destroy(swap: &Swapchain, instance: &PresentInstance, partial: bool) {
     unsafe {
         swap.framebuffers
             .iter()
-            .for_each(|fb| swap.instance.device().destroy_framebuffer(*fb, None));
-        swap.instance
+            .for_each(|fb| instance.device().logical().destroy_framebuffer(*fb, None));
+        instance
             .device()
+            .logical()
             .destroy_render_pass(swap.renderpass, None);
         swap.image_views
             .iter()
-            .for_each(|iw| swap.instance.device().destroy_image_view(*iw, None));
+            .for_each(|iw| instance.device().logical().destroy_image_view(*iw, None));
         if !partial {
             swap.loader.destroy_swapchain(swap.swapchain, None);
         }
@@ -59,14 +56,14 @@ fn swapchain_destroy(swap: &Swapchain, partial: bool) {
 }
 
 fn swapchain_init(
-    instance: Rc<PresentedInstance>,
+    instance: &PresentInstance,
     width: u32,
     height: u32,
     old: Option<vk::SwapchainKHR>,
 ) -> Swapchain {
     let surface_cap = instance.surface_capabilities();
+    let device = instance.device();
     let capabilities = surface_cap.capabilities;
-    let queue_fam = instance.physical_device().queue_indices;
     let format = surface_cap
         .formats
         .iter()
@@ -102,17 +99,6 @@ fn swapchain_init(
             .max_image_count
             .max(surface_cap.capabilities.min_image_count + 1)
     };
-    let queue_families_indices = [queue_fam.graphics_family, queue_fam.present_family];
-    let (image_sharing_mode, queue_family_index_count, p_queue_family_indices) =
-        if queue_fam.graphics_family != queue_fam.present_family {
-            (
-                vk::SharingMode::CONCURRENT,
-                2,
-                queue_families_indices.as_ptr(),
-            )
-        } else {
-            (vk::SharingMode::EXCLUSIVE, 0, ptr::null())
-        };
     let ci = vk::SwapchainCreateInfoKHR {
         s_type: vk::StructureType::SWAPCHAIN_CREATE_INFO_KHR,
         p_next: ptr::null(),
@@ -124,25 +110,25 @@ fn swapchain_init(
         image_extent: extent,
         image_array_layers: 1,
         image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
-        image_sharing_mode,
-        queue_family_index_count,
-        p_queue_family_indices,
+        image_sharing_mode: vk::SharingMode::EXCLUSIVE,
+        queue_family_index_count: 0,
+        p_queue_family_indices: ptr::null(),
         pre_transform: capabilities.current_transform,
         composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
-        present_mode: present_mode,
+        present_mode,
         clipped: vk::TRUE,
-        old_swapchain: old.unwrap_or(vk::SwapchainKHR::null()),
+        old_swapchain: old.unwrap_or_else(|| vk::SwapchainKHR::null()),
     };
-    let loader = ash::extensions::khr::Swapchain::new(instance.instance(), instance.device());
+    let loader = ash::extensions::khr::Swapchain::new(instance.instance(), device.logical());
     let swapchain =
         unsafe { loader.create_swapchain(&ci, None) }.expect("Failed to create swapchain");
     let images = unsafe { loader.get_swapchain_images(swapchain) }.expect("Failed to get images");
     let image_views = images
         .into_iter()
-        .map(|i| create_image_views(instance.device(), i, format.format))
+        .map(|i| create_image_views(device.logical(), i, format.format))
         .collect::<Vec<_>>();
-    let renderpass = create_renderpass(instance.device(), format.format);
-    let framebuffers = create_framebuffers(instance.device(), extent, &image_views, renderpass);
+    let renderpass = create_renderpass(device.logical(), format.format);
+    let framebuffers = create_framebuffers(device.logical(), extent, &image_views, renderpass);
     Swapchain {
         swapchain,
         loader,
@@ -151,7 +137,6 @@ fn swapchain_init(
         image_views,
         renderpass,
         framebuffers,
-        instance,
     }
 }
 

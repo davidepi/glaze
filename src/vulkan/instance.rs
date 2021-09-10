@@ -1,9 +1,9 @@
 use super::device::SurfaceSupport;
 use super::platform;
 use super::surface::Surface;
+use super::Device;
 use crate::vulkan::debug::ValidationLayers;
-use crate::vulkan::device::create_logical_device;
-use crate::vulkan::device::PhysicalDevice;
+use crate::vulkan::PresentDevice;
 use ash::vk;
 use std::ffi::CStr;
 use std::ffi::CString;
@@ -14,45 +14,34 @@ use winit::window::Window;
 use crate::vulkan::debug::logger::VkDebugLogger;
 
 pub trait Instance {
+    type DeviceItem;
     fn entry(&self) -> &ash::Entry;
     fn instance(&self) -> &ash::Instance;
-    fn device(&self) -> &ash::Device;
-    fn physical_device(&self) -> &PhysicalDevice;
+    fn device(&self) -> &Self::DeviceItem;
 }
 
-pub struct PresentedInstance {
+pub struct PresentInstance {
     #[cfg(debug_assertions)]
     logger: VkDebugLogger,
     surface: Surface,
-    physical_device: PhysicalDevice,
-    device: ash::Device,
+    device: PresentDevice,
     //the following one must be destroyed for last
     instance: BasicInstance,
 }
 
-impl PresentedInstance {
+impl PresentInstance {
     pub fn new(window: &Window) -> Self {
         let instance_extensions = platform::required_extensions();
         let device_extensions = vec![ash::extensions::khr::Swapchain::name()];
         let instance = BasicInstance::new(&instance_extensions);
         let surface = Surface::new(&instance.entry, &instance.instance, &window);
-        let physical_device =
-            PhysicalDevice::list_compatible(&instance.instance, &device_extensions, &surface)
-                .into_iter()
-                .filter(|x| {
-                    x.surface_capabilities(&surface)
-                        .has_formats_and_present_modes()
-                })
-                .last()
-                .expect("No compatible devices found");
-        let device =
-            create_logical_device(&instance.instance, &device_extensions, &physical_device);
-        PresentedInstance {
+
+        let device = PresentDevice::new(&instance.instance, &device_extensions, &surface);
+        PresentInstance {
             #[cfg(debug_assertions)]
             logger: VkDebugLogger::new(&instance.entry, &instance.instance),
             instance,
             surface,
-            physical_device,
             device,
         }
     }
@@ -62,19 +51,13 @@ impl PresentedInstance {
     }
 
     pub fn surface_capabilities(&self) -> SurfaceSupport {
-        self.physical_device.surface_capabilities(&self.surface)
+        self.device.physical().surface_capabilities(&self.surface)
     }
 }
 
-impl Drop for PresentedInstance {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_device(None);
-        }
-    }
-}
+impl Instance for PresentInstance {
+    type DeviceItem = PresentDevice;
 
-impl Instance for PresentedInstance {
     fn entry(&self) -> &ash::Entry {
         &self.instance.entry
     }
@@ -83,12 +66,8 @@ impl Instance for PresentedInstance {
         &self.instance.instance
     }
 
-    fn device(&self) -> &ash::Device {
+    fn device(&self) -> &PresentDevice {
         &self.device
-    }
-
-    fn physical_device(&self) -> &PhysicalDevice {
-        &self.physical_device
     }
 }
 

@@ -2,10 +2,69 @@ use super::debug::cchars_to_string;
 use super::debug::ValidationLayers;
 use super::surface::Surface;
 use ash::vk;
-use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::ptr;
+
+pub trait Device {
+    fn logical(&self) -> &ash::Device;
+    fn physical(&self) -> &PhysicalDevice;
+}
+
+pub struct PresentDevice {
+    logical: ash::Device,
+    physical: PhysicalDevice,
+    graphic_index: u32,
+    graphic_pool: vk::CommandPool,
+}
+
+impl PresentDevice {
+    pub fn new(instance: &ash::Instance, ext: &[&'static CStr], surface: &Surface) -> Self {
+        let physical = PhysicalDevice::list_all(instance, surface)
+            .into_iter()
+            .filter(|x| {
+                x.surface_capabilities(surface)
+                    .has_formats_and_present_modes()
+            })
+            .filter(|device| device_supports_requested_extensions(instance, ext, device.device))
+            .filter(|device| graphics_present_index(instance, device.device, surface).is_some())
+            .last()
+            .expect("No compatible devices found");
+        let graphic_index = graphics_present_index(instance, physical.device, surface).unwrap();
+        let all_queues = vec![graphic_index];
+        let logical = create_logical_device(instance, ext, &physical, &all_queues);
+        let graphic_pool = create_command_pool(&logical, graphic_index);
+        PresentDevice {
+            logical,
+            physical,
+            graphic_index,
+            graphic_pool,
+        }
+    }
+
+    pub fn graphic_index(&self) -> u32 {
+        self.graphic_index
+    }
+}
+
+impl Drop for PresentDevice {
+    fn drop(&mut self) {
+        unsafe {
+            self.logical.destroy_command_pool(self.graphic_pool, None);
+            self.logical.destroy_device(None);
+        }
+    }
+}
+
+impl Device for PresentDevice {
+    fn logical(&self) -> &ash::Device {
+        &self.logical
+    }
+
+    fn physical(&self) -> &PhysicalDevice {
+        &self.physical
+    }
+}
 
 pub struct SurfaceSupport {
     pub capabilities: vk::SurfaceCapabilitiesKHR,
@@ -19,37 +78,19 @@ impl SurfaceSupport {
     }
 }
 
-#[derive(Copy, Clone)]
-pub struct QueueFamilyIndices {
-    pub graphics_family: u32,
-    pub present_family: u32,
-}
-
-impl QueueFamilyIndices {
-    fn as_array(&self) -> [u32; 2] {
-        [self.graphics_family, self.present_family]
-    }
-}
-
 pub struct PhysicalDevice {
     pub device: vk::PhysicalDevice,
     pub properties: vk::PhysicalDeviceProperties,
     pub features: vk::PhysicalDeviceFeatures,
-    pub queue_indices: QueueFamilyIndices,
 }
 
 impl PhysicalDevice {
-    pub fn list_compatible(
-        instance: &ash::Instance,
-        ext: &[&'static CStr],
-        surface: &Surface,
-    ) -> Vec<Self> {
+    pub fn list_all(instance: &ash::Instance, surface: &Surface) -> Vec<Self> {
         let physical_devices =
             unsafe { instance.enumerate_physical_devices() }.expect("No physical devices found");
         let mut wscores = physical_devices
             .into_iter()
-            .map(|device| rate_physical_device_suitability(instance, ext, device, surface))
-            .flatten()
+            .map(|device| rate_physical_device_suitability(instance, device, surface))
             .filter(|(score, _)| *score > 0)
             .collect::<Vec<_>>();
         wscores.sort_by_key(|(score, _)| *score);
@@ -85,10 +126,9 @@ impl PhysicalDevice {
 
 fn rate_physical_device_suitability(
     instance: &ash::Instance,
-    ext: &[&'static CStr],
     physical_device: vk::PhysicalDevice,
     surface: &Surface,
-) -> Option<(u32, PhysicalDevice)> {
+) -> (u32, PhysicalDevice) {
     let vkinstance = &instance;
     let device_properties = unsafe { vkinstance.get_physical_device_properties(physical_device) };
     let device_features = unsafe { vkinstance.get_physical_device_features(physical_device) };
@@ -98,24 +138,14 @@ fn rate_physical_device_suitability(
         vk::PhysicalDeviceType::CPU => 1,
         vk::PhysicalDeviceType::OTHER | _ => 0,
     };
-    if device_supports_requested_extensions(instance, ext, physical_device) {
-        let queue_family = find_queue_families(vkinstance, physical_device, surface);
-        if let Some(queue_family) = queue_family {
-            Some((
-                score,
-                PhysicalDevice {
-                    device: physical_device,
-                    properties: device_properties,
-                    features: device_features,
-                    queue_indices: queue_family,
-                },
-            ))
-        } else {
-            None
-        }
-    } else {
-        None
-    }
+    (
+        score,
+        PhysicalDevice {
+            device: physical_device,
+            properties: device_properties,
+            features: device_features,
+        },
+    )
 }
 
 fn device_supports_requested_extensions(
@@ -133,53 +163,47 @@ fn device_supports_requested_extensions(
         .any(|x| !available_extensions.contains(&x))
 }
 
-fn find_queue_families(
+fn graphics_present_index(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
     surface: &Surface,
-) -> Option<QueueFamilyIndices> {
+) -> Option<u32> {
     let queue_families =
         unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
-    let graphics_family = queue_families
-        .iter()
-        .position(|queue| queue.queue_flags.contains(vk::QueueFlags::GRAPHICS));
-    let present_family = (0..queue_families.len()).into_iter().find(|x| unsafe {
-        surface
-            .loader
-            .get_physical_device_surface_support(physical_device, *x as u32, surface.surface)
-            .unwrap()
-    });
-    if let (Some(graphics_family), Some(present_family)) = (graphics_family, present_family) {
-        Some(QueueFamilyIndices {
-            graphics_family: graphics_family as u32,
-            present_family: present_family as u32,
+    queue_families
+        .into_iter()
+        .enumerate()
+        .filter(|(index, prop)| prop.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+        .filter(|(index, prop)| {
+            unsafe {
+                surface.loader.get_physical_device_surface_support(
+                    physical_device,
+                    *index as u32,
+                    surface.surface,
+                )
+            }
+            .is_ok()
         })
-    } else {
-        None
-    }
+        .map(|(index, _)| index as u32)
+        .next()
 }
 
 pub fn create_logical_device(
     instance: &ash::Instance,
     ext: &[&'static CStr],
     device: &PhysicalDevice,
+    queue_indices: &[u32],
 ) -> ash::Device {
     let validations = ValidationLayers::application_default();
     let physical_device = device.device;
-    let queue_families = &device.queue_indices;
-    let queue_families_set = queue_families
-        .as_array()
-        .iter()
-        .copied()
-        .collect::<BTreeSet<_>>();
-    let mut queue_create_infos = Vec::with_capacity(queue_families_set.len());
+    let mut queue_create_infos = Vec::with_capacity(queue_indices.len());
     let queue_priorities = [1.0];
-    for queue_index in queue_families_set {
+    for queue_index in queue_indices {
         let queue_create_info = vk::DeviceQueueCreateInfo {
             s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::DeviceQueueCreateFlags::empty(),
-            queue_family_index: queue_index,
+            queue_family_index: *queue_index,
             queue_count: queue_priorities.len() as u32,
             p_queue_priorities: queue_priorities.as_ptr(),
         };
@@ -205,4 +229,14 @@ pub fn create_logical_device(
     let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
         .expect("Failed to create logical device");
     device
+}
+
+fn create_command_pool(device: &ash::Device, queue_family_index: u32) -> vk::CommandPool {
+    let pool_ci = vk::CommandPoolCreateInfo {
+        s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
+        p_next: ptr::null(),
+        flags: Default::default(),
+        queue_family_index,
+    };
+    unsafe { device.create_command_pool(&pool_ci, None) }.expect("Failed to create command pool")
 }
