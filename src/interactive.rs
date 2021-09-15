@@ -1,9 +1,16 @@
+use std::ptr;
+
+use crate::vulkan::Device;
+use crate::vulkan::Instance;
 use crate::vulkan::PresentInstance;
+use crate::vulkan::PresentSync;
 use crate::vulkan::Swapchain;
+use ash::vk;
 use winit::event::Event;
 use winit::event::WindowEvent;
 use winit::event_loop::ControlFlow;
 use winit::event_loop::EventLoop;
+use winit::platform::run_return::EventLoopExtRunReturn;
 use winit::window::Window;
 use winit::window::WindowBuilder;
 
@@ -14,41 +21,143 @@ pub struct GlazeApp {
     window: Window,
     instance: PresentInstance,
     swapchain: Swapchain,
+    sync: PresentSync,
+    render_width: u32,
+    render_height: u32,
 }
 
 impl GlazeApp {
-    pub fn new(event_loop: &EventLoop<()>) -> GlazeApp {
+    pub fn create(event_loop: &EventLoop<()>) -> GlazeApp {
+        let render_width = DEFAULT_WIDTH;
+        let render_height = DEFAULT_HEIGHT;
         let window = WindowBuilder::new()
             .with_title(env!("CARGO_PKG_NAME"))
-            .with_inner_size(winit::dpi::LogicalSize::new(DEFAULT_WIDTH, DEFAULT_HEIGHT))
+            .with_inner_size(winit::dpi::LogicalSize::new(render_width, render_height))
+            .with_resizable(false)
             .build(event_loop)
             .unwrap();
-        let instance = PresentInstance::new(&window);
-        let swapchain = Swapchain::create(&instance, DEFAULT_WIDTH, DEFAULT_HEIGHT);
+        let mut instance = PresentInstance::new(&window);
+        let swapchain = Swapchain::create(&mut instance, render_width, render_height);
+        let sync = PresentSync::create(instance.device());
         GlazeApp {
             window,
             instance,
             swapchain,
+            sync,
+            render_width,
+            render_height,
         }
     }
 
-    pub fn main_loop(self, event_loop: EventLoop<()>) -> ! {
-        event_loop.run(move |event, _, control_flow| match event {
+    fn wait_idle(&self) {
+        unsafe { self.instance.device().logical().device_wait_idle() }.expect("Failed to wait idle")
+    }
+
+    pub fn change_render_size(&mut self, width: u32, height: u32) {
+        self.wait_idle();
+        self.render_width = width;
+        self.render_height = height;
+        self.swapchain.re_create(&mut self.instance, width, height);
+    }
+
+    pub fn draw_frame(&mut self) {
+        let frame_sync = self.sync.next();
+        frame_sync.wait_acquire(self.instance.device());
+        if let Some((acquired, frame)) = self.swapchain.acquire_next_image(frame_sync) {
+            let cmd = self.instance.device().graphic_command_buffer(acquired);
+            let device = self.instance.device().logical();
+            unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
+                .expect("Failed to reset command buffer");
+            let cmd_ci = vk::CommandBufferBeginInfo {
+                s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+                p_next: ptr::null(),
+                flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+                p_inheritance_info: ptr::null(),
+            };
+            let color = [vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.0, 1.0, 0.0, 1.0],
+                },
+            }];
+            let render_area = vk::Rect2D {
+                offset: vk::Offset2D { x: 0, y: 0 },
+                extent: self.swapchain.extent(),
+            };
+            let rp_ci = vk::RenderPassBeginInfo {
+                s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
+                p_next: ptr::null(),
+                render_pass: self.swapchain.default_render_pass(),
+                framebuffer: frame,
+                render_area,
+                clear_value_count: color.len() as u32,
+                p_clear_values: color.as_ptr(),
+            };
+            unsafe {
+                device
+                    .begin_command_buffer(cmd, &cmd_ci)
+                    .expect("Failed to begin command buffer");
+                device.cmd_begin_render_pass(cmd, &rp_ci, vk::SubpassContents::INLINE);
+                device.cmd_end_render_pass(cmd);
+                device
+                    .end_command_buffer(cmd)
+                    .expect("Failed to end command buffer");
+            }
+            let wait_sem = [frame_sync.image_available()];
+            let signal_sem = [frame_sync.render_finished()];
+            let submit_ci = vk::SubmitInfo {
+                s_type: vk::StructureType::SUBMIT_INFO,
+                p_next: ptr::null(),
+                wait_semaphore_count: wait_sem.len() as u32,
+                p_wait_semaphores: wait_sem.as_ptr(),
+                p_wait_dst_stage_mask: &vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                command_buffer_count: 1,
+                p_command_buffers: &cmd,
+                signal_semaphore_count: signal_sem.len() as u32,
+                p_signal_semaphores: signal_sem.as_ptr(),
+            };
+            let swapchains = [self.swapchain.swapchain_khr()];
+            let present_ci = vk::PresentInfoKHR {
+                s_type: vk::StructureType::PRESENT_INFO_KHR,
+                p_next: ptr::null(),
+                wait_semaphore_count: signal_sem.len() as u32,
+                p_wait_semaphores: signal_sem.as_ptr(),
+                swapchain_count: swapchains.len() as u32,
+                p_swapchains: swapchains.as_ptr(),
+                p_image_indices: &acquired,
+                p_results: ptr::null_mut(),
+            };
+            let queue = self.instance.device().graphic_queue();
+            unsafe {
+                device
+                    .queue_submit(queue, &[submit_ci], frame_sync.acquire_fence())
+                    .expect("Failed to submit render task");
+            }
+            self.swapchain.queue_present(queue, &present_ci);
+        } else {
+            self.swapchain
+                .re_create(&mut self.instance, self.render_width, self.render_height);
+        }
+    }
+
+    pub fn main_loop(&mut self, mut event_loop: EventLoop<()>) {
+        event_loop.run_return(|event, _, control_flow| match event {
             Event::WindowEvent {
                 event,
                 window_id: _,
             } => match event {
-                WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                WindowEvent::CloseRequested => {
+                    *control_flow = ControlFlow::Exit;
+                }
                 _ => {}
             },
-            Event::MainEventsCleared => self.window.request_redraw(),
+            Event::MainEventsCleared => self.draw_frame(),
+            Event::LoopDestroyed => self.wait_idle(),
             _ => (),
-        })
+        });
     }
-}
 
-impl Drop for GlazeApp {
-    fn drop(&mut self) {
-        &self.swapchain.destroy(&self.instance);
+    pub fn destroy(self) {
+        self.sync.destroy(self.instance.device());
+        self.swapchain.destroy(&self.instance);
     }
 }

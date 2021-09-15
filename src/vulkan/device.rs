@@ -16,6 +16,8 @@ pub struct PresentDevice {
     physical: PhysicalDevice,
     graphic_index: u32,
     graphic_pool: vk::CommandPool,
+    graphic_queue: vk::Queue,
+    graphic_buffers: Vec<vk::CommandBuffer>,
 }
 
 impl PresentDevice {
@@ -34,22 +36,40 @@ impl PresentDevice {
         let all_queues = vec![graphic_index];
         let logical = create_logical_device(instance, ext, &physical, &all_queues);
         let graphic_pool = create_command_pool(&logical, graphic_index);
+        let graphic_queue = unsafe { logical.get_device_queue(graphic_index, 0) };
+        let graphic_buffers = create_command_buffers(&logical, graphic_pool, 1);
         PresentDevice {
             logical,
             physical,
             graphic_index,
             graphic_pool,
+            graphic_queue,
+            graphic_buffers,
         }
     }
 
-    pub fn graphic_index(&self) -> u32 {
-        self.graphic_index
+    pub fn resize_graphic_command_buffers(&mut self, count: u32) {
+        unsafe {
+            self.logical
+                .free_command_buffers(self.graphic_pool, &self.graphic_buffers)
+        };
+        self.graphic_buffers = create_command_buffers(&self.logical, self.graphic_pool, count);
+    }
+
+    pub fn graphic_command_buffer(&self, index: u32) -> vk::CommandBuffer {
+        self.graphic_buffers[index as usize]
+    }
+
+    pub fn graphic_queue(&self) -> vk::Queue {
+        self.graphic_queue
     }
 }
 
 impl Drop for PresentDevice {
     fn drop(&mut self) {
         unsafe {
+            self.logical
+                .free_command_buffers(self.graphic_pool, &self.graphic_buffers);
             self.logical.destroy_command_pool(self.graphic_pool, None);
             self.logical.destroy_device(None);
         }
@@ -235,8 +255,24 @@ fn create_command_pool(device: &ash::Device, queue_family_index: u32) -> vk::Com
     let pool_ci = vk::CommandPoolCreateInfo {
         s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
         p_next: ptr::null(),
-        flags: Default::default(),
+        flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
         queue_family_index,
     };
     unsafe { device.create_command_pool(&pool_ci, None) }.expect("Failed to create command pool")
+}
+
+fn create_command_buffers(
+    device: &ash::Device,
+    command_pool: vk::CommandPool,
+    count: u32,
+) -> Vec<vk::CommandBuffer> {
+    let alloc_ci = vk::CommandBufferAllocateInfo {
+        s_type: vk::StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+        p_next: ptr::null(),
+        command_pool,
+        level: vk::CommandBufferLevel::PRIMARY,
+        command_buffer_count: count,
+    };
+    unsafe { device.allocate_command_buffers(&alloc_ci) }
+        .expect("Failed to allocate command buffers")
 }

@@ -1,8 +1,9 @@
-use ash::vk;
-use std::ptr;
 use super::Device;
 use super::Instance;
+use super::PresentFrameSync;
 use super::PresentInstance;
+use ash::vk;
+use std::ptr;
 
 pub struct Swapchain {
     swapchain: vk::SwapchainKHR,
@@ -15,21 +16,60 @@ pub struct Swapchain {
 }
 
 impl Swapchain {
-    pub fn create(instance: &PresentInstance, width: u32, height: u32) -> Self {
-        swapchain_init(instance, width, height, None)
+    pub fn create(instance: &mut PresentInstance, width: u32, height: u32) -> Self {
+        let swapchain = swapchain_init(instance, width, height, None);
+        instance.resize_device_command_buffers(swapchain.framebuffers.len() as u32);
+        swapchain
     }
 
     pub fn image_format(&self) -> vk::Format {
         self.image_format
     }
 
-    pub fn re_create(self, instance: &PresentInstance, width: u32, height: u32) -> Self {
+    pub fn re_create(&mut self, instance: &mut PresentInstance, width: u32, height: u32) {
         swapchain_destroy(&self, instance, true);
-        swapchain_init(instance, width, height, Some(self.swapchain))
+        *self = swapchain_init(instance, width, height, Some(self.swapchain));
+        instance.resize_device_command_buffers(self.framebuffers.len() as u32);
     }
 
     pub fn image_views(&self) -> &[vk::ImageView] {
         &self.image_views
+    }
+
+    pub fn extent(&self) -> vk::Extent2D {
+        self.extent
+    }
+
+    pub fn swapchain_khr(&self) -> vk::SwapchainKHR {
+        self.swapchain
+    }
+
+    pub fn queue_present(&self, queue: vk::Queue, present_info: &vk::PresentInfoKHR) {
+        unsafe {
+            self.loader
+                .queue_present(queue, present_info)
+                .expect("Failed to present image on screen");
+        }
+    }
+
+    pub fn acquire_next_image(&self, sync: &PresentFrameSync) -> Option<(u32, vk::Framebuffer)> {
+        let acquired = unsafe {
+            self.loader.acquire_next_image(
+                self.swapchain,
+                u64::MAX,
+                sync.image_available(),
+                vk::Fence::null(),
+            )
+        };
+        match acquired {
+            Ok((index, _)) => Some((index, self.framebuffers[index as usize])),
+            Err(val @ vk::Result::ERROR_OUT_OF_DATE_KHR) => None,
+            _ => panic!("Failed to acquire next image"),
+        }
+    }
+
+    pub fn default_render_pass(&self) -> vk::RenderPass {
+        self.renderpass
     }
 
     pub fn destroy(&self, instance: &PresentInstance) {

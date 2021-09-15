@@ -35,7 +35,6 @@ impl PresentInstance {
         let device_extensions = vec![ash::extensions::khr::Swapchain::name()];
         let instance = BasicInstance::new(&instance_extensions);
         let surface = Surface::new(&instance.entry, &instance.instance, &window);
-
         let device = PresentDevice::new(&instance.instance, &device_extensions, &surface);
         PresentInstance {
             #[cfg(debug_assertions)]
@@ -48,6 +47,10 @@ impl PresentInstance {
 
     pub fn surface(&self) -> &Surface {
         &self.surface
+    }
+
+    pub fn resize_device_command_buffers(&mut self, count: u32) {
+        self.device.resize_graphic_command_buffers(count);
     }
 
     pub fn surface_capabilities(&self) -> SurfaceSupport {
