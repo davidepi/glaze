@@ -35,7 +35,7 @@ impl PresentFrameSync {
         let fence = &[self.acquire];
         unsafe {
             device
-                .wait_for_fences(fence, true, 1)
+                .wait_for_fences(fence, true, u64::MAX)
                 .expect("Failed to wait on fence");
             device.reset_fences(fence).expect("Failed to reset fence");
         }

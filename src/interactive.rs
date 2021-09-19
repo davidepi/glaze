@@ -4,6 +4,7 @@ use crate::vulkan::Device;
 use crate::vulkan::Instance;
 use crate::vulkan::PresentInstance;
 use crate::vulkan::PresentSync;
+use crate::vulkan::RealtimeRenderer;
 use crate::vulkan::Swapchain;
 use ash::vk;
 use winit::event::Event;
@@ -19,11 +20,7 @@ pub const DEFAULT_HEIGHT: u32 = 600;
 
 pub struct GlazeApp {
     window: Window,
-    instance: PresentInstance,
-    swapchain: Swapchain,
-    sync: PresentSync,
-    render_width: u32,
-    render_height: u32,
+    renderer: RealtimeRenderer,
 }
 
 impl GlazeApp {
@@ -36,36 +33,17 @@ impl GlazeApp {
             .with_resizable(false)
             .build(event_loop)
             .unwrap();
-        let mut instance = PresentInstance::new(&window);
-        let swapchain = Swapchain::create(&mut instance, render_width, render_height);
-        let sync = PresentSync::create(instance.device());
-        GlazeApp {
-            window,
-            instance,
-            swapchain,
-            sync,
-            render_width,
-            render_height,
-        }
-    }
-
-    fn wait_idle(&self) {
-        unsafe { self.instance.device().logical().device_wait_idle() }.expect("Failed to wait idle")
-    }
-
-    pub fn change_render_size(&mut self, width: u32, height: u32) {
-        self.wait_idle();
-        self.render_width = width;
-        self.render_height = height;
-        self.swapchain.re_create(&mut self.instance, width, height);
+        let renderer = RealtimeRenderer::create(&window, render_width, render_height);
+        GlazeApp { window, renderer }
     }
 
     pub fn draw_frame(&mut self) {
-        let frame_sync = self.sync.next();
-        frame_sync.wait_acquire(self.instance.device());
-        if let Some((acquired, frame)) = self.swapchain.acquire_next_image(frame_sync) {
-            let cmd = self.instance.device().graphic_command_buffer(acquired);
-            let device = self.instance.device().logical();
+        let r = &mut self.renderer;
+        let frame_sync = r.sync.next();
+        frame_sync.wait_acquire(r.instance.device());
+        if let Some((acquired, frame)) = r.swapchain.acquire_next_image(frame_sync) {
+            let cmd = r.instance.device().graphic_command_buffer(acquired);
+            let device = r.instance.device().logical();
             unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
                 .expect("Failed to reset command buffer");
             let cmd_ci = vk::CommandBufferBeginInfo {
@@ -81,12 +59,12 @@ impl GlazeApp {
             }];
             let render_area = vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: self.swapchain.extent(),
+                extent: r.swapchain.extent(),
             };
             let rp_ci = vk::RenderPassBeginInfo {
                 s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
                 p_next: ptr::null(),
-                render_pass: self.swapchain.default_render_pass(),
+                render_pass: r.swapchain.default_render_pass(),
                 framebuffer: frame,
                 render_area,
                 clear_value_count: color.len() as u32,
@@ -115,7 +93,7 @@ impl GlazeApp {
                 signal_semaphore_count: signal_sem.len() as u32,
                 p_signal_semaphores: signal_sem.as_ptr(),
             };
-            let swapchains = [self.swapchain.swapchain_khr()];
+            let swapchains = [r.swapchain.swapchain_khr()];
             let present_ci = vk::PresentInfoKHR {
                 s_type: vk::StructureType::PRESENT_INFO_KHR,
                 p_next: ptr::null(),
@@ -126,16 +104,15 @@ impl GlazeApp {
                 p_image_indices: &acquired,
                 p_results: ptr::null_mut(),
             };
-            let queue = self.instance.device().graphic_queue();
+            let queue = r.instance.device().graphic_queue();
             unsafe {
                 device
                     .queue_submit(queue, &[submit_ci], frame_sync.acquire_fence())
                     .expect("Failed to submit render task");
             }
-            self.swapchain.queue_present(queue, &present_ci);
+            r.swapchain.queue_present(queue, &present_ci);
         } else {
-            self.swapchain
-                .re_create(&mut self.instance, self.render_width, self.render_height);
+            return; // out of date swapchain. the resize is called by winit so wait next frame
         }
     }
 
@@ -151,13 +128,12 @@ impl GlazeApp {
                 _ => {}
             },
             Event::MainEventsCleared => self.draw_frame(),
-            Event::LoopDestroyed => self.wait_idle(),
+            Event::LoopDestroyed => self.renderer.wait_idle(),
             _ => (),
         });
     }
 
     pub fn destroy(self) {
-        self.sync.destroy(self.instance.device());
-        self.swapchain.destroy(&self.instance);
+        self.renderer.destroy();
     }
 }
