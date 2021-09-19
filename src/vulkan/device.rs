@@ -17,7 +17,6 @@ pub struct PresentDevice {
     graphic_index: u32,
     graphic_pool: vk::CommandPool,
     graphic_queue: vk::Queue,
-    graphic_buffers: Vec<vk::CommandBuffer>,
 }
 
 impl PresentDevice {
@@ -37,27 +36,24 @@ impl PresentDevice {
         let logical = create_logical_device(instance, ext, &physical, &all_queues);
         let graphic_pool = create_command_pool(&logical, graphic_index);
         let graphic_queue = unsafe { logical.get_device_queue(graphic_index, 0) };
-        let graphic_buffers = create_command_buffers(&logical, graphic_pool, 1);
         PresentDevice {
             logical,
             physical,
             graphic_index,
             graphic_pool,
             graphic_queue,
-            graphic_buffers,
         }
     }
 
-    pub fn resize_graphic_command_buffers(&mut self, count: u32) {
-        unsafe {
-            self.logical
-                .free_command_buffers(self.graphic_pool, &self.graphic_buffers)
-        };
-        self.graphic_buffers = create_command_buffers(&self.logical, self.graphic_pool, count);
+    pub fn create_command_buffers(&self, count: u32) -> Vec<vk::CommandBuffer> {
+        create_command_buffers(&self.logical, self.graphic_pool, count)
     }
 
-    pub fn graphic_command_buffer(&self, index: u32) -> vk::CommandBuffer {
-        self.graphic_buffers[index as usize]
+    pub fn destroy_command_buffers(&self, buffers: &[vk::CommandBuffer]) {
+        unsafe {
+            self.logical
+                .free_command_buffers(self.graphic_pool, &buffers);
+        }
     }
 
     pub fn graphic_queue(&self) -> vk::Queue {
@@ -68,8 +64,6 @@ impl PresentDevice {
 impl Drop for PresentDevice {
     fn drop(&mut self) {
         unsafe {
-            self.logical
-                .free_command_buffers(self.graphic_pool, &self.graphic_buffers);
             self.logical.destroy_command_pool(self.graphic_pool, None);
             self.logical.destroy_device(None);
         }

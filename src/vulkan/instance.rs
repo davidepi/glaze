@@ -49,10 +49,6 @@ impl PresentInstance {
         &self.surface
     }
 
-    pub fn resize_device_command_buffers(&mut self, count: u32) {
-        self.device.resize_graphic_command_buffers(count);
-    }
-
     pub fn surface_capabilities(&self) -> SurfaceSupport {
         self.device.physical().surface_capabilities(&self.surface)
     }

@@ -41,11 +41,12 @@ impl GlazeApp {
         let r = &mut self.renderer;
         let frame_sync = r.sync.next();
         frame_sync.wait_acquire(r.instance.device());
-        if let Some((acquired, frame)) = r.swapchain.acquire_next_image(frame_sync) {
-            let cmd = r.instance.device().graphic_command_buffer(acquired);
+        if let Some(acquired) = r.swapchain.acquire_next_image(frame_sync) {
             let device = r.instance.device().logical();
-            unsafe { device.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty()) }
-                .expect("Failed to reset command buffer");
+            unsafe {
+                device.reset_command_buffer(acquired.cmd, vk::CommandBufferResetFlags::empty())
+            }
+            .expect("Failed to reset command buffer");
             let cmd_ci = vk::CommandBufferBeginInfo {
                 s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
                 p_next: ptr::null(),
@@ -65,19 +66,19 @@ impl GlazeApp {
                 s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
                 p_next: ptr::null(),
                 render_pass: r.swapchain.default_render_pass(),
-                framebuffer: frame,
+                framebuffer: acquired.framebuffer,
                 render_area,
                 clear_value_count: color.len() as u32,
                 p_clear_values: color.as_ptr(),
             };
             unsafe {
                 device
-                    .begin_command_buffer(cmd, &cmd_ci)
+                    .begin_command_buffer(acquired.cmd, &cmd_ci)
                     .expect("Failed to begin command buffer");
-                device.cmd_begin_render_pass(cmd, &rp_ci, vk::SubpassContents::INLINE);
-                device.cmd_end_render_pass(cmd);
+                device.cmd_begin_render_pass(acquired.cmd, &rp_ci, vk::SubpassContents::INLINE);
+                device.cmd_end_render_pass(acquired.cmd);
                 device
-                    .end_command_buffer(cmd)
+                    .end_command_buffer(acquired.cmd)
                     .expect("Failed to end command buffer");
             }
             let wait_sem = [frame_sync.image_available()];
@@ -89,7 +90,7 @@ impl GlazeApp {
                 p_wait_semaphores: wait_sem.as_ptr(),
                 p_wait_dst_stage_mask: &vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
                 command_buffer_count: 1,
-                p_command_buffers: &cmd,
+                p_command_buffers: &acquired.cmd,
                 signal_semaphore_count: signal_sem.len() as u32,
                 p_signal_semaphores: signal_sem.as_ptr(),
             };
@@ -101,7 +102,7 @@ impl GlazeApp {
                 p_wait_semaphores: signal_sem.as_ptr(),
                 swapchain_count: swapchains.len() as u32,
                 p_swapchains: swapchains.as_ptr(),
-                p_image_indices: &acquired,
+                p_image_indices: &acquired.index,
                 p_results: ptr::null_mut(),
             };
             let queue = r.instance.device().graphic_queue();
