@@ -5,6 +5,12 @@ use super::PresentInstance;
 use ash::vk;
 use std::ptr;
 
+pub struct AcquiredImage {
+    pub index: u32,
+    pub framebuffer: vk::Framebuffer,
+    pub cmd: vk::CommandBuffer,
+}
+
 pub struct Swapchain {
     swapchain: vk::SwapchainKHR,
     loader: ash::extensions::khr::Swapchain,
@@ -13,12 +19,12 @@ pub struct Swapchain {
     image_views: Vec<vk::ImageView>,
     renderpass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
+    command_buffers: Vec<vk::CommandBuffer>,
 }
 
 impl Swapchain {
     pub fn create(instance: &mut PresentInstance, width: u32, height: u32) -> Self {
         let swapchain = swapchain_init(instance, width, height, None);
-        instance.resize_device_command_buffers(swapchain.framebuffers.len() as u32);
         swapchain
     }
 
@@ -29,7 +35,6 @@ impl Swapchain {
     pub fn re_create(&mut self, instance: &mut PresentInstance, width: u32, height: u32) {
         swapchain_destroy(&self, instance, true);
         *self = swapchain_init(instance, width, height, Some(self.swapchain));
-        instance.resize_device_command_buffers(self.framebuffers.len() as u32);
     }
 
     pub fn image_views(&self) -> &[vk::ImageView] {
@@ -52,7 +57,7 @@ impl Swapchain {
         }
     }
 
-    pub fn acquire_next_image(&self, sync: &PresentFrameSync) -> Option<(u32, vk::Framebuffer)> {
+    pub fn acquire_next_image(&self, sync: &PresentFrameSync) -> Option<AcquiredImage> {
         let acquired = unsafe {
             self.loader.acquire_next_image(
                 self.swapchain,
@@ -62,7 +67,11 @@ impl Swapchain {
             )
         };
         match acquired {
-            Ok((index, _)) => Some((index, self.framebuffers[index as usize])),
+            Ok((index, _)) => Some(AcquiredImage {
+                index,
+                framebuffer: self.framebuffers[index as usize],
+                cmd: self.command_buffers[index as usize],
+            }),
             Err(val @ vk::Result::ERROR_OUT_OF_DATE_KHR) => None,
             _ => panic!("Failed to acquire next image"),
         }
@@ -79,6 +88,9 @@ impl Swapchain {
 
 fn swapchain_destroy(swap: &Swapchain, instance: &PresentInstance, partial: bool) {
     unsafe {
+        instance
+            .device()
+            .destroy_command_buffers(&swap.command_buffers);
         swap.framebuffers
             .iter()
             .for_each(|fb| instance.device().logical().destroy_framebuffer(*fb, None));
@@ -169,6 +181,7 @@ fn swapchain_init(
         .collect::<Vec<_>>();
     let renderpass = create_renderpass(device.logical(), format.format);
     let framebuffers = create_framebuffers(device.logical(), extent, &image_views, renderpass);
+    let command_buffers = device.create_command_buffers(framebuffers.len() as u32);
     Swapchain {
         swapchain,
         loader,
@@ -177,6 +190,7 @@ fn swapchain_init(
         image_views,
         renderpass,
         framebuffers,
+        command_buffers,
     }
 }
 
