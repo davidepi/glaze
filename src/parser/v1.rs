@@ -1,8 +1,12 @@
 use super::ParsedContent;
 use super::HEADER_LEN;
+use crate::geometry::Camera;
 use crate::geometry::Mesh;
+use crate::geometry::PerspectiveCam;
+use crate::geometry::Scene;
 use crate::geometry::Vertex;
 use cgmath::Matrix4;
+use cgmath::Point3;
 use cgmath::Vector2 as Vec2;
 use cgmath::Vector3 as Vec3;
 use std::convert::TryInto;
@@ -12,11 +16,13 @@ use std::io::Read;
 use std::io::Seek;
 use std::io::SeekFrom;
 
-const CONTENT_LIST_SIZE: usize = 16;
+const CONTENT_LIST_SIZE: usize = std::mem::size_of::<Offsets>();
 
+#[repr(packed)]
 struct Offsets {
     vert_len: u64, // amount of data in bytes
     mesh_len: u64,
+    cam_len: u16,
 }
 
 impl Offsets {
@@ -26,13 +32,19 @@ impl Offsets {
         file.read_exact(&mut cl_data)?;
         let vert_len = u64::from_le_bytes(cl_data[0..8].try_into().unwrap());
         let mesh_len = u64::from_le_bytes(cl_data[8..16].try_into().unwrap());
-        Ok(Offsets { vert_len, mesh_len })
+        let cam_len = u16::from_le_bytes(cl_data[16..18].try_into().unwrap());
+        Ok(Offsets {
+            vert_len,
+            mesh_len,
+            cam_len,
+        })
     }
 }
 
 pub(super) struct ContentV1 {
     vertices: Vec<Vertex>,
     meshes: Vec<Mesh>,
+    cameras: Vec<Camera>,
 }
 
 impl ContentV1 {
@@ -44,36 +56,57 @@ impl ContentV1 {
         file.take(offsets.vert_len).read_to_end(&mut vert_data)?; // avoid zeroing vec
         let mut mesh_data = Vec::with_capacity(offsets.mesh_len as usize);
         file.take(offsets.mesh_len).read_to_end(&mut mesh_data)?; // avoid zeroing vec
+        let mut cam_data = Vec::with_capacity(offsets.cam_len as usize);
+        file.take(offsets.cam_len as u64)
+            .read_to_end(&mut cam_data)?; // avoid zeroing vec
         let vert_chunk = VertexChunk::decode(vert_data);
         let mesh_chunk = MeshChunk::decode(mesh_data);
+        let cam_chunk = CameraChunk::decode(cam_data);
         Ok(ContentV1 {
             vertices: vert_chunk.elements(),
             meshes: mesh_chunk.elements(),
+            cameras: cam_chunk.elements(),
         })
     }
 
-    pub(super) fn serialize(vert: &[Vertex], meshes: &[Mesh]) -> Vec<u8> {
-        let vert_chunk = VertexChunk::encode(vert);
-        let mesh_chunk = MeshChunk::encode(meshes);
+    pub(super) fn serialize(scene: &Scene) -> Vec<u8> {
+        let vert_chunk = VertexChunk::encode(&scene.vertices);
+        let mesh_chunk = MeshChunk::encode(&scene.meshes);
+        let cam_chunk = CameraChunk::encode(&scene.cameras);
         let vert_size = vert_chunk.size_bytes();
         let mesh_size = mesh_chunk.size_bytes();
-        let total_size = CONTENT_LIST_SIZE + vert_size;
+        let cam_size = cam_chunk.size_bytes();
+        let total_size = CONTENT_LIST_SIZE + vert_size + mesh_size + cam_size;
         let mut retval = Vec::with_capacity(total_size);
         retval.extend_from_slice(&u64::to_le_bytes(vert_size as u64));
-        retval.extend_from_slice(&u64::to_le_bytes(mesh_size as u64)); // mesh size
+        retval.extend_from_slice(&u64::to_le_bytes(mesh_size as u64));
+        retval.extend_from_slice(&u16::to_le_bytes(cam_size as u16));
         retval.extend(vert_chunk.data());
         retval.extend(mesh_chunk.data());
+        retval.extend(cam_chunk.data());
         retval
     }
 }
 
 impl ParsedContent for ContentV1 {
+    fn scene(self) -> Scene {
+        Scene {
+            vertices: self.vertices,
+            meshes: self.meshes,
+            cameras: self.cameras,
+        }
+    }
+
     fn vertices(&self) -> &Vec<Vertex> {
         &self.vertices
     }
 
     fn meshes(&self) -> &Vec<Mesh> {
         &self.meshes
+    }
+
+    fn cameras(&self) -> &Vec<Camera> {
+        &self.cameras
     }
 }
 
@@ -252,18 +285,123 @@ fn bytes_to_mesh(data: &[u8]) -> Mesh {
     }
 }
 
+struct CameraChunk {
+    data: Vec<u8>,
+}
+
+impl ParsedChunk for CameraChunk {
+    type Item = Camera;
+
+    fn encode(item: &[Self::Item]) -> Self {
+        let mut data = vec![item.len() as u8];
+        for camera in item {
+            let encoded = camera_to_bytes(camera);
+            let encoded_len = encoded.len() as u8;
+            data.push(encoded_len);
+            data.extend(encoded);
+        }
+        CameraChunk { data }
+    }
+
+    fn decode(data: Vec<u8>) -> Self {
+        CameraChunk { data }
+    }
+
+    fn size_bytes(&self) -> usize {
+        self.data.len()
+    }
+
+    fn elements(self) -> Vec<Self::Item> {
+        let len = self.data[0];
+        let mut retval = Vec::with_capacity(len as usize);
+        let mut index = 1;
+        while index < self.size_bytes() {
+            let encoded_len = self.data[index] as usize;
+            index += 1;
+            let camera = bytes_to_camera(&self.data[index..index + encoded_len]);
+            index += encoded_len;
+            retval.push(camera);
+        }
+        retval
+    }
+
+    fn data(self) -> Vec<u8> {
+        self.data
+    }
+}
+
+fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
+    let data = match camera {
+        Camera::Perspective(cam) => {
+            let camera_type = &[0];
+            let pos: [f32; 3] = Point3::into(cam.position);
+            let tgt: [f32; 3] = Point3::into(cam.target);
+            let upp: [f32; 3] = Vec3::into(cam.up);
+            let fov = cam.fov.to_le_bytes();
+            let cam_data_iter = pos
+                .iter()
+                .chain(tgt.iter())
+                .chain(upp.iter())
+                .copied()
+                .flat_map(f32::to_le_bytes)
+                .chain(fov.iter().copied());
+            camera_type.iter().copied().chain(cam_data_iter).collect()
+        }
+    };
+    data
+}
+
+fn bytes_to_camera(data: &[u8]) -> Camera {
+    let cam_type = data[0];
+    match cam_type {
+        0 => {
+            let position = Point3::new(
+                f32::from_le_bytes(data[1..5].try_into().unwrap()),
+                f32::from_le_bytes(data[5..9].try_into().unwrap()),
+                f32::from_le_bytes(data[9..13].try_into().unwrap()),
+            );
+            let target = Point3::new(
+                f32::from_le_bytes(data[13..17].try_into().unwrap()),
+                f32::from_le_bytes(data[17..21].try_into().unwrap()),
+                f32::from_le_bytes(data[21..25].try_into().unwrap()),
+            );
+            let up = Vec3::new(
+                f32::from_le_bytes(data[25..29].try_into().unwrap()),
+                f32::from_le_bytes(data[29..33].try_into().unwrap()),
+                f32::from_le_bytes(data[33..37].try_into().unwrap()),
+            );
+            let fov = f32::from_le_bytes(data[37..41].try_into().unwrap());
+            Camera::Perspective(PerspectiveCam {
+                position,
+                target,
+                up,
+                fov,
+            })
+        }
+        _ => {
+            panic!("Unexpected cam type")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::bytes_to_camera;
     use super::bytes_to_mesh;
     use super::bytes_to_vertex;
+    use super::camera_to_bytes;
     use super::mesh_to_bytes;
     use super::vertex_to_bytes;
+    use crate::geometry::Camera;
     use crate::geometry::Mesh;
+    use crate::geometry::PerspectiveCam;
+    use crate::geometry::Scene;
     use crate::geometry::Vertex;
     use crate::parser::parse;
     use crate::parser::serialize;
     use crate::parser::ParserVersion;
     use cgmath::Matrix4;
+    use cgmath::Point3;
     use cgmath::Vector2 as Vec2;
     use cgmath::Vector3 as Vec3;
     use rand::prelude::*;
@@ -272,10 +410,10 @@ mod tests {
     use std::fs::remove_file;
     use tempfile::tempdir;
 
-    fn gen_vertices(len: usize, seed: u64) -> Vec<Vertex> {
+    fn gen_vertices(count: u32, seed: u64) -> Vec<Vertex> {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
-        let mut buffer = Vec::with_capacity(len);
-        for _ in 0..len {
+        let mut buffer = Vec::with_capacity(count as usize);
+        for _ in 0..count {
             let vv = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
             let vn = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
             let vt = Vec2::<f32>::new(rng.gen(), rng.gen());
@@ -285,10 +423,10 @@ mod tests {
         buffer
     }
 
-    fn gen_meshes(len: usize, seed: u64) -> Vec<Mesh> {
+    fn gen_meshes(count: u32, seed: u64) -> Vec<Mesh> {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
-        let mut buffer = Vec::with_capacity(len);
-        for _ in 0..len {
+        let mut buffer = Vec::with_capacity(count as usize);
+        for _ in 0..count {
             let high_range = rng.gen_bool(0.1);
             let has_instances = rng.gen_bool(0.3);
             let indices_no: u32 = if high_range {
@@ -331,6 +469,33 @@ mod tests {
         buffer
     }
 
+    fn gen_cameras(count: u8, seed: u64) -> Vec<Camera> {
+        let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
+        let mut buffer = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let cam_type = 1;
+            let cam = match cam_type {
+                1 => {
+                    let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+                    let target = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+                    let up = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+                    let fov = rng.gen();
+                    Camera::Perspective(PerspectiveCam {
+                        position,
+                        target,
+                        up,
+                        fov,
+                    })
+                }
+                _ => {
+                    panic!("Non existing variant");
+                }
+            };
+            buffer.push(cam);
+        }
+        buffer
+    }
+
     #[test]
     fn encode_decode_vertex() {
         let vertices = gen_vertices(32, 0xC2B4D5A5A9E49945);
@@ -352,18 +517,30 @@ mod tests {
     }
 
     #[test]
+    fn encode_decode_cameras() {
+        let cameras = gen_cameras(128, 0xB983667AE564853E);
+        for camera in cameras {
+            let data = camera_to_bytes(&camera);
+            let decoded = bytes_to_camera(&data);
+            assert_eq!(decoded, camera);
+        }
+    }
+
+    #[test]
     fn write_and_read_only_vert() -> Result<(), std::io::Error> {
         let vertices = gen_vertices(1000, 0xBE8AE7F7E3A5248E);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_vertices.bin");
-        serialize(file.as_path(), ParserVersion::V1, &vertices, &[])?;
+        let mut scene = Scene::default();
+        scene.vertices = vertices;
+        serialize(file.as_path(), ParserVersion::V1, &scene)?;
         let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_vertices = read.vertices();
-        assert_eq!(read_vertices.len(), vertices.len());
+        assert_eq!(read_vertices.len(), scene.vertices.len());
         for i in 0..read_vertices.len() {
             let val = &read_vertices[i];
-            let expected = &vertices[i];
+            let expected = &scene.vertices[i];
             assert_eq!(val, expected);
         }
         Ok(())
@@ -374,14 +551,36 @@ mod tests {
         let meshes = gen_meshes(128, 0xDD219155A3536881);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_meshes.bin");
-        serialize(file.as_path(), ParserVersion::V1, &[], &meshes)?;
+        let mut scene = Scene::default();
+        scene.meshes = meshes;
+        serialize(file.as_path(), ParserVersion::V1, &scene)?;
         let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_meshes = read.meshes();
-        assert_eq!(read_meshes.len(), meshes.len());
+        assert_eq!(read_meshes.len(), scene.meshes.len());
         for i in 0..read_meshes.len() {
             let val = &read_meshes[i];
-            let expected = &meshes[i];
+            let expected = &scene.meshes[i];
+            assert_eq!(val, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn write_and_read_only_cameras() -> Result<(), std::io::Error> {
+        let cameras = gen_cameras(32, 0xCC6AD9820F396116);
+        let dir = tempdir()?;
+        let file = dir.path().join("write_and_read_meshes.bin");
+        let mut scene = Scene::default();
+        scene.cameras = cameras;
+        serialize(file.as_path(), ParserVersion::V1, &scene)?;
+        let read = parse(file.as_path())?;
+        remove_file(file.as_path())?;
+        let read_cameras = read.cameras();
+        assert_eq!(read_cameras.len(), scene.cameras.len());
+        for i in 0..read_cameras.len() {
+            let val = &read_cameras[i];
+            let expected = &scene.cameras[i];
             assert_eq!(val, expected);
         }
         Ok(())
