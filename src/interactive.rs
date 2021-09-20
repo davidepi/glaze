@@ -2,10 +2,7 @@ use std::ptr;
 
 use crate::vulkan::Device;
 use crate::vulkan::Instance;
-use crate::vulkan::PresentInstance;
-use crate::vulkan::PresentSync;
 use crate::vulkan::RealtimeRenderer;
-use crate::vulkan::Swapchain;
 use ash::vk;
 use winit::event::Event;
 use winit::event::WindowEvent;
