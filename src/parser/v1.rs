@@ -2,6 +2,7 @@ use super::ParsedContent;
 use super::HEADER_LEN;
 use crate::geometry::Camera;
 use crate::geometry::Mesh;
+use crate::geometry::OrthographicCam;
 use crate::geometry::PerspectiveCam;
 use crate::geometry::Scene;
 use crate::geometry::Vertex;
@@ -331,53 +332,72 @@ impl ParsedChunk for CameraChunk {
 }
 
 fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
+    let camera_type;
+    let position;
+    let target;
+    let up;
+    let other_arg;
     let data = match camera {
         Camera::Perspective(cam) => {
-            let camera_type = &[0];
-            let pos: [f32; 3] = Point3::into(cam.position);
-            let tgt: [f32; 3] = Point3::into(cam.target);
-            let upp: [f32; 3] = Vec3::into(cam.up);
-            let fov = cam.fov.to_le_bytes();
-            let cam_data_iter = pos
-                .iter()
-                .chain(tgt.iter())
-                .chain(upp.iter())
-                .copied()
-                .flat_map(f32::to_le_bytes)
-                .chain(fov.iter().copied());
-            camera_type.iter().copied().chain(cam_data_iter).collect()
+            camera_type = &[0];
+            position = cam.position;
+            target = cam.target;
+            up = cam.up;
+            other_arg = cam.fov;
+        }
+        Camera::Orthographic(cam) => {
+            camera_type = &[1];
+            position = cam.position;
+            target = cam.target;
+            up = cam.up;
+            other_arg = cam.scale;
         }
     };
-    data
+    let pos: [f32; 3] = Point3::into(position);
+    let tgt: [f32; 3] = Point3::into(target);
+    let upp: [f32; 3] = Vec3::into(up);
+    let oth = f32::to_le_bytes(other_arg);
+    let cam_data_iter = pos
+        .iter()
+        .chain(tgt.iter())
+        .chain(upp.iter())
+        .copied()
+        .flat_map(f32::to_le_bytes)
+        .chain(oth.iter().copied());
+    camera_type.iter().copied().chain(cam_data_iter).collect()
 }
 
 fn bytes_to_camera(data: &[u8]) -> Camera {
     let cam_type = data[0];
+    let position = Point3::new(
+        f32::from_le_bytes(data[1..5].try_into().unwrap()),
+        f32::from_le_bytes(data[5..9].try_into().unwrap()),
+        f32::from_le_bytes(data[9..13].try_into().unwrap()),
+    );
+    let target = Point3::new(
+        f32::from_le_bytes(data[13..17].try_into().unwrap()),
+        f32::from_le_bytes(data[17..21].try_into().unwrap()),
+        f32::from_le_bytes(data[21..25].try_into().unwrap()),
+    );
+    let up = Vec3::new(
+        f32::from_le_bytes(data[25..29].try_into().unwrap()),
+        f32::from_le_bytes(data[29..33].try_into().unwrap()),
+        f32::from_le_bytes(data[33..37].try_into().unwrap()),
+    );
+    let other_val = f32::from_le_bytes(data[37..41].try_into().unwrap());
     match cam_type {
-        0 => {
-            let position = Point3::new(
-                f32::from_le_bytes(data[1..5].try_into().unwrap()),
-                f32::from_le_bytes(data[5..9].try_into().unwrap()),
-                f32::from_le_bytes(data[9..13].try_into().unwrap()),
-            );
-            let target = Point3::new(
-                f32::from_le_bytes(data[13..17].try_into().unwrap()),
-                f32::from_le_bytes(data[17..21].try_into().unwrap()),
-                f32::from_le_bytes(data[21..25].try_into().unwrap()),
-            );
-            let up = Vec3::new(
-                f32::from_le_bytes(data[25..29].try_into().unwrap()),
-                f32::from_le_bytes(data[29..33].try_into().unwrap()),
-                f32::from_le_bytes(data[33..37].try_into().unwrap()),
-            );
-            let fov = f32::from_le_bytes(data[37..41].try_into().unwrap());
-            Camera::Perspective(PerspectiveCam {
-                position,
-                target,
-                up,
-                fov,
-            })
-        }
+        0 => Camera::Perspective(PerspectiveCam {
+            position,
+            target,
+            up,
+            fov: other_val,
+        }),
+        1 => Camera::Orthographic(OrthographicCam {
+            position,
+            target,
+            up,
+            scale: other_val,
+        }),
         _ => {
             panic!("Unexpected cam type")
         }
@@ -394,6 +414,7 @@ mod tests {
     use super::vertex_to_bytes;
     use crate::geometry::Camera;
     use crate::geometry::Mesh;
+    use crate::geometry::OrthographicCam;
     use crate::geometry::PerspectiveCam;
     use crate::geometry::Scene;
     use crate::geometry::Vertex;
@@ -473,20 +494,24 @@ mod tests {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
         let mut buffer = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            let cam_type = 1;
+            let cam_type = rng.gen_range(1..=2);
+            let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+            let target = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+            let up = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+            let other_arg = rng.gen();
             let cam = match cam_type {
-                1 => {
-                    let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-                    let target = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-                    let up = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-                    let fov = rng.gen();
-                    Camera::Perspective(PerspectiveCam {
-                        position,
-                        target,
-                        up,
-                        fov,
-                    })
-                }
+                1 => Camera::Perspective(PerspectiveCam {
+                    position,
+                    target,
+                    up,
+                    fov: other_arg,
+                }),
+                2 => Camera::Orthographic(OrthographicCam {
+                    position,
+                    target,
+                    up,
+                    scale: other_arg,
+                }),
                 _ => {
                     panic!("Non existing variant");
                 }
