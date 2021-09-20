@@ -1,5 +1,7 @@
 use self::v1::ContentV1;
+use crate::geometry::Camera;
 use crate::geometry::Mesh;
+use crate::geometry::Scene;
 use crate::geometry::Vertex;
 use std::convert::TryInto;
 use std::fs::File;
@@ -61,27 +63,24 @@ pub fn parse(file: &Path) -> Result<Box<dyn ParsedContent>, Error> {
     }
 }
 
-pub fn serialize(
-    file: &Path,
-    version: ParserVersion,
-    vert: &[Vertex],
-    meshes: &[Mesh],
-) -> Result<(), Error> {
+pub fn serialize(file: &Path, version: ParserVersion, scene: &Scene) -> Result<(), Error> {
     let mut fout = File::create(file)?;
     let magic = u16::to_be_bytes(MAGIC_NUMBER);
     fout.write_all(&magic)?;
     fout.write_all(&[1_u8])?;
     fout.write_all(&[0; 13])?;
     let content = match version {
-        ParserVersion::V1 => ContentV1::serialize(vert, meshes),
+        ParserVersion::V1 => ContentV1::serialize(scene),
     };
     fout.write_all(&content)?;
     Ok(())
 }
 
 pub trait ParsedContent {
+    fn scene(self) -> Scene;
     fn vertices(&self) -> &Vec<Vertex>;
     fn meshes(&self) -> &Vec<Mesh>;
+    fn cameras(&self) -> &Vec<Camera>;
 }
 
 mod v1;
