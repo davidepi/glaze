@@ -1,5 +1,4 @@
-use super::debug::cchars_to_string;
-use super::debug::ValidationLayers;
+use super::debug::{cchars_to_string, ValidationLayers};
 use super::surface::Surface;
 use ash::vk;
 use std::collections::HashSet;

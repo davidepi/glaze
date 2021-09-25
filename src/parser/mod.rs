@@ -1,16 +1,9 @@
 use self::v1::ContentV1;
-use crate::geometry::Camera;
-use crate::geometry::Mesh;
-use crate::geometry::Scene;
-use crate::geometry::Vertex;
-use crate::materials::Library;
-use crate::materials::Texture;
+use crate::geometry::{Camera, Mesh, Scene, Vertex};
+use crate::materials::{Library, Texture};
 use std::convert::TryInto;
 use std::fs::File;
-use std::io::Error;
-use std::io::ErrorKind;
-use std::io::Read;
-use std::io::Write;
+use std::io::{Error, ErrorKind, Read, Write};
 use std::path::Path;
 
 // DO NOT CHANGE THESE TWO! Any changes should be made with a new ParserVersion, changing the inner

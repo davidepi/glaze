@@ -42,8 +42,7 @@ pub unsafe fn create_surface(
 ) -> Result<vk::SurfaceKHR, vk::Result> {
     #[cfg(target_os = "macos")]
     {
-        use cocoa::appkit::NSView;
-        use cocoa::appkit::NSWindow;
+        use cocoa::appkit::{NSView, NSWindow};
         use metal::CoreAnimationLayer;
         use std::mem;
         use std::os::raw::c_void;

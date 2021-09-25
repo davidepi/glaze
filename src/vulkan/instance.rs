@@ -1,12 +1,10 @@
 use super::device::SurfaceSupport;
-use super::platform;
 use super::surface::Surface;
-use super::Device;
+use super::{platform, Device};
 use crate::vulkan::debug::ValidationLayers;
 use crate::vulkan::PresentDevice;
 use ash::vk;
-use std::ffi::CStr;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::ptr;
 use winit::window::Window;
 

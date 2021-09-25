@@ -1,8 +1,5 @@
 use shaderc;
-use shaderc::CompileOptions;
-use shaderc::Compiler;
-use shaderc::OptimizationLevel;
-use shaderc::ShaderKind;
+use shaderc::{CompileOptions, Compiler, OptimizationLevel, ShaderKind};
 use std::error::Error;
 use std::path::PathBuf;
 

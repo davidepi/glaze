@@ -1,7 +1,4 @@
-use super::Device;
-use super::Instance;
-use super::PresentFrameSync;
-use super::PresentInstance;
+use super::{Device, Instance, PresentFrameSync, PresentInstance};
 use ash::vk;
 use std::ptr;
 

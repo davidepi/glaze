@@ -1,10 +1,6 @@
 use winit::window::Window;
 
-use super::Device;
-use super::Instance;
-use super::PresentInstance;
-use super::PresentSync;
-use super::Swapchain;
+use super::{Device, Instance, PresentInstance, PresentSync, Swapchain};
 
 pub struct RealtimeRenderer {
     pub instance: PresentInstance,
