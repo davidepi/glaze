@@ -6,6 +6,8 @@ use crate::geometry::OrthographicCam;
 use crate::geometry::PerspectiveCam;
 use crate::geometry::Scene;
 use crate::geometry::Vertex;
+use crate::materials::Library;
+use crate::materials::Texture;
 use cgmath::Matrix4;
 use cgmath::Point3;
 use cgmath::Vector2 as Vec2;
@@ -24,6 +26,7 @@ struct Offsets {
     vert_len: u64, // amount of data in bytes
     mesh_len: u64,
     cam_len: u16,
+    tex_len: u64,
 }
 
 impl Offsets {
@@ -34,10 +37,12 @@ impl Offsets {
         let vert_len = u64::from_le_bytes(cl_data[0..8].try_into().unwrap());
         let mesh_len = u64::from_le_bytes(cl_data[8..16].try_into().unwrap());
         let cam_len = u16::from_le_bytes(cl_data[16..18].try_into().unwrap());
+        let tex_len = u64::from_le_bytes(cl_data[18..26].try_into().unwrap());
         Ok(Offsets {
             vert_len,
             mesh_len,
             cam_len,
+            tex_len,
         })
     }
 }
@@ -46,6 +51,7 @@ pub(super) struct ContentV1 {
     vertices: Vec<Vertex>,
     meshes: Vec<Mesh>,
     cameras: Vec<Camera>,
+    textures: Vec<(u16, String, Texture)>,
 }
 
 impl ContentV1 {
@@ -59,14 +65,18 @@ impl ContentV1 {
         file.take(offsets.mesh_len).read_to_end(&mut mesh_data)?; // avoid zeroing vec
         let mut cam_data = Vec::with_capacity(offsets.cam_len as usize);
         file.take(offsets.cam_len as u64)
-            .read_to_end(&mut cam_data)?; // avoid zeroing vec
+            .read_to_end(&mut cam_data)?;
+        let mut tex_data = Vec::with_capacity(offsets.tex_len as usize);
+        file.take(offsets.tex_len).read_to_end(&mut tex_data)?; // avoid zeroing vec
         let vert_chunk = VertexChunk::decode(vert_data);
         let mesh_chunk = MeshChunk::decode(mesh_data);
         let cam_chunk = CameraChunk::decode(cam_data);
+        let tex_chunk = TextureChunk::decode(tex_data);
         Ok(ContentV1 {
             vertices: vert_chunk.elements(),
             meshes: mesh_chunk.elements(),
             cameras: cam_chunk.elements(),
+            textures: tex_chunk.elements(),
         })
     }
 
@@ -74,17 +84,21 @@ impl ContentV1 {
         let vert_chunk = VertexChunk::encode(&scene.vertices);
         let mesh_chunk = MeshChunk::encode(&scene.meshes);
         let cam_chunk = CameraChunk::encode(&scene.cameras);
+        let tex_chunk = TextureChunk::encode(&scene.textures.iter());
         let vert_size = vert_chunk.size_bytes();
         let mesh_size = mesh_chunk.size_bytes();
         let cam_size = cam_chunk.size_bytes();
-        let total_size = CONTENT_LIST_SIZE + vert_size + mesh_size + cam_size;
+        let tex_size = tex_chunk.size_bytes();
+        let total_size = CONTENT_LIST_SIZE + vert_size + mesh_size + cam_size + tex_size;
         let mut retval = Vec::with_capacity(total_size);
         retval.extend_from_slice(&u64::to_le_bytes(vert_size as u64));
         retval.extend_from_slice(&u64::to_le_bytes(mesh_size as u64));
         retval.extend_from_slice(&u16::to_le_bytes(cam_size as u16));
+        retval.extend_from_slice(&u64::to_le_bytes(tex_size as u64));
         retval.extend(vert_chunk.data());
         retval.extend(mesh_chunk.data());
         retval.extend(cam_chunk.data());
+        retval.extend(tex_chunk.data());
         retval
     }
 }
@@ -95,19 +109,24 @@ impl ParsedContent for ContentV1 {
             vertices: self.vertices,
             meshes: self.meshes,
             cameras: self.cameras,
+            textures: self.textures.into_iter().collect(),
         }
     }
 
-    fn vertices(&self) -> &Vec<Vertex> {
-        &self.vertices
+    fn vertices(&self) -> Vec<Vertex> {
+        self.vertices.clone()
     }
 
-    fn meshes(&self) -> &Vec<Mesh> {
-        &self.meshes
+    fn meshes(&self) -> Vec<Mesh> {
+        self.meshes.clone()
     }
 
-    fn cameras(&self) -> &Vec<Camera> {
-        &self.cameras
+    fn cameras(&self) -> Vec<Camera> {
+        self.cameras.clone()
+    }
+
+    fn textures(&self) -> Library<Texture> {
+        self.textures.iter().cloned().collect()
     }
 }
 
@@ -331,13 +350,97 @@ impl ParsedChunk for CameraChunk {
     }
 }
 
+struct TextureChunk {
+    data: Vec<u8>,
+}
+
+impl ParsedChunk for TextureChunk {
+    type Item = (u16, String, Texture);
+
+    fn encode(item: &[Self::Item]) -> Self {
+        let len = item.len() as u16;
+        let mut data = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
+        for texture in item {
+            let encoded = texture_to_bytes(texture);
+            let encoded_len = encoded.len() as u32;
+            data.extend(encoded_len.to_le_bytes().iter());
+            data.extend(encoded);
+        }
+        TextureChunk { data }
+    }
+
+    fn decode(data: Vec<u8>) -> Self {
+        TextureChunk { data }
+    }
+
+    fn size_bytes(&self) -> usize {
+        self.data.len()
+    }
+
+    fn elements(self) -> Vec<Self::Item> {
+        let len = u16::from_le_bytes(self.data[0..2].try_into().unwrap());
+        let mut retval = Vec::with_capacity(len as usize);
+        let mut index = std::mem::size_of::<u16>();
+        while index < self.size_bytes() {
+            let encoded_len =
+                u32::from_le_bytes(self.data[index..index + 4].try_into().unwrap()) as usize;
+            index += std::mem::size_of::<u32>();
+            let texture = bytes_to_texture(&self.data[index..index + encoded_len]);
+            index += encoded_len;
+            retval.push(texture);
+        }
+        retval
+    }
+
+    fn data(self) -> Vec<u8> {
+        self.data
+    }
+}
+
+fn texture_to_bytes((index, name, texture): &(u16, String, Texture)) -> Vec<u8> {
+    let str_len = name.bytes().len();
+    assert!(str_len < 256);
+    let tex_width = texture.width();
+    let tex_height = texture.height();
+    let tex_data = texture.as_raw();
+    let tex_len = tex_data.len();
+    let total_len = std::mem::size_of::<u16>()
+        + std::mem::size_of::<u8>()
+        + str_len
+        + 2 * std::mem::size_of::<u32>()
+        + tex_len;
+    let mut retval = Vec::with_capacity(total_len);
+    retval.extend(index.to_le_bytes());
+    retval.push(str_len as u8);
+    retval.extend(name.bytes());
+    retval.extend(tex_width.to_le_bytes());
+    retval.extend(tex_height.to_le_bytes());
+    retval.extend(tex_data);
+    retval
+}
+
+fn bytes_to_texture(data: &[u8]) -> (u16, String, Texture) {
+    let tex_index = u16::from_le_bytes(data[0..2].try_into().unwrap());
+    let str_len = data[2] as usize;
+    let mut index = 3;
+    let name = String::from_utf8(data[index..index + str_len].to_vec()).unwrap();
+    index += str_len;
+    let width = u32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let height = u32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let texture =
+        Texture::from_raw(width, height, data[index..].to_vec()).expect("Corrupted image");
+    (tex_index, name, texture)
+}
+
 fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
     let camera_type;
     let position;
     let target;
     let up;
     let other_arg;
-    let data = match camera {
+    match camera {
         Camera::Perspective(cam) => {
             camera_type = &[0];
             position = cam.position;
@@ -352,7 +455,7 @@ fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
             up = cam.up;
             other_arg = cam.scale;
         }
-    };
+    }
     let pos: [f32; 3] = Point3::into(position);
     let tgt: [f32; 3] = Point3::into(target);
     let upp: [f32; 3] = Vec3::into(up);
@@ -408,9 +511,11 @@ fn bytes_to_camera(data: &[u8]) -> Camera {
 mod tests {
     use super::bytes_to_camera;
     use super::bytes_to_mesh;
+    use super::bytes_to_texture;
     use super::bytes_to_vertex;
     use super::camera_to_bytes;
     use super::mesh_to_bytes;
+    use super::texture_to_bytes;
     use super::vertex_to_bytes;
     use crate::geometry::Camera;
     use crate::geometry::Mesh;
@@ -418,6 +523,8 @@ mod tests {
     use crate::geometry::PerspectiveCam;
     use crate::geometry::Scene;
     use crate::geometry::Vertex;
+    use crate::materials::Library;
+    use crate::materials::Texture;
     use crate::parser::parse;
     use crate::parser::serialize;
     use crate::parser::ParserVersion;
@@ -425,6 +532,7 @@ mod tests {
     use cgmath::Point3;
     use cgmath::Vector2 as Vec2;
     use cgmath::Vector3 as Vec3;
+    use rand::distributions::Alphanumeric;
     use rand::prelude::*;
     use rand::Rng;
     use rand_xoshiro::Xoshiro128StarStar;
@@ -521,6 +629,32 @@ mod tests {
         buffer
     }
 
+    fn gen_textures(count: u16, seed: u64) -> Library<Texture> {
+        let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
+        let data = include_bytes!("../../resources/checker.jpg");
+        let image = image::load_from_memory_with_format(data, image::ImageFormat::Jpeg).unwrap();
+        let mut data = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let cur_img = image.clone();
+            if rng.gen_bool(0.5) {
+                cur_img.flipv();
+            }
+            if rng.gen_bool(0.5) {
+                cur_img.fliph();
+            }
+            if rng.gen_bool(0.5) {
+                cur_img.rotate90();
+            }
+            let name = Xoshiro128StarStar::seed_from_u64(rng.gen())
+                .sample_iter(&Alphanumeric)
+                .take(64)
+                .map(char::from)
+                .collect::<String>();
+            data.push((i, name, cur_img.into_rgba8()));
+        }
+        data.into_iter().collect()
+    }
+
     #[test]
     fn encode_decode_vertex() {
         let vertices = gen_vertices(32, 0xC2B4D5A5A9E49945);
@@ -548,6 +682,16 @@ mod tests {
             let data = camera_to_bytes(&camera);
             let decoded = bytes_to_camera(&data);
             assert_eq!(decoded, camera);
+        }
+    }
+
+    #[test]
+    fn encode_decode_textures() {
+        let textures = gen_textures(16, 0xE59CCF79D9AD3162);
+        for texture in textures {
+            let data = texture_to_bytes(&texture);
+            let decoded = bytes_to_texture(&data);
+            assert_eq!(decoded, texture);
         }
     }
 
@@ -595,7 +739,7 @@ mod tests {
     fn write_and_read_only_cameras() -> Result<(), std::io::Error> {
         let cameras = gen_cameras(32, 0xCC6AD9820F396116);
         let dir = tempdir()?;
-        let file = dir.path().join("write_and_read_meshes.bin");
+        let file = dir.path().join("write_and_read_cameras.bin");
         let mut scene = Scene::default();
         scene.cameras = cameras;
         serialize(file.as_path(), ParserVersion::V1, &scene)?;
@@ -606,6 +750,26 @@ mod tests {
         for i in 0..read_cameras.len() {
             let val = &read_cameras[i];
             let expected = &scene.cameras[i];
+            assert_eq!(val, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn write_and_read_only_textures() -> Result<(), std::io::Error> {
+        let textures = gen_textures(4, 0x50DFC0EA9BF6E9BE);
+        let dir = tempdir()?;
+        let file = dir.path().join("write_and_read_textures.bin");
+        let mut scene = Scene::default();
+        scene.textures = textures;
+        serialize(file.as_path(), ParserVersion::V1, &scene)?;
+        let read = parse(file.as_path())?;
+        remove_file(file.as_path())?;
+        let read_textures = read.textures();
+        assert_eq!(read_textures.len(), scene.textures.len());
+        for i in 0..read_textures.len() {
+            let val = &read_textures.get(i).unwrap();
+            let expected = &scene.textures.get(i).unwrap();
             assert_eq!(val, expected);
         }
         Ok(())

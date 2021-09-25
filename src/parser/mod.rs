@@ -3,6 +3,8 @@ use crate::geometry::Camera;
 use crate::geometry::Mesh;
 use crate::geometry::Scene;
 use crate::geometry::Vertex;
+use crate::materials::Library;
+use crate::materials::Texture;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::Error;
@@ -78,9 +80,10 @@ pub fn serialize(file: &Path, version: ParserVersion, scene: &Scene) -> Result<(
 
 pub trait ParsedContent {
     fn scene(self) -> Scene;
-    fn vertices(&self) -> &Vec<Vertex>;
-    fn meshes(&self) -> &Vec<Mesh>;
-    fn cameras(&self) -> &Vec<Camera>;
+    fn vertices(&self) -> Vec<Vertex>;
+    fn meshes(&self) -> Vec<Mesh>;
+    fn cameras(&self) -> Vec<Camera>;
+    fn textures(&self) -> Library<Texture>;
 }
 
 mod v1;
