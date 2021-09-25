@@ -16,6 +16,7 @@ winit = "0.25"
 log = "0.4"
 env_logger = "0.9"
 cgmath = "0.18"
+image = "0.23"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 metal = "0.20.0"
