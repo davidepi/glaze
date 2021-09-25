@@ -1,23 +1,10 @@
-use super::ParsedContent;
-use super::HEADER_LEN;
-use crate::geometry::Camera;
-use crate::geometry::Mesh;
-use crate::geometry::OrthographicCam;
-use crate::geometry::PerspectiveCam;
-use crate::geometry::Scene;
-use crate::geometry::Vertex;
-use crate::materials::Library;
-use crate::materials::Texture;
-use cgmath::Matrix4;
-use cgmath::Point3;
-use cgmath::Vector2 as Vec2;
-use cgmath::Vector3 as Vec3;
+use super::{ParsedContent, HEADER_LEN};
+use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Scene, Vertex};
+use crate::materials::{Library, Texture};
+use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
 use std::convert::TryInto;
 use std::fs::File;
-use std::io::Error;
-use std::io::Read;
-use std::io::Seek;
-use std::io::SeekFrom;
+use std::io::{Error, Read, Seek, SeekFrom};
 
 const CONTENT_LIST_SIZE: usize = std::mem::size_of::<Offsets>();
 
@@ -509,29 +496,14 @@ fn bytes_to_camera(data: &[u8]) -> Camera {
 
 #[cfg(test)]
 mod tests {
-    use super::bytes_to_camera;
-    use super::bytes_to_mesh;
-    use super::bytes_to_texture;
-    use super::bytes_to_vertex;
-    use super::camera_to_bytes;
-    use super::mesh_to_bytes;
-    use super::texture_to_bytes;
-    use super::vertex_to_bytes;
-    use crate::geometry::Camera;
-    use crate::geometry::Mesh;
-    use crate::geometry::OrthographicCam;
-    use crate::geometry::PerspectiveCam;
-    use crate::geometry::Scene;
-    use crate::geometry::Vertex;
-    use crate::materials::Library;
-    use crate::materials::Texture;
-    use crate::parser::parse;
-    use crate::parser::serialize;
-    use crate::parser::ParserVersion;
-    use cgmath::Matrix4;
-    use cgmath::Point3;
-    use cgmath::Vector2 as Vec2;
-    use cgmath::Vector3 as Vec3;
+    use super::{
+        bytes_to_camera, bytes_to_mesh, bytes_to_texture, bytes_to_vertex, camera_to_bytes,
+        mesh_to_bytes, texture_to_bytes, vertex_to_bytes,
+    };
+    use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Scene, Vertex};
+    use crate::materials::{Library, Texture};
+    use crate::parser::{parse, serialize, ParserVersion};
+    use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
     use rand::distributions::Alphanumeric;
     use rand::prelude::*;
     use rand::Rng;

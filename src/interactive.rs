@@ -1,16 +1,11 @@
 use std::ptr;
 
-use crate::vulkan::Device;
-use crate::vulkan::Instance;
-use crate::vulkan::RealtimeRenderer;
+use crate::vulkan::{Device, Instance, RealtimeRenderer};
 use ash::vk;
-use winit::event::Event;
-use winit::event::WindowEvent;
-use winit::event_loop::ControlFlow;
-use winit::event_loop::EventLoop;
+use winit::event::{Event, WindowEvent};
+use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::run_return::EventLoopExtRunReturn;
-use winit::window::Window;
-use winit::window::WindowBuilder;
+use winit::window::{Window, WindowBuilder};
 
 pub const DEFAULT_WIDTH: u32 = 800;
 pub const DEFAULT_HEIGHT: u32 = 600;

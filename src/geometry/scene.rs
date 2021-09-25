@@ -1,8 +1,5 @@
-use super::Camera;
-use super::Mesh;
-use super::Vertex;
-use crate::materials::Library;
-use crate::materials::Texture;
+use super::{Camera, Mesh, Vertex};
+use crate::materials::{Library, Texture};
 
 pub struct Scene {
     pub vertices: Vec<Vertex>,

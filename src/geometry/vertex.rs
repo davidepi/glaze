@@ -1,5 +1,4 @@
-use cgmath::Vector2 as Vec2;
-use cgmath::Vector3 as Vec3;
+use cgmath::{Vector2 as Vec2, Vector3 as Vec3};
 
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone, PartialEq)]
