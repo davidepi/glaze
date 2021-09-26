@@ -79,4 +79,5 @@ pub trait ParsedContent {
     fn textures(&self) -> Library<Texture>;
 }
 
+mod filehasher;
 mod v1;

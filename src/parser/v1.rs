@@ -1,12 +1,20 @@
+use super::filehasher::FileHasher;
 use super::{ParsedContent, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Scene, Vertex};
 use crate::materials::{Library, Texture};
 use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
 use std::convert::TryInto;
 use std::fs::File;
+use std::hash::Hasher;
 use std::io::{Error, Read, Seek, SeekFrom};
+use twox_hash::XxHash64;
 
 const CONTENT_LIST_SIZE: usize = std::mem::size_of::<Offsets>();
+const HASHER_SEED: u64 = 0x368262AAA1DEB64D;
+const HASH_SIZE: usize = std::mem::size_of::<u64>();
+fn get_hasher() -> impl Hasher {
+    XxHash64::with_seed(HASHER_SEED)
+}
 
 #[repr(packed)]
 struct Offsets {
@@ -17,8 +25,8 @@ struct Offsets {
 }
 
 impl Offsets {
-    fn parse(file: &mut File) -> Result<Offsets, Error> {
-        file.seek(SeekFrom::Start(HEADER_LEN as u64))?;
+    fn seek_and_parse(file: &mut File) -> Result<Offsets, Error> {
+        file.seek(SeekFrom::Start((HEADER_LEN + HASH_SIZE) as u64))?;
         let mut cl_data = [0; CONTENT_LIST_SIZE];
         file.read_exact(&mut cl_data)?;
         let vert_len = u64::from_le_bytes(cl_data[0..8].try_into().unwrap());
@@ -43,28 +51,38 @@ pub(super) struct ContentV1 {
 
 impl ContentV1 {
     pub(super) fn parse(file: &mut File) -> Result<Self, Error> {
-        let offsets = Offsets::parse(file)?;
-        let vert_seek = (HEADER_LEN + CONTENT_LIST_SIZE) as u64;
-        file.seek(SeekFrom::Start(vert_seek))?;
-        let mut vert_data = Vec::with_capacity(offsets.vert_len as usize);
-        file.take(offsets.vert_len).read_to_end(&mut vert_data)?; // avoid zeroing vec
-        let mut mesh_data = Vec::with_capacity(offsets.mesh_len as usize);
-        file.take(offsets.mesh_len).read_to_end(&mut mesh_data)?; // avoid zeroing vec
-        let mut cam_data = Vec::with_capacity(offsets.cam_len as usize);
-        file.take(offsets.cam_len as u64)
-            .read_to_end(&mut cam_data)?;
-        let mut tex_data = Vec::with_capacity(offsets.tex_len as usize);
-        file.take(offsets.tex_len).read_to_end(&mut tex_data)?; // avoid zeroing vec
-        let vert_chunk = VertexChunk::decode(vert_data);
-        let mesh_chunk = MeshChunk::decode(mesh_data);
-        let cam_chunk = CameraChunk::decode(cam_data);
-        let tex_chunk = TextureChunk::decode(tex_data);
-        Ok(ContentV1 {
-            vertices: vert_chunk.elements(),
-            meshes: mesh_chunk.elements(),
-            cameras: cam_chunk.elements(),
-            textures: tex_chunk.elements(),
-        })
+        let mut hash_buf = [0; HASH_SIZE];
+        file.read_exact(&mut hash_buf)?;
+        let expected_hash = u64::from_le_bytes(hash_buf);
+        let hasher = get_hasher();
+        let actual_hash = FileHasher::new(hasher).hash_file(file)?;
+        if expected_hash == actual_hash {
+            let offsets = Offsets::seek_and_parse(file)?;
+            let mut vert_data = Vec::with_capacity(offsets.vert_len as usize);
+            file.take(offsets.vert_len).read_to_end(&mut vert_data)?; // avoid zeroing vec
+            let mut mesh_data = Vec::with_capacity(offsets.mesh_len as usize);
+            file.take(offsets.mesh_len).read_to_end(&mut mesh_data)?; // avoid zeroing vec
+            let mut cam_data = Vec::with_capacity(offsets.cam_len as usize);
+            file.take(offsets.cam_len as u64)
+                .read_to_end(&mut cam_data)?;
+            let mut tex_data = Vec::with_capacity(offsets.tex_len as usize);
+            file.take(offsets.tex_len).read_to_end(&mut tex_data)?; // avoid zeroing vec
+            let vert_chunk = VertexChunk::decode(vert_data);
+            let mesh_chunk = MeshChunk::decode(mesh_data);
+            let cam_chunk = CameraChunk::decode(cam_data);
+            let tex_chunk = TextureChunk::decode(tex_data);
+            Ok(ContentV1 {
+                vertices: vert_chunk.elements(),
+                meshes: mesh_chunk.elements(),
+                cameras: cam_chunk.elements(),
+                textures: tex_chunk.elements(),
+            })
+        } else {
+            Err(Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Corrupted file",
+            ))
+        }
     }
 
     pub(super) fn serialize(scene: &Scene) -> Vec<u8> {
@@ -76,8 +94,10 @@ impl ContentV1 {
         let mesh_size = mesh_chunk.size_bytes();
         let cam_size = cam_chunk.size_bytes();
         let tex_size = tex_chunk.size_bytes();
-        let total_size = CONTENT_LIST_SIZE + vert_size + mesh_size + cam_size + tex_size;
+        let total_size =
+            HASH_SIZE + CONTENT_LIST_SIZE + vert_size + mesh_size + cam_size + tex_size;
         let mut retval = Vec::with_capacity(total_size);
+        retval.extend([0; HASH_SIZE]);
         retval.extend_from_slice(&u64::to_le_bytes(vert_size as u64));
         retval.extend_from_slice(&u64::to_le_bytes(mesh_size as u64));
         retval.extend_from_slice(&u16::to_le_bytes(cam_size as u16));
@@ -86,6 +106,10 @@ impl ContentV1 {
         retval.extend(mesh_chunk.data());
         retval.extend(cam_chunk.data());
         retval.extend(tex_chunk.data());
+        let mut hasher = get_hasher();
+        hasher.write(&retval[HASH_SIZE..]);
+        let hash = hasher.finish().to_le_bytes();
+        retval[0..HASH_SIZE].copy_from_slice(&hash);
         retval
     }
 }
@@ -508,7 +532,8 @@ mod tests {
     use rand::prelude::*;
     use rand::Rng;
     use rand_xoshiro::Xoshiro128StarStar;
-    use std::fs::remove_file;
+    use std::fs::{remove_file, File, OpenOptions};
+    use std::io::{Read, Seek, SeekFrom, Write};
     use tempfile::tempdir;
 
     fn gen_vertices(count: u32, seed: u64) -> Vec<Vertex> {
@@ -665,6 +690,31 @@ mod tests {
             let decoded = bytes_to_texture(&data);
             assert_eq!(decoded, texture);
         }
+    }
+
+    #[test]
+    fn corrupted() -> Result<(), std::io::Error> {
+        let vertices = gen_vertices(1000, 0xBE8AE7F7E3A5248E);
+        let dir = tempdir()?;
+        let file = dir.path().join("write_and_read_vertices.bin");
+        let mut scene = Scene::default();
+        scene.vertices = vertices;
+        serialize(file.as_path(), ParserVersion::V1, &scene)?;
+        let read_ok = parse(file.as_path());
+        {
+            //corrupt file
+            let mut fout = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(file.as_path())?;
+            fout.seek(SeekFrom::Start(32000))?;
+            fout.write(&[0xFF, 0xFF, 0xFF, 0xFF])?;
+        }
+        let read_corrupted = parse(file.as_path());
+        remove_file(file.as_path())?;
+        assert!(read_ok.is_ok());
+        assert!(read_corrupted.is_err());
+        Ok(())
     }
 
     #[test]
