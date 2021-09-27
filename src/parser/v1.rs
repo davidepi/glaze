@@ -6,7 +6,7 @@ use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
 use std::convert::TryInto;
 use std::fs::File;
 use std::hash::Hasher;
-use std::io::{Error, Read, Seek, SeekFrom};
+use std::io::{BufRead, Error, Read, Seek, SeekFrom};
 use twox_hash::XxHash64;
 
 const CONTENT_LIST_SIZE: usize = std::mem::size_of::<Offsets>();
@@ -25,7 +25,7 @@ struct Offsets {
 }
 
 impl Offsets {
-    fn seek_and_parse(file: &mut File) -> Result<Offsets, Error> {
+    fn seek_and_parse<R: Read + Seek>(file: &mut R) -> Result<Offsets, Error> {
         file.seek(SeekFrom::Start((HEADER_LEN + HASH_SIZE) as u64))?;
         let mut cl_data = [0; CONTENT_LIST_SIZE];
         file.read_exact(&mut cl_data)?;
@@ -50,12 +50,12 @@ pub(super) struct ContentV1 {
 }
 
 impl ContentV1 {
-    pub(super) fn parse(file: &mut File) -> Result<Self, Error> {
+    pub(super) fn parse<R: Read + Seek>(file: &mut R) -> Result<Self, Error> {
         let mut hash_buf = [0; HASH_SIZE];
         file.read_exact(&mut hash_buf)?;
         let expected_hash = u64::from_le_bytes(hash_buf);
         let hasher = get_hasher();
-        let actual_hash = FileHasher::new(hasher).hash_file(file)?;
+        let actual_hash = FileHasher::new(hasher).hash(file)?;
         if expected_hash == actual_hash {
             let offsets = Offsets::seek_and_parse(file)?;
             let mut vert_data = Vec::with_capacity(offsets.vert_len as usize);
@@ -534,8 +534,8 @@ mod tests {
     use rand::prelude::*;
     use rand::Rng;
     use rand_xoshiro::Xoshiro128StarStar;
-    use std::fs::{remove_file, File, OpenOptions};
-    use std::io::{Read, Seek, SeekFrom, Write};
+    use std::fs::{remove_file, OpenOptions};
+    use std::io::{Seek, SeekFrom, Write};
     use tempfile::tempdir;
 
     fn gen_vertices(count: u32, seed: u64) -> Vec<Vertex> {

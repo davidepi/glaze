@@ -1,6 +1,5 @@
-use std::fs::File;
 use std::hash::Hasher;
-use std::io::{Error, Write};
+use std::io::{Error, Read, Write};
 
 pub struct FileHasher<T: Hasher> {
     hasher: T,
@@ -11,7 +10,7 @@ impl<T: Hasher> FileHasher<T> {
         FileHasher { hasher: hasher }
     }
 
-    pub fn hash_file(mut self, file: &mut File) -> Result<u64, Error> {
+    pub fn hash<R: Read>(mut self, file: &mut R) -> Result<u64, Error> {
         std::io::copy(file, &mut self)?;
         Ok(self.hasher.finish())
     }
@@ -45,7 +44,7 @@ mod tests {
             .join("resources")
             .join("checker.jpg");
         let mut file = File::open(filepath)?;
-        let actual = FileHasher::new(hasher).hash_file(&mut file)?;
+        let actual = FileHasher::new(hasher).hash(&mut file)?;
         assert_eq!(actual, expected);
         Ok(())
     }

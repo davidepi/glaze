@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::iter::FromIterator;
-use std::slice::Iter;
 
 #[derive(Debug, Clone)]
 pub struct Library<T> {

@@ -3,7 +3,7 @@ use crate::geometry::{Camera, Mesh, Scene, Vertex};
 use crate::materials::{Library, Texture};
 use std::convert::TryInto;
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read, Write};
+use std::io::{BufReader, Error, ErrorKind, Read, Write};
 use std::path::Path;
 
 // DO NOT CHANGE THESE TWO! Any changes should be made with a new ParserVersion, changing the inner
@@ -59,9 +59,10 @@ impl ParserVersion {
 /// let scene = parsed.scene();
 /// ```
 pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ParsedContent>, Error> {
-    let mut fin = File::open(file)?;
+    let fin = File::open(file)?;
+    let mut reader = BufReader::new(fin);
     let mut header = [0; HEADER_LEN];
-    if fin.read_exact(&mut header).is_ok() {
+    if reader.read_exact(&mut header).is_ok() {
         let magic = u16::from_be_bytes(header[0..2].try_into().unwrap());
         if magic != MAGIC_NUMBER {
             Err(Error::new(
@@ -71,7 +72,7 @@ pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ParsedContent>, Error> {
         } else {
             let version = ParserVersion::from_byte(header[2])?;
             let parsed = match version {
-                ParserVersion::V1 => Box::new(ContentV1::parse(&mut fin)?),
+                ParserVersion::V1 => Box::new(ContentV1::parse(&mut reader)?),
             };
             Ok(parsed)
         }
