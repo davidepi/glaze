@@ -85,7 +85,7 @@ impl PresentSync {
     }
 }
 
-fn create_fence<T: Device>(device: &T, signaled: bool) -> vk::Fence {
+pub(super) fn create_fence<T: Device>(device: &T, signaled: bool) -> vk::Fence {
     let ci = vk::FenceCreateInfo {
         s_type: vk::StructureType::FENCE_CREATE_INFO,
         p_next: ptr::null(),

@@ -7,7 +7,7 @@ mod surface;
 mod swapchain;
 mod sync;
 
-pub use self::device::{Device, PresentDevice};
+pub use self::device::{AllocatedBuffer, Device, PresentDevice};
 pub use self::instance::{Instance, PresentInstance};
 pub use self::renderer::RealtimeRenderer;
 pub use self::swapchain::{AcquiredImage, Swapchain};

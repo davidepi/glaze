@@ -1,6 +1,10 @@
 use super::debug::{cchars_to_string, ValidationLayers};
 use super::surface::Surface;
+use super::sync::create_fence;
+use crate::geometry::Vertex;
 use ash::vk;
+use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
+use gpu_allocator::{AllocatorDebugSettings, MemoryLocation};
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::ptr;
@@ -13,8 +17,10 @@ pub trait Device {
 pub struct PresentDevice {
     logical: ash::Device,
     physical: PhysicalDevice,
+    memory_manager: MemoryManager,
     graphic_index: u32,
     graphic_pool: vk::CommandPool,
+    immediate_pool: vk::CommandPool,
     graphic_queue: vk::Queue,
 }
 
@@ -33,13 +39,17 @@ impl PresentDevice {
         let graphic_index = graphics_present_index(instance, physical.device, surface).unwrap();
         let all_queues = vec![graphic_index];
         let logical = create_logical_device(instance, ext, &physical, &all_queues);
+        let memory_manager = MemoryManager::new(instance, &logical, physical.device);
         let graphic_pool = create_command_pool(&logical, graphic_index);
+        let immediate_pool = create_command_pool(&logical, graphic_index);
         let graphic_queue = unsafe { logical.get_device_queue(graphic_index, 0) };
         PresentDevice {
             logical,
             physical,
+            memory_manager,
             graphic_index,
             graphic_pool,
+            immediate_pool,
             graphic_queue,
         }
     }
@@ -58,12 +68,114 @@ impl PresentDevice {
     pub fn graphic_queue(&self) -> vk::Queue {
         self.graphic_queue
     }
+
+    fn create_buffer(
+        &mut self,
+        name: &'static str,
+        size: u64,
+        usage: vk::BufferUsageFlags,
+        location: MemoryLocation,
+    ) -> AllocatedBuffer {
+        self.memory_manager
+            .create_buffer(name, size, usage, location)
+    }
+
+    fn free_buffer(&mut self, buffer: AllocatedBuffer) {
+        self.memory_manager.free_buffer(buffer);
+    }
+
+    fn copy_buffer(&self, src: &AllocatedBuffer, dst: &AllocatedBuffer) {
+        let cmds = create_command_buffers(&self.logical, self.graphic_pool, 1);
+        let fence = create_fence(self, false);
+        let cmd_begin = vk::CommandBufferBeginInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+            p_next: ptr::null(),
+            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            p_inheritance_info: ptr::null(),
+        };
+        let copy_region = vk::BufferCopy {
+            src_offset: src.allocation.offset(),
+            dst_offset: dst.allocation.offset(),
+            size: src.allocation.size(),
+        };
+        let submit_ci = vk::SubmitInfo {
+            s_type: vk::StructureType::SUBMIT_INFO,
+            p_next: ptr::null(),
+            wait_semaphore_count: 0,
+            p_wait_semaphores: ptr::null(),
+            p_wait_dst_stage_mask: ptr::null(),
+            command_buffer_count: cmds.len() as u32,
+            p_command_buffers: cmds.as_ptr(),
+            signal_semaphore_count: 0,
+            p_signal_semaphores: ptr::null(),
+        };
+        unsafe {
+            let cmd = cmds[0];
+            self.logical
+                .begin_command_buffer(cmd, &cmd_begin)
+                .expect("Failed to begin command");
+            self.logical
+                .cmd_copy_buffer(cmd, src.buffer, dst.buffer, &[copy_region]);
+            self.logical
+                .end_command_buffer(cmd)
+                .expect("Failed to end command buffer");
+            self.logical
+                .queue_submit(self.graphic_queue, &[submit_ci], fence)
+                .expect("Failed to submit to queue");
+            self.logical
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .expect("Failed to wait on fences");
+            self.logical
+                .reset_fences(&[fence])
+                .expect("Failed to reset fence");
+            self.logical
+                .reset_command_pool(self.immediate_pool, vk::CommandPoolResetFlags::default())
+                .expect("Failed to reset immediate pool");
+        }
+    }
+
+    pub fn load_vertices(&mut self, vertices: &[Vertex]) -> AllocatedBuffer {
+        let size = (std::mem::size_of::<Vertex>() * vertices.len()) as u64;
+        let cpu_buffer = self.create_buffer(
+            "vertices_local",
+            size,
+            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+            MemoryLocation::CpuToGpu,
+        );
+        let gpu_buffer = self.create_buffer(
+            "vertices_dedicated",
+            size,
+            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            MemoryLocation::GpuOnly,
+        );
+        unsafe {
+            let mapped = self
+                .logical
+                .map_memory(
+                    cpu_buffer.allocation.memory(),
+                    cpu_buffer.allocation.offset(),
+                    size,
+                    vk::MemoryMapFlags::default(),
+                )
+                .expect("Failed to map memory") as *mut Vertex;
+            mapped.copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
+            self.logical.unmap_memory(cpu_buffer.allocation.memory());
+        }
+        self.copy_buffer(&cpu_buffer, &gpu_buffer);
+        self.free_buffer(cpu_buffer);
+        gpu_buffer
+    }
+
+    pub fn free_vertices(&mut self, vertices: AllocatedBuffer) {
+        self.free_buffer(vertices);
+    }
 }
 
 impl Drop for PresentDevice {
     fn drop(&mut self) {
         unsafe {
             self.logical.destroy_command_pool(self.graphic_pool, None);
+            self.logical.destroy_command_pool(self.immediate_pool, None);
             self.logical.destroy_device(None);
         }
     }
@@ -268,4 +380,99 @@ fn create_command_buffers(
     };
     unsafe { device.allocate_command_buffers(&alloc_ci) }
         .expect("Failed to allocate command buffers")
+}
+
+pub struct AllocatedBuffer {
+    pub buffer: vk::Buffer,
+    pub allocation: Allocation,
+}
+
+struct MemoryManager {
+    device: ash::Device,
+    allocator: Allocator,
+}
+
+impl MemoryManager {
+    fn new(
+        instance: &ash::Instance,
+        device: &ash::Device,
+        physical_device: vk::PhysicalDevice,
+    ) -> Self {
+        let debug_settings = if cfg!(debug_assertions) {
+            AllocatorDebugSettings {
+                log_memory_information: true,
+                log_leaks_on_shutdown: true,
+                store_stack_traces: false,
+                log_allocations: true,
+                log_frees: true,
+                log_stack_traces: false,
+            }
+        } else {
+            AllocatorDebugSettings {
+                log_memory_information: false,
+                log_leaks_on_shutdown: false,
+                store_stack_traces: false,
+                log_allocations: false,
+                log_frees: false,
+                log_stack_traces: false,
+            }
+        };
+        let acd = AllocatorCreateDesc {
+            instance: instance.clone(),
+            device: device.clone(),
+            physical_device,
+            debug_settings,
+            buffer_device_address: false,
+        };
+        let allocator = Allocator::new(&acd).expect("Failed to create memory allocator");
+        MemoryManager {
+            device: device.clone(),
+            allocator,
+        }
+    }
+
+    fn create_buffer(
+        &mut self,
+        name: &'static str,
+        size: u64,
+        usage: vk::BufferUsageFlags,
+        location: MemoryLocation,
+    ) -> AllocatedBuffer {
+        let buf_ci = vk::BufferCreateInfo {
+            s_type: vk::StructureType::BUFFER_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            size: size as u64,
+            usage,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            queue_family_index_count: 0,
+            p_queue_family_indices: ptr::null(),
+        };
+        let buffer =
+            unsafe { self.device.create_buffer(&buf_ci, None) }.expect("Failed to create buffer");
+        let requirements = unsafe { self.device.get_buffer_memory_requirements(buffer) };
+        let alloc_desc = AllocationCreateDesc {
+            name,
+            requirements,
+            location,
+            linear: true,
+        };
+        let allocation = self
+            .allocator
+            .allocate(&alloc_desc)
+            .expect("Allocation failed. OOM?");
+        unsafe {
+            self.device
+                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+        }
+        .expect("Failed to bind memory");
+        AllocatedBuffer { buffer, allocation }
+    }
+
+    fn free_buffer(&mut self, buf: AllocatedBuffer) {
+        if let Err(_) = self.allocator.free(buf.allocation) {
+            log::warn!("Failed to free memory");
+        }
+        unsafe { self.device.destroy_buffer(buf.buffer, None) };
+    }
 }

@@ -4,9 +4,8 @@ use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Scene, Vert
 use crate::materials::{Library, Texture};
 use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
 use std::convert::TryInto;
-use std::fs::File;
 use std::hash::Hasher;
-use std::io::{BufRead, Error, Read, Seek, SeekFrom};
+use std::io::{Error, Read, Seek, SeekFrom};
 use twox_hash::XxHash64;
 
 const CONTENT_LIST_SIZE: usize = std::mem::size_of::<Offsets>();
