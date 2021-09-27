@@ -115,12 +115,14 @@ impl ContentV1 {
 }
 
 impl ParsedContent for ContentV1 {
-    fn scene(self) -> Scene {
+    fn scene(&self) -> Scene {
+        // super inefficient for V1, other versions should load on demand from file to decrease
+        // memory footprint
         Scene {
-            vertices: self.vertices,
-            meshes: self.meshes,
-            cameras: self.cameras,
-            textures: self.textures.into_iter().collect(),
+            vertices: self.vertices.clone(),
+            meshes: self.meshes.clone(),
+            cameras: self.cameras.clone(),
+            textures: self.textures.iter().cloned().collect(),
         }
     }
 
@@ -694,21 +696,21 @@ mod tests {
 
     #[test]
     fn corrupted() -> Result<(), std::io::Error> {
-        let vertices = gen_vertices(1000, 0xBE8AE7F7E3A5248E);
+        let vertices = gen_vertices(1000, 0x62A9F273AF56253C);
         let dir = tempdir()?;
-        let file = dir.path().join("write_and_read_vertices.bin");
+        let file = dir.path().join("corrupted.bin");
         let mut scene = Scene::default();
         scene.vertices = vertices;
         serialize(file.as_path(), ParserVersion::V1, &scene)?;
         let read_ok = parse(file.as_path());
         {
             //corrupt file
-            let mut fout = OpenOptions::new()
+            let mut file = OpenOptions::new()
                 .read(true)
                 .write(true)
                 .open(file.as_path())?;
-            fout.seek(SeekFrom::Start(32000))?;
-            fout.write(&[0xFF, 0xFF, 0xFF, 0xFF])?;
+            file.seek(SeekFrom::Start(32000))?;
+            file.write(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
         let read_corrupted = parse(file.as_path());
         remove_file(file.as_path())?;

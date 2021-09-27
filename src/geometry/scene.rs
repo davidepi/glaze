@@ -1,6 +1,7 @@
 use super::{Camera, Mesh, Vertex};
 use crate::materials::{Library, Texture};
 
+/// Struct representing a renderable scene.
 pub struct Scene {
     pub vertices: Vec<Vertex>,
     pub meshes: Vec<Mesh>,
