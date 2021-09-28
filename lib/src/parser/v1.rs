@@ -629,7 +629,7 @@ mod tests {
 
     fn gen_textures(count: u16, seed: u64) -> Library<Texture> {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
-        let data = include_bytes!("../../resources/checker.jpg");
+        let data = include_bytes!("../../../resources/checker.jpg");
         let image = image::load_from_memory_with_format(data, image::ImageFormat::Jpeg).unwrap();
         let mut data = Vec::with_capacity(count as usize);
         for i in 0..count {

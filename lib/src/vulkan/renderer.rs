@@ -1,40 +1,67 @@
 use std::ptr;
 
-use crate::vulkan::{Device, Instance, RealtimeRenderer};
+use super::{AllocatedBuffer, Device, Instance, PresentInstance, PresentSync, Swapchain};
+use crate::Scene;
+use winit::window::Window;
 use ash::vk;
-use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit::platform::run_return::EventLoopExtRunReturn;
-use winit::window::{Window, WindowBuilder};
 
-pub const DEFAULT_WIDTH: u32 = 800;
-pub const DEFAULT_HEIGHT: u32 = 600;
-
-pub struct GlazeApp {
-    window: Window,
-    renderer: RealtimeRenderer,
+pub struct RealtimeRenderer {
+    pub instance: PresentInstance,
+    pub swapchain: Swapchain,
+    pub sync: PresentSync,
+    vertex_buffer: Option<AllocatedBuffer>,
+    render_width: u32,
+    render_height: u32,
 }
 
-impl GlazeApp {
-    pub fn create(event_loop: &EventLoop<()>) -> GlazeApp {
-        let render_width = DEFAULT_WIDTH;
-        let render_height = DEFAULT_HEIGHT;
-        let window = WindowBuilder::new()
-            .with_title(env!("CARGO_PKG_NAME"))
-            .with_inner_size(winit::dpi::LogicalSize::new(render_width, render_height))
-            .with_resizable(false)
-            .build(event_loop)
-            .unwrap();
-        let renderer = RealtimeRenderer::create(&window, render_width, render_height);
-        GlazeApp { window, renderer }
+impl RealtimeRenderer {
+    pub fn create(window: &Window, width: u32, height: u32) -> Self {
+        let mut instance = PresentInstance::new(&window);
+        let swapchain = Swapchain::create(&mut instance, width, height);
+        let sync = PresentSync::create(instance.device());
+        RealtimeRenderer {
+            instance,
+            swapchain,
+            sync,
+            vertex_buffer: None,
+            render_width: width,
+            render_height: height,
+        }
+    }
+
+    pub fn wait_idle(&self) {
+        unsafe { self.instance.device().logical().device_wait_idle() }.expect("Failed to wait idle")
+    }
+
+    pub fn change_render_size(&mut self, width: u32, height: u32) {
+        self.wait_idle();
+        self.render_width = width;
+        self.render_height = height;
+        self.swapchain.re_create(&mut self.instance, width, height);
+    }
+
+    pub fn change_scene(&mut self, scene: &Scene) {
+        let device = self.instance.device_mut();
+        if let Some(prev_buf) = self.vertex_buffer.take() {
+            device.free_vertices(prev_buf);
+        }
+        self.vertex_buffer = Some(device.load_vertices(&scene.vertices));
+    }
+
+    pub fn destroy(mut self) {
+        let device = self.instance.device_mut();
+        if let Some(vb) = self.vertex_buffer.take() {
+            device.free_vertices(vb);
+        }
+        self.sync.destroy(self.instance.device());
+        self.swapchain.destroy(&self.instance);
     }
 
     pub fn draw_frame(&mut self) {
-        let r = &mut self.renderer;
-        let frame_sync = r.sync.next();
-        frame_sync.wait_acquire(r.instance.device());
-        if let Some(acquired) = r.swapchain.acquire_next_image(frame_sync) {
-            let device = r.instance.device().logical();
+        let frame_sync = self.sync.next();
+        frame_sync.wait_acquire(self.instance.device());
+        if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
+            let device = self.instance.device().logical();
             unsafe {
                 device.reset_command_buffer(acquired.cmd, vk::CommandBufferResetFlags::empty())
             }
@@ -52,12 +79,12 @@ impl GlazeApp {
             }];
             let render_area = vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
-                extent: r.swapchain.extent(),
+                extent: self.swapchain.extent(),
             };
             let rp_ci = vk::RenderPassBeginInfo {
                 s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
                 p_next: ptr::null(),
-                render_pass: r.swapchain.default_render_pass(),
+                render_pass: self.swapchain.default_render_pass(),
                 framebuffer: acquired.framebuffer,
                 render_area,
                 clear_value_count: color.len() as u32,
@@ -86,7 +113,7 @@ impl GlazeApp {
                 signal_semaphore_count: signal_sem.len() as u32,
                 p_signal_semaphores: signal_sem.as_ptr(),
             };
-            let swapchains = [r.swapchain.swapchain_khr()];
+            let swapchains = [self.swapchain.swapchain_khr()];
             let present_ci = vk::PresentInfoKHR {
                 s_type: vk::StructureType::PRESENT_INFO_KHR,
                 p_next: ptr::null(),
@@ -97,36 +124,15 @@ impl GlazeApp {
                 p_image_indices: &acquired.index,
                 p_results: ptr::null_mut(),
             };
-            let queue = r.instance.device().graphic_queue();
+            let queue = self.instance.device().graphic_queue();
             unsafe {
                 device
                     .queue_submit(queue, &[submit_ci], frame_sync.acquire_fence())
                     .expect("Failed to submit render task");
             }
-            r.swapchain.queue_present(queue, &present_ci);
+            self.swapchain.queue_present(queue, &present_ci);
         } else {
             return; // out of date swapchain. the resize is called by winit so wait next frame
         }
-    }
-
-    pub fn main_loop(&mut self, mut event_loop: EventLoop<()>) {
-        event_loop.run_return(|event, _, control_flow| match event {
-            Event::WindowEvent {
-                event,
-                window_id: _,
-            } => match event {
-                WindowEvent::CloseRequested => {
-                    *control_flow = ControlFlow::Exit;
-                }
-                _ => {}
-            },
-            Event::MainEventsCleared => self.draw_frame(),
-            Event::LoopDestroyed => self.renderer.wait_idle(),
-            _ => (),
-        });
-    }
-
-    pub fn destroy(self) {
-        self.renderer.destroy();
     }
 }

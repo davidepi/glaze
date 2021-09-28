@@ -1,0 +1,11 @@
+[package]
+name = "glaze-app"
+version = "0.3.0"
+authors = ["Davide Pizzolotto <davide.pizzolotto@gmail.com>"]
+edition = "2018"
+publish = false
+
+[dependencies]
+glaze = {path="../lib"}
+winit = "0.25"
+env_logger = "0.9"
