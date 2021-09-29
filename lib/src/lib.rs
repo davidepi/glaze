@@ -3,6 +3,7 @@ mod interactive;
 mod materials;
 mod parser;
 mod vulkan;
-pub use geometry::Scene;
+pub use geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Scene, Vertex};
 pub use interactive::GlazeApp;
+pub use materials::Library;
 pub use parser::{parse, serialize, ParsedContent, ParserVersion};

@@ -8,7 +8,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/shaders");
     let is_debug = cfg!(debug_assertions);
     let config = if is_debug { "debug" } else { "release" };
-    let outdir = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("shaders").join(config);
+    let outdir = PathBuf::from(env::var_os("OUT_DIR").unwrap())
+        .join("shaders")
+        .join(config);
     std::fs::create_dir_all(outdir.clone())?;
     let mut compiler = Compiler::new().expect("Failed to find a SPIR-V compiler");
     let mut options = CompileOptions::new().expect("Error while initializing compiler");

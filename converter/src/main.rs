@@ -1,3 +1,196 @@
+use std::collections::HashMap;
+use std::error::Error;
+
+use cgmath::{Point3, Vector2 as Vec2, Vector3 as Vec3};
+use clap::{App, Arg};
+use console::style;
+use glaze::{serialize, Camera, Library, Mesh, ParserVersion, PerspectiveCam, Scene, Vertex};
+use indicatif::ProgressBar;
+use russimp::scene::{PostProcess, Scene as RussimpScene};
+
 fn main() {
-    
+    let supported_versions = [ParserVersion::V1]
+        .iter()
+        .map(ParserVersion::to_str)
+        .collect::<Vec<_>>();
+    let matches = App::new("glaze-converter")
+        .version(env!("CARGO_PKG_VERSION"))
+        .author(env!("CARGO_PKG_AUTHORS"))
+        .about("Convert a 3D scene to a format recognizable by glaze")
+        .arg(
+            Arg::with_name("input")
+                .required(true)
+                .help("The input file"),
+        )
+        .arg(
+            Arg::with_name("output")
+                .required(true)
+                .help("The output file"),
+        )
+        .arg(
+            Arg::with_name("file version")
+                .short("V")
+                .long("file-version")
+                .default_value(ParserVersion::V1.to_str())
+                .possible_values(&supported_versions),
+        )
+        .get_matches();
+    let input = matches.value_of("input").unwrap();
+    let output = matches.value_of("output").unwrap();
+    let version = ParserVersion::from_str(matches.value_of("file version").unwrap()).unwrap();
+    println!("{} Preprocessing input...", style("[1/3]").bold().dim());
+    if let Ok(scene) = preprocess_input(input) {
+        println!("{} Converting scene...", style("[2/3]").bold().dim());
+        if let Ok(scene) = convert_input(scene) {
+            println!("{} Saving file...", style("[3/3]").bold().dim());
+            if write_output(&scene, version, output).is_ok() {
+                println!("{}", style("Done!").bold().green());
+            } else {
+                eprint!("Failed to save file");
+            }
+        } else {
+            eprintln!("Failed to convert scene");
+        }
+    } else {
+        eprintln!("Failed to preprocess input file");
+    }
+}
+
+fn preprocess_input(input: &str) -> Result<RussimpScene, Box<dyn Error>> {
+    let pb = ProgressBar::new_spinner();
+    let postprocess = vec![
+        PostProcess::Triangulate,
+        PostProcess::ValidateDataStructure,
+        PostProcess::JoinIdenticalVertices,
+        PostProcess::GenenerateUVCoords,
+        PostProcess::GenerateNormals,
+        PostProcess::OptimizeMeshes,
+        PostProcess::OptimizeGraph,
+        PostProcess::FindInstances,
+        PostProcess::EmbedTextures,
+        PostProcess::FixInfacingNormals,
+        PostProcess::RemoveRedundantMaterials,
+    ];
+    let scene = RussimpScene::from_file(input, postprocess)?;
+    pb.finish_and_clear();
+    Ok(scene)
+}
+
+fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
+    let vv: [f32; 3] = Vec3::into(vert.vv);
+    let vn: [f32; 3] = Vec3::into(vert.vn);
+    let vt: [f32; 2] = Vec2::into(vert.vt);
+    vv.iter()
+        .chain(vn.iter())
+        .chain(vt.iter())
+        .copied()
+        .flat_map(f32::to_le_bytes)
+        .collect()
+}
+
+fn convert_input(scene: RussimpScene) -> Result<Scene, Box<dyn Error>> {
+    let effort = scene.meshes.iter().fold(0, |acc, m| acc + m.faces.len()) + scene.cameras.len();
+    let pb = ProgressBar::new(effort as u64);
+    let mut retval_meshes = Vec::new();
+    let mut retval_vertices = Vec::new();
+    let mut used_vert = HashMap::new();
+    let mut retval_cameras = Vec::new();
+    for mesh in scene.meshes {
+        let mut indices = Vec::with_capacity(mesh.faces.len() * 3);
+        if mesh.uv_components[0] < 2 {
+            return Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Unsupported UV components in mesh",
+            )));
+        }
+        for face in mesh.faces {
+            if face.0.len() != 3 {
+                return Err(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Only triangles are supported",
+                )));
+            }
+            for index in face.0 {
+                let vv = mesh.vertices[index as usize];
+                let vn = mesh.normals[index as usize];
+                let vt = mesh.texture_coords[0].as_ref().unwrap()[index as usize];
+                let vertex = Vertex {
+                    vv: Vec3::new(vv.x, vv.y, vv.z),
+                    vn: Vec3::new(vn.x, vn.y, vn.z),
+                    vt: Vec2::new(vt.x, vt.y),
+                };
+                let vertex_index = *used_vert
+                    .entry(vertex_to_bytes(&vertex))
+                    .or_insert(retval_vertices.len() as u32);
+                indices.push(vertex_index);
+                retval_vertices.push(vertex);
+            }
+            pb.inc(1);
+        }
+        let mesh = Mesh {
+            indices,
+            material: 0,
+            instances: Vec::new(),
+        };
+        retval_meshes.push(mesh);
+    }
+    for camera in scene.cameras {
+        retval_cameras.push(Camera::Perspective(PerspectiveCam {
+            position: Point3::new(camera.position.x, camera.position.y, camera.position.z),
+            target: Point3::new(camera.look_at.x, camera.look_at.y, camera.look_at.z),
+            up: Vec3::new(camera.up.x, camera.up.y, camera.up.z),
+            fovx: camera.horizontal_fov,
+        }));
+    }
+    if retval_cameras.is_empty() {
+        retval_cameras.push(Camera::Perspective(PerspectiveCam {
+            position: Point3::new(0.0, 0.0, 0.0),
+            target: Point3::new(0.0, 0.0, 100.0),
+            up: Vec3::new(0.0, 1.0, 0.0),
+            fovx: 90.0,
+        }));
+    }
+    pb.finish_and_clear();
+    Ok(Scene {
+        vertices: retval_vertices.into_iter().collect(),
+        meshes: retval_meshes,
+        cameras: retval_cameras,
+        textures: Library::new(),
+    })
+}
+
+fn write_output(scene: &Scene, version: ParserVersion, output: &str) -> Result<(), Box<dyn Error>> {
+    Ok(serialize(output, version, scene)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use glaze::{parse, serialize};
+    use std::error::Error;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_working_serializer() -> Result<(), Box<dyn Error>> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("resources")
+            .join("cube.obj");
+        let scene = super::preprocess_input(path.to_str().unwrap()).unwrap();
+        let scene = super::convert_input(scene).unwrap();
+        let dir = tempdir()?;
+        let file = dir.path().join("serializer.bin");
+        assert!(serialize(&file, glaze::ParserVersion::V1, &scene).is_ok());
+        let parsed = parse(&file);
+        assert!(parsed.is_ok());
+        if let Ok(parsed) = parsed {
+            assert_eq!(parsed.meshes().len(), 1);
+            assert_eq!(parsed.cameras().len(), 1);
+            assert_eq!(parsed.vertices().len(), 36);
+        } else {
+            panic!("Failed to parse back scene")
+        }
+        Ok(())
+    }
 }

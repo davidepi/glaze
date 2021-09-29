@@ -2,8 +2,8 @@ use std::ptr;
 
 use super::{AllocatedBuffer, Device, Instance, PresentInstance, PresentSync, Swapchain};
 use crate::Scene;
-use winit::window::Window;
 use ash::vk;
+use winit::window::Window;
 
 pub struct RealtimeRenderer {
     pub instance: PresentInstance,

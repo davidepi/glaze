@@ -2,6 +2,7 @@ use self::v1::ContentV1;
 use crate::geometry::{Camera, Mesh, Scene, Vertex};
 use crate::materials::{Library, Texture};
 use std::convert::TryInto;
+use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufReader, Error, ErrorKind, Read, Write};
 use std::path::Path;
@@ -40,6 +41,25 @@ impl ParserVersion {
                 "Unsupported file version",
             )),
         }
+    }
+
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            ParserVersion::V1 => "V1",
+        }
+    }
+
+    pub fn from_str(string: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        match string {
+            "V1" => Ok(ParserVersion::V1),
+            _ => Err("Unrecognized ParserVersion".into()),
+        }
+    }
+}
+
+impl Display for ParserVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_str())
     }
 }
 

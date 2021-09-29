@@ -458,7 +458,7 @@ fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
             position = cam.position;
             target = cam.target;
             up = cam.up;
-            other_arg = cam.fov;
+            other_arg = cam.fovx;
         }
         Camera::Orthographic(cam) => {
             camera_type = &[1];
@@ -505,7 +505,7 @@ fn bytes_to_camera(data: &[u8]) -> Camera {
             position,
             target,
             up,
-            fov: other_val,
+            fovx: other_val,
         }),
         1 => Camera::Orthographic(OrthographicCam {
             position,
@@ -610,7 +610,7 @@ mod tests {
                     position,
                     target,
                     up,
-                    fov: other_arg,
+                    fovx: other_arg,
                 }),
                 2 => Camera::Orthographic(OrthographicCam {
                     position,

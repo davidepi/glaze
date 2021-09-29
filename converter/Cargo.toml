@@ -2,8 +2,20 @@
 name = "glaze-converter"
 version = "0.3.0"
 authors = ["Davide Pizzolotto <davide.pizzolotto@gmail.com>"]
+license = "MIT"
 edition = "2018"
 
 [[bin]]
 name = "glaze-converter"
 path = "src/main.rs"
+
+[dependencies]
+glaze = {path = "../lib"}
+clap = "2.33"
+cgmath = "0.18"
+russimp = "0.2"
+indicatif = "0.16"
+console = "0.14"
+
+[dev-dependencies]
+tempfile = "3.2"
