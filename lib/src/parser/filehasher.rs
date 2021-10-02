@@ -41,6 +41,8 @@ mod tests {
         let expected = 0x3330CE04D92F39D7;
         let hasher = XxHash64::with_seed(0);
         let filepath = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
             .join("resources")
             .join("checker.jpg");
         let mut file = File::open(filepath)?;
