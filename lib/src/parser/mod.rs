@@ -1,6 +1,6 @@
 use self::v1::ContentV1;
 use crate::geometry::{Camera, Mesh, Scene, Vertex};
-use crate::materials::{Library, Texture};
+use crate::{Library, Material, Texture};
 use std::convert::TryInto;
 use std::fmt::Display;
 use std::fs::File;
@@ -9,7 +9,7 @@ use std::path::Path;
 
 // DO NOT CHANGE THESE TWO! Any changes should be made with a new ParserVersion, changing the inner
 // content of the file, but the header must not change to retain backward compatibility.
-const MAGIC_NUMBER: u16 = 0x2F64;
+const MAGIC_NUMBER: [u8; 5] = [0x67, 0x6C, 0x61, 0x7A, 0x65];
 const HEADER_LEN: usize = 16;
 
 /// The version of the parser.
@@ -83,14 +83,14 @@ pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ParsedContent>, Error> {
     let mut reader = BufReader::new(fin);
     let mut header = [0; HEADER_LEN];
     if reader.read_exact(&mut header).is_ok() {
-        let magic = u16::from_be_bytes(header[0..2].try_into().unwrap());
+        let magic = &header[0..5];
         if magic != MAGIC_NUMBER {
             Err(Error::new(
                 ErrorKind::InvalidInput,
                 "Wrong or empty input file",
             ))
         } else {
-            let version = ParserVersion::from_byte(header[2])?;
+            let version = ParserVersion::from_byte(header[5])?;
             let parsed = match version {
                 ParserVersion::V1 => Box::new(ContentV1::parse(&mut reader)?),
             };
@@ -123,10 +123,10 @@ pub fn serialize<P: AsRef<Path>>(
     scene: &Scene,
 ) -> Result<(), Error> {
     let mut fout = File::create(file)?;
-    let magic = u16::to_be_bytes(MAGIC_NUMBER);
+    let magic = MAGIC_NUMBER;
     fout.write_all(&magic)?;
     fout.write_all(&[1_u8])?;
-    fout.write_all(&[0; 13])?;
+    fout.write_all(&[0; 10])?;
     let content = match version {
         ParserVersion::V1 => ContentV1::serialize(scene),
     };
@@ -149,6 +149,8 @@ pub trait ParsedContent {
     fn cameras(&self) -> Vec<Camera>;
     /// Retrieve only the [Texture]s contained in the file.
     fn textures(&self) -> Library<Texture>;
+    /// Retrieve only the [Material]s contained in the file.
+    fn materials(&self) -> Library<Material>;
 }
 
 mod filehasher;

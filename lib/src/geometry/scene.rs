@@ -1,5 +1,5 @@
 use super::{Camera, Mesh, Vertex};
-use crate::materials::{Library, Texture};
+use crate::{Library, Material, Texture};
 
 /// Struct representing a renderable scene.
 pub struct Scene {
@@ -7,6 +7,7 @@ pub struct Scene {
     pub meshes: Vec<Mesh>,
     pub cameras: Vec<Camera>,
     pub textures: Library<Texture>,
+    pub materials: Library<Material>,
 }
 
 impl Default for Scene {
@@ -16,6 +17,7 @@ impl Default for Scene {
             meshes: Vec::new(),
             cameras: Vec::new(),
             textures: Library::new(),
+            materials: Library::new(),
         }
     }
 }

@@ -1,12 +1,16 @@
-use std::collections::HashMap;
-use std::error::Error;
-
 use cgmath::{Point3, Vector2 as Vec2, Vector3 as Vec3};
 use clap::{App, Arg};
 use console::style;
-use glaze::{serialize, Camera, Library, Mesh, ParserVersion, PerspectiveCam, Scene, Vertex};
+use glaze::{
+    serialize, Camera, Library, Material, Mesh, ParserVersion, PerspectiveCam, Scene, ShaderMat,
+    Vertex,
+};
+use image::io::Reader as ImageReader;
 use indicatif::ProgressBar;
 use russimp::scene::{PostProcess, Scene as RussimpScene};
+use std::collections::HashMap;
+use std::error::Error;
+use std::path::PathBuf;
 
 fn main() {
     let supported_versions = [ParserVersion::V1]
@@ -41,7 +45,7 @@ fn main() {
     println!("{} Preprocessing input...", style("[1/3]").bold().dim());
     if let Ok(scene) = preprocess_input(input) {
         println!("{} Converting scene...", style("[2/3]").bold().dim());
-        if let Ok(scene) = convert_input(scene) {
+        if let Ok(scene) = convert_input(scene, input) {
             println!("{} Saving file...", style("[3/3]").bold().dim());
             if write_output(&scene, version, output).is_ok() {
                 println!("{}", style("Done!").bold().green());
@@ -67,7 +71,6 @@ fn preprocess_input(input: &str) -> Result<RussimpScene, Box<dyn Error>> {
         PostProcess::OptimizeMeshes,
         PostProcess::OptimizeGraph,
         PostProcess::FindInstances,
-        PostProcess::EmbedTextures,
         PostProcess::FixInfacingNormals,
         PostProcess::RemoveRedundantMaterials,
     ];
@@ -88,13 +91,55 @@ fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
         .collect()
 }
 
-fn convert_input(scene: RussimpScene) -> Result<Scene, Box<dyn Error>> {
+fn convert_input(scene: RussimpScene, original_path: &str) -> Result<Scene, Box<dyn Error>> {
     let effort = scene.meshes.iter().fold(0, |acc, m| acc + m.faces.len()) + scene.cameras.len();
     let pb = ProgressBar::new(effort as u64);
     let mut retval_meshes = Vec::new();
     let mut retval_vertices = Vec::new();
     let mut used_vert = HashMap::new();
     let mut retval_cameras = Vec::new();
+    let mut retval_textures = Library::new();
+    let mut retval_materials = Library::new();
+    let mut used_textures = HashMap::new();
+    for material in scene.materials {
+        let mut diffuse = None;
+        for (texture_type, textures) in material.textures {
+            match texture_type {
+                russimp::texture::TextureType::Diffuse => {
+                    let texture = textures.first().unwrap(); // support single textures only
+                                                             // replaces \ with / and hopes UNIX path do not use strange names
+                    let texture_name = texture.path.clone().replace("\\", "/");
+                    //TODO: add support for embedded textures
+                    let mut path = PathBuf::from(&texture_name);
+                    if path.is_relative() {
+                        path = PathBuf::from(original_path).parent().unwrap().join(path);
+                    }
+                    let id = *used_textures
+                        .entry(texture_name)
+                        .or_insert_with_key(|name| {
+                            retval_textures.insert(
+                                name,
+                                ImageReader::open(path)
+                                    .expect(&format!("Failed to find image {}", name))
+                                    .decode()
+                                    .expect(&format!("Incompatible image {}", name))
+                                    .to_rgba8(),
+                            )
+                        });
+                    diffuse = Some(id);
+                }
+                _ => {} //unsupported, do nothing
+            }
+        }
+        let glaze_material = Material {
+            shader_id: ShaderMat::Test.id(),
+            diffuse,
+        };
+        retval_materials.insert(
+            &format!("Material#{}", retval_materials.len()),
+            glaze_material,
+        );
+    }
     for mesh in scene.meshes {
         let mut indices = Vec::with_capacity(mesh.faces.len() * 3);
         if mesh.uv_components[0] < 2 {
@@ -129,7 +174,7 @@ fn convert_input(scene: RussimpScene) -> Result<Scene, Box<dyn Error>> {
         }
         let mesh = Mesh {
             indices,
-            material: 0,
+            material: mesh.material_index as u16,
             instances: Vec::new(),
         };
         retval_meshes.push(mesh);
@@ -155,7 +200,8 @@ fn convert_input(scene: RussimpScene) -> Result<Scene, Box<dyn Error>> {
         vertices: retval_vertices.into_iter().collect(),
         meshes: retval_meshes,
         cameras: retval_cameras,
-        textures: Library::new(),
+        textures: retval_textures,
+        materials: retval_materials,
     })
 }
 
@@ -171,14 +217,14 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_working_serializer() -> Result<(), Box<dyn Error>> {
+    fn test_working_conversion() -> Result<(), Box<dyn Error>> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .join("resources")
             .join("cube.obj");
         let scene = super::preprocess_input(path.to_str().unwrap()).unwrap();
-        let scene = super::convert_input(scene).unwrap();
+        let scene = super::convert_input(scene, path.to_str().unwrap()).unwrap();
         let dir = tempdir()?;
         let file = dir.path().join("serializer.bin");
         assert!(serialize(&file, glaze::ParserVersion::V1, &scene).is_ok());
@@ -187,6 +233,8 @@ mod tests {
         if let Ok(parsed) = parsed {
             assert_eq!(parsed.meshes().len(), 1);
             assert_eq!(parsed.cameras().len(), 1);
+            assert_eq!(parsed.materials().len(), 1);
+            assert_eq!(parsed.textures().len(), 1);
             assert_eq!(parsed.vertices().len(), 36);
         } else {
             panic!("Failed to parse back scene")
