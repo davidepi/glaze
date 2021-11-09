@@ -1,15 +1,24 @@
 use std::ptr;
 
-use super::{AllocatedBuffer, Device, Instance, PresentInstance, PresentSync, Swapchain};
-use crate::Scene;
+use super::{
+    AllocatedBuffer, DescriptorAllocator, DescriptorSetLayoutCache, Device, Instance,
+    PresentInstance, PresentSync, Swapchain,
+};
+use crate::{Material, Scene, ShaderMat};
 use ash::vk;
+use fnv::{FnvHashMap, FnvHashSet};
 use winit::window::Window;
+
+const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::UNIFORM_BUFFER, 1.0)];
 
 pub struct RealtimeRenderer {
     pub instance: PresentInstance,
     pub swapchain: Swapchain,
     pub sync: PresentSync,
     vertex_buffer: Option<AllocatedBuffer>,
+    descriptor_allocator: DescriptorAllocator,
+    descriptor_cache: DescriptorSetLayoutCache,
+    pipelines: FnvHashMap<u8, vk::Pipeline>,
     render_width: u32,
     render_height: u32,
 }
@@ -17,13 +26,20 @@ pub struct RealtimeRenderer {
 impl RealtimeRenderer {
     pub fn create(window: &Window, width: u32, height: u32) -> Self {
         let mut instance = PresentInstance::new(&window);
+        let descriptor_allocator =
+            DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
+        let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
         let swapchain = Swapchain::create(&mut instance, width, height);
+        let pipelines = FnvHashMap::default();
         let sync = PresentSync::create(instance.device());
         RealtimeRenderer {
             instance,
             swapchain,
             sync,
             vertex_buffer: None,
+            descriptor_allocator,
+            descriptor_cache,
+            pipelines,
             render_width: width,
             render_height: height,
         }
@@ -41,6 +57,7 @@ impl RealtimeRenderer {
     }
 
     pub fn change_scene(&mut self, scene: &Scene) {
+        self.wait_idle();
         let device = self.instance.device_mut();
         if let Some(prev_buf) = self.vertex_buffer.take() {
             device.free_vertices(prev_buf);

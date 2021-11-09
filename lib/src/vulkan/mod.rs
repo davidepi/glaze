@@ -1,4 +1,5 @@
 mod debug;
+mod descriptor;
 mod device;
 mod instance;
 mod platform;
@@ -7,6 +8,7 @@ mod surface;
 mod swapchain;
 mod sync;
 
+pub use self::descriptor::{DescriptorAllocator, DescriptorSetBuilder, DescriptorSetLayoutCache};
 pub use self::device::{AllocatedBuffer, Device, PresentDevice};
 pub use self::instance::{Instance, PresentInstance};
 pub use self::renderer::RealtimeRenderer;
