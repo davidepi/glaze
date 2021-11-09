@@ -42,8 +42,8 @@ impl<T> Library<T> {
             .collect()
     }
 
-    pub fn iter(&self) -> &[(u16, String, T)] {
-        &self.data
+    pub fn iter(&self) -> std::slice::Iter<(u16, String, T)> {
+        self.data.iter()
     }
 }
 

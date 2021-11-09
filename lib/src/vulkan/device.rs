@@ -2,12 +2,11 @@ use super::debug::{cchars_to_string, ValidationLayers};
 use super::surface::Surface;
 use super::sync::create_fence;
 use crate::geometry::Vertex;
-use crate::materials::PipelineBuilder;
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
 use gpu_allocator::{AllocatorDebugSettings, MemoryLocation};
 use std::collections::HashSet;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::ptr;
 
 pub trait Device {
@@ -133,100 +132,6 @@ impl PresentDevice {
                 .reset_command_pool(self.immediate_pool, vk::CommandPoolResetFlags::default())
                 .expect("Failed to reset immediate pool");
         }
-    }
-
-    fn build_pipeline(
-        &self,
-        pb: PipelineBuilder,
-        layout: vk::PipelineLayout,
-        render_pass: vk::RenderPass,
-    ) -> vk::Pipeline {
-        let main_str = CString::new("main").unwrap();
-        let shader_modules = pb
-            .shaders
-            .into_iter()
-            .map(|(shader_code, stage)| {
-                let create_info = vk::ShaderModuleCreateInfo {
-                    s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
-                    p_next: ptr::null(),
-                    flags: vk::ShaderModuleCreateFlags::default(),
-                    code_size: shader_code.len(),
-                    p_code: shader_code.as_ptr() as *const u32,
-                };
-                (
-                    unsafe { self.logical.create_shader_module(&create_info, None) }
-                        .expect("Failed to read SPIR-V shader"),
-                    stage,
-                )
-            })
-            .collect::<Vec<_>>();
-        let shader_stages = shader_modules
-            .iter()
-            .map(|(module, stage)| vk::PipelineShaderStageCreateInfo {
-                s_type: vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
-                p_next: ptr::null(),
-                flags: vk::PipelineShaderStageCreateFlags::default(),
-                stage: *stage,
-                module: *module,
-                p_name: main_str.as_ptr(),
-                p_specialization_info: ptr::null(),
-            })
-            .collect::<Vec<_>>();
-        let viewport_state = vk::PipelineViewportStateCreateInfo {
-            s_type: vk::StructureType::PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-            p_next: ptr::null(),
-            flags: Default::default(),
-            viewport_count: pb.viewports.len() as u32,
-            p_viewports: pb.viewports.as_ptr(),
-            scissor_count: pb.scissors.len() as u32,
-            p_scissors: pb.scissors.as_ptr(),
-        };
-        let blending = vk::PipelineColorBlendStateCreateInfo {
-            s_type: vk::StructureType::PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-            p_next: ptr::null(),
-            flags: Default::default(),
-            logic_op_enable: if pb.blending.0.is_some() {
-                vk::TRUE
-            } else {
-                vk::FALSE
-            },
-            logic_op: pb.blending.0.unwrap_or(vk::LogicOp::COPY),
-            attachment_count: pb.blending_settings.len() as u32,
-            p_attachments: pb.blending_settings.as_ptr(),
-            blend_constants: pb.blending.1,
-        };
-        let pipeline_ci = vk::GraphicsPipelineCreateInfo {
-            s_type: vk::StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
-            p_next: ptr::null(),
-            flags: Default::default(),
-            stage_count: shader_stages.len() as u32,
-            p_stages: shader_stages.as_ptr(),
-            p_vertex_input_state: &pb.vertex_input,
-            p_input_assembly_state: &pb.input_assembly,
-            p_tessellation_state: ptr::null(),
-            p_viewport_state: &viewport_state,
-            p_rasterization_state: &pb.rasterizer,
-            p_multisample_state: &pb.multisampling,
-            p_depth_stencil_state: ptr::null(),
-            p_color_blend_state: &blending,
-            p_dynamic_state: ptr::null(),
-            layout,
-            render_pass,
-            subpass: 0,
-            base_pipeline_handle: vk::Pipeline::null(),
-            base_pipeline_index: -1,
-        };
-        let pipeline = unsafe {
-            self.logical
-                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_ci], None)
-        }
-        .expect("Failed to create graphics pipeline")
-        .pop()
-        .unwrap();
-        shader_modules.into_iter().for_each(|(module, _)| unsafe {
-            self.logical.destroy_shader_module(module, None);
-        });
-        pipeline
     }
 
     pub fn load_vertices(&mut self, vertices: &[Vertex]) -> AllocatedBuffer {

@@ -5,7 +5,7 @@ use std::ops::Range;
 
 macro_rules! include_shader {
     ($shader_name : expr) => {
-        include_bytes!(concat!(env!("OUT_DIR"), "/shaders/", $shader_name, ".spv"));
+        include_bytes!(concat!(env!("OUT_DIR"), "/shaders/", $shader_name, ".spv"))
     };
 }
 
@@ -42,8 +42,8 @@ impl ShaderMat {
         let mut pipeline = PipelineBuilder::default();
         let vertex_shader = include_shader!("test.vert");
         let fragment_shader = include_shader!("test.frag");
-        pipeline.push_shader(vertex_shader, vk::ShaderStageFlags::VERTEX);
-        pipeline.push_shader(fragment_shader, vk::ShaderStageFlags::FRAGMENT);
+        pipeline.push_shader(vertex_shader, "main", vk::ShaderStageFlags::VERTEX);
+        pipeline.push_shader(fragment_shader, "main", vk::ShaderStageFlags::FRAGMENT);
         pipeline
     }
 }
