@@ -4,8 +4,6 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 
-use super::Instance;
-
 const MAX_SETS: usize = 512;
 const MAX_POOLS: usize = 4;
 

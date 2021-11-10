@@ -15,7 +15,6 @@ pub struct RealtimeRenderer {
     pub instance: PresentInstance,
     pub swapchain: Swapchain,
     pub sync: PresentSync,
-    vertex_buffer: Option<AllocatedBuffer>,
     descriptor_allocator: DescriptorAllocator,
     descriptor_cache: DescriptorSetLayoutCache,
     pipelines: FnvHashMap<u8, vk::Pipeline>,
@@ -36,7 +35,6 @@ impl RealtimeRenderer {
             instance,
             swapchain,
             sync,
-            vertex_buffer: None,
             descriptor_allocator,
             descriptor_cache,
             pipelines,
@@ -57,21 +55,21 @@ impl RealtimeRenderer {
     }
 
     pub fn change_scene(&mut self, scene: &Scene) {
-        self.wait_idle();
-        let device = self.instance.device_mut();
-        if let Some(prev_buf) = self.vertex_buffer.take() {
-            device.free_vertices(prev_buf);
-        }
-        self.vertex_buffer = Some(device.load_vertices(&scene.vertices));
+        // self.wait_idle();
+        // let device = self.instance.device_mut();
+        // if let Some(prev_buf) = self.vertex_buffer.take() {
+        // device.free_vertices(prev_buf);
+        // }
+        // self.vertex_buffer = Some(device.load_vertices(&scene.vertices));
     }
 
     pub fn destroy(mut self) {
-        let device = self.instance.device_mut();
-        if let Some(vb) = self.vertex_buffer.take() {
-            device.free_vertices(vb);
-        }
-        self.sync.destroy(self.instance.device());
-        self.swapchain.destroy(&self.instance);
+        // let device = self.instance.device_mut();
+        // if let Some(vb) = self.vertex_buffer.take() {
+        // device.free_vertices(vb);
+        // }
+        // self.sync.destroy(self.instance.device());
+        // self.swapchain.destroy(&self.instance);
     }
 
     pub fn draw_frame(&mut self) {
