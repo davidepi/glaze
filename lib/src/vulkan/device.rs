@@ -1,7 +1,7 @@
 use super::debug::{cchars_to_string, ValidationLayers};
+use super::memory::AllocatedBuffer;
 use super::surface::Surface;
 use super::sync::create_fence;
-use super::AllocatedBuffer;
 use ash::vk;
 use std::collections::HashSet;
 use std::ffi::CStr;
@@ -10,6 +10,22 @@ use std::ptr;
 pub trait Device {
     fn logical(&self) -> &ash::Device;
     fn physical(&self) -> &PhysicalDevice;
+    fn immediate_execute<F>(&self, command: F)
+    where
+        F: Fn(&ash::Device, vk::CommandBuffer);
+    fn copy_buffer(&self, src: &AllocatedBuffer, dst: &AllocatedBuffer) {
+        let copy_region = vk::BufferCopy {
+            src_offset: src.allocation.offset(),
+            dst_offset: dst.allocation.offset(),
+            size: src.allocation.size(),
+        };
+        let command = unsafe {
+            |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_copy_buffer(cmd, src.buffer, dst.buffer, &[copy_region]);
+            }
+        };
+        self.immediate_execute(command);
+    }
 }
 
 pub struct PresentDevice {
@@ -63,56 +79,6 @@ impl PresentDevice {
     pub fn graphic_queue(&self) -> vk::Queue {
         self.graphic_queue
     }
-
-    fn copy_buffer(&self, src: &AllocatedBuffer, dst: &AllocatedBuffer) {
-        let cmds = create_command_buffers(&self.logical, self.graphic_pool, 1);
-        let fence = create_fence(self, false);
-        let cmd_begin = vk::CommandBufferBeginInfo {
-            s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
-            p_next: ptr::null(),
-            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
-            p_inheritance_info: ptr::null(),
-        };
-        let copy_region = vk::BufferCopy {
-            src_offset: src.allocation.offset(),
-            dst_offset: dst.allocation.offset(),
-            size: src.allocation.size(),
-        };
-        let submit_ci = vk::SubmitInfo {
-            s_type: vk::StructureType::SUBMIT_INFO,
-            p_next: ptr::null(),
-            wait_semaphore_count: 0,
-            p_wait_semaphores: ptr::null(),
-            p_wait_dst_stage_mask: ptr::null(),
-            command_buffer_count: cmds.len() as u32,
-            p_command_buffers: cmds.as_ptr(),
-            signal_semaphore_count: 0,
-            p_signal_semaphores: ptr::null(),
-        };
-        unsafe {
-            let cmd = cmds[0];
-            self.logical
-                .begin_command_buffer(cmd, &cmd_begin)
-                .expect("Failed to begin command");
-            self.logical
-                .cmd_copy_buffer(cmd, src.buffer, dst.buffer, &[copy_region]);
-            self.logical
-                .end_command_buffer(cmd)
-                .expect("Failed to end command buffer");
-            self.logical
-                .queue_submit(self.graphic_queue, &[submit_ci], fence)
-                .expect("Failed to submit to queue");
-            self.logical
-                .wait_for_fences(&[fence], true, u64::MAX)
-                .expect("Failed to wait on fences");
-            self.logical
-                .reset_fences(&[fence])
-                .expect("Failed to reset fence");
-            self.logical
-                .reset_command_pool(self.immediate_pool, vk::CommandPoolResetFlags::default())
-                .expect("Failed to reset immediate pool");
-        }
-    }
 }
 
 impl Drop for PresentDevice {
@@ -132,6 +98,53 @@ impl Device for PresentDevice {
 
     fn physical(&self) -> &PhysicalDevice {
         &self.physical
+    }
+
+    fn immediate_execute<F>(&self, command: F)
+    where
+        F: Fn(&ash::Device, vk::CommandBuffer),
+    {
+        let cmds = create_command_buffers(&self.logical, self.graphic_pool, 1);
+        let fence = create_fence(self, false);
+        let cmd_begin = vk::CommandBufferBeginInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+            p_next: ptr::null(),
+            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            p_inheritance_info: ptr::null(),
+        };
+        let submit_ci = vk::SubmitInfo {
+            s_type: vk::StructureType::SUBMIT_INFO,
+            p_next: ptr::null(),
+            wait_semaphore_count: 0,
+            p_wait_semaphores: ptr::null(),
+            p_wait_dst_stage_mask: ptr::null(),
+            command_buffer_count: cmds.len() as u32,
+            p_command_buffers: cmds.as_ptr(),
+            signal_semaphore_count: 0,
+            p_signal_semaphores: ptr::null(),
+        };
+        unsafe {
+            let cmd = cmds[0];
+            self.logical
+                .begin_command_buffer(cmd, &cmd_begin)
+                .expect("Failed to begin command");
+            command(&self.logical, cmd);
+            self.logical
+                .end_command_buffer(cmd)
+                .expect("Failed to end command buffer");
+            self.logical
+                .queue_submit(self.graphic_queue, &[submit_ci], fence)
+                .expect("Failed to submit to queue");
+            self.logical
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .expect("Failed to wait on fences");
+            self.logical
+                .reset_fences(&[fence])
+                .expect("Failed to reset fence");
+            self.logical
+                .reset_command_pool(self.immediate_pool, vk::CommandPoolResetFlags::default())
+                .expect("Failed to reset immediate pool");
+        }
     }
 }
 

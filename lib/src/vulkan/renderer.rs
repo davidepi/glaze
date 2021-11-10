@@ -1,12 +1,12 @@
-use std::ptr;
-
-use super::{
-    AllocatedBuffer, DescriptorAllocator, DescriptorSetLayoutCache, Device, Instance,
-    PresentInstance, PresentSync, Swapchain,
-};
-use crate::{Material, Scene, ShaderMat};
+use super::descriptor::{DescriptorAllocator, DescriptorSetLayoutCache};
+use super::device::Device;
+use super::instance::{Instance, PresentInstance};
+use super::memory::MemoryManager;
+use super::swapchain::Swapchain;
+use super::sync::PresentSync;
+use crate::Scene;
 use ash::vk;
-use fnv::{FnvHashMap, FnvHashSet};
+use std::ptr;
 use winit::window::Window;
 
 const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::UNIFORM_BUFFER, 1.0)];
@@ -17,7 +17,7 @@ pub struct RealtimeRenderer {
     pub sync: PresentSync,
     descriptor_allocator: DescriptorAllocator,
     descriptor_cache: DescriptorSetLayoutCache,
-    pipelines: FnvHashMap<u8, vk::Pipeline>,
+    mm: MemoryManager,
     render_width: u32,
     render_height: u32,
 }
@@ -29,7 +29,11 @@ impl RealtimeRenderer {
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
         let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
         let swapchain = Swapchain::create(&mut instance, width, height);
-        let pipelines = FnvHashMap::default();
+        let mm = MemoryManager::new(
+            instance.instance(),
+            instance.device().logical(),
+            instance.device().physical().device,
+        );
         let sync = PresentSync::create(instance.device());
         RealtimeRenderer {
             instance,
@@ -37,7 +41,7 @@ impl RealtimeRenderer {
             sync,
             descriptor_allocator,
             descriptor_cache,
-            pipelines,
+            mm,
             render_width: width,
             render_height: height,
         }

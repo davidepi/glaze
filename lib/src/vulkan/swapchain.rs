@@ -1,6 +1,9 @@
-use super::{Device, Instance, PresentFrameSync, PresentInstance};
 use ash::vk;
 use std::ptr;
+
+use super::device::Device;
+use super::instance::{Instance, PresentInstance};
+use super::sync::PresentFrameSync;
 
 pub struct AcquiredImage {
     pub index: u32,

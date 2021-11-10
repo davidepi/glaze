@@ -1,7 +1,8 @@
-use super::Device;
 use ash::vk;
 use std::convert::TryInto;
 use std::ptr;
+
+use super::device::Device;
 
 const FRAMES_INFLIGHT: usize = 2;
 

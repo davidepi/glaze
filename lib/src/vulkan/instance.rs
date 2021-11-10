@@ -1,8 +1,7 @@
-use super::device::SurfaceSupport;
-use super::surface::Surface;
-use super::{platform, Device};
 use crate::vulkan::debug::ValidationLayers;
-use crate::vulkan::PresentDevice;
+use crate::vulkan::device::{Device, PresentDevice, SurfaceSupport};
+use crate::vulkan::platform;
+use crate::vulkan::surface::Surface;
 use ash::vk;
 use std::ffi::{CStr, CString};
 use std::ptr;

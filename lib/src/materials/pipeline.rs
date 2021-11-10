@@ -1,11 +1,21 @@
 use crate::geometry::Vertex;
 use ash::vk;
+use cgmath::Matrix4;
 use std::ffi::CString;
 use std::ptr;
 
 pub struct Pipeline {
     pipeline: vk::Pipeline,
     layout: vk::PipelineLayout,
+}
+
+impl Pipeline {
+    pub fn destroy(&self, device: &ash::Device) {
+        unsafe {
+            device.destroy_pipeline_layout(self.layout, None);
+            device.destroy_pipeline(self.pipeline, None);
+        }
+    }
 }
 
 pub struct PipelineBuilder {
@@ -27,7 +37,7 @@ impl PipelineBuilder {
         ));
     }
 
-    fn build(
+    pub fn build(
         self,
         device: &ash::Device,
         renderpass: vk::RenderPass,
@@ -71,14 +81,19 @@ impl PipelineBuilder {
             p_attachments: self.blending_settings.as_ptr(),
             blend_constants: self.blending.1,
         };
+        let push_constant = [vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+            offset: 0,
+            size: std::mem::size_of::<Matrix4<f32>>() as u32,
+        }];
         let pipeline_layout = vk::PipelineLayoutCreateInfo {
             s_type: vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineLayoutCreateFlags::empty(),
             set_layout_count: set_layout.len() as u32,
             p_set_layouts: set_layout.as_ptr(),
-            push_constant_range_count: 0,
-            p_push_constant_ranges: ptr::null(),
+            push_constant_range_count: push_constant.len() as u32,
+            p_push_constant_ranges: push_constant.as_ptr(),
         };
         let layout = unsafe { device.create_pipeline_layout(&pipeline_layout, None) }
             .expect("Failed to create Pipeline Layout");

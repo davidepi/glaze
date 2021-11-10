@@ -9,6 +9,7 @@ pub struct MemoryManager {
     allocator: Allocator,
 }
 
+#[derive(Debug)]
 pub struct AllocatedBuffer {
     pub buffer: vk::Buffer,
     pub allocation: Allocation,
