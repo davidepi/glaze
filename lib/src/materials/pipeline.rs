@@ -5,8 +5,8 @@ use std::ffi::CString;
 use std::ptr;
 
 pub struct Pipeline {
-    pipeline: vk::Pipeline,
-    layout: vk::PipelineLayout,
+    pub pipeline: vk::Pipeline,
+    pub layout: vk::PipelineLayout,
 }
 
 impl Pipeline {

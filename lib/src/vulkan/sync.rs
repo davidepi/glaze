@@ -1,10 +1,7 @@
+use super::device::Device;
 use ash::vk;
 use std::convert::TryInto;
 use std::ptr;
-
-use super::device::Device;
-
-const FRAMES_INFLIGHT: usize = 2;
 
 #[derive(Debug)]
 pub struct PresentFrameSync {
@@ -55,28 +52,23 @@ impl PresentFrameSync {
     }
 }
 
-pub struct PresentSync {
-    frames: [PresentFrameSync; FRAMES_INFLIGHT],
-    current_frame: u8,
+pub struct PresentSync<const FRAMES_IN_FLIGHT: usize> {
+    frames: [PresentFrameSync; FRAMES_IN_FLIGHT],
 }
 
-impl PresentSync {
+impl<const FRAMES_IN_FLIGHT: usize> PresentSync<FRAMES_IN_FLIGHT> {
     pub fn create<T: Device>(device: &T) -> Self {
-        let frames = (0..FRAMES_INFLIGHT)
+        let frames = (0..FRAMES_IN_FLIGHT)
             .map(|_| PresentFrameSync::create(device))
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
-        PresentSync {
-            frames,
-            current_frame: 0,
-        }
+        PresentSync { frames }
     }
 
-    pub fn next(&mut self) -> &mut PresentFrameSync {
-        let frame = unsafe { self.frames.get_unchecked_mut(self.current_frame as usize) };
-        self.current_frame = ((self.current_frame as usize + 1) % FRAMES_INFLIGHT) as u8;
-        frame
+    pub fn get(&mut self, frame_no: usize) -> &mut PresentFrameSync {
+        let idx = frame_no % FRAMES_IN_FLIGHT;
+        unsafe { self.frames.get_unchecked_mut(idx) }
     }
 
     pub fn destroy<T: Device>(self, device: &T) {

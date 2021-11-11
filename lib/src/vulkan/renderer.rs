@@ -2,24 +2,30 @@ use super::descriptor::{DescriptorAllocator, DescriptorSetLayoutCache};
 use super::device::Device;
 use super::instance::{Instance, PresentInstance};
 use super::memory::MemoryManager;
+use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
+use crate::materials::Pipeline;
 use crate::Scene;
 use ash::vk;
+use cgmath::Matrix4;
 use std::ptr;
 use winit::window::Window;
 
 const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::UNIFORM_BUFFER, 1.0)];
+const FRAMES_IN_FLIGHT: usize = 2;
 
 pub struct RealtimeRenderer {
-    pub instance: PresentInstance,
-    pub swapchain: Swapchain,
-    pub sync: PresentSync,
+    instance: PresentInstance,
+    swapchain: Swapchain,
     descriptor_allocator: DescriptorAllocator,
     descriptor_cache: DescriptorSetLayoutCache,
     mm: MemoryManager,
+    sync: PresentSync<FRAMES_IN_FLIGHT>,
+    scene: Option<VulkanScene<FRAMES_IN_FLIGHT>>,
     render_width: u32,
     render_height: u32,
+    frame_no: usize,
 }
 
 impl RealtimeRenderer {
@@ -38,12 +44,14 @@ impl RealtimeRenderer {
         RealtimeRenderer {
             instance,
             swapchain,
-            sync,
             descriptor_allocator,
             descriptor_cache,
             mm,
+            sync,
+            scene: None,
             render_width: width,
             render_height: height,
+            frame_no: 0,
         }
     }
 
@@ -56,28 +64,48 @@ impl RealtimeRenderer {
         self.render_width = width;
         self.render_height = height;
         self.swapchain.re_create(&mut self.instance, width, height);
+        if let Some(scene) = &mut self.scene {
+            scene.deinit_pipelines(self.instance.device().logical());
+            scene.init_pipelines(
+                width,
+                height,
+                self.instance.device().logical(),
+                self.swapchain.default_render_pass(),
+            )
+        }
     }
 
-    pub fn change_scene(&mut self, scene: &Scene) {
-        // self.wait_idle();
-        // let device = self.instance.device_mut();
-        // if let Some(prev_buf) = self.vertex_buffer.take() {
-        // device.free_vertices(prev_buf);
-        // }
-        // self.vertex_buffer = Some(device.load_vertices(&scene.vertices));
+    pub fn change_scene(&mut self, scene: Scene) {
+        self.wait_idle();
+        if let Some(mut scene) = self.scene.take() {
+            scene.deinit_pipelines(self.instance.device().logical());
+            scene.unload(&mut self.mm);
+        }
+        let mut new =
+            VulkanScene::<FRAMES_IN_FLIGHT>::load(self.instance.device(), &mut self.mm, scene);
+        new.init_pipelines(
+            self.render_width,
+            self.render_height,
+            self.instance.device().logical(),
+            self.swapchain.default_render_pass(),
+        );
+        self.scene = Some(new);
     }
 
     pub fn destroy(mut self) {
-        // let device = self.instance.device_mut();
-        // if let Some(vb) = self.vertex_buffer.take() {
-        // device.free_vertices(vb);
-        // }
-        // self.sync.destroy(self.instance.device());
-        // self.swapchain.destroy(&self.instance);
+        self.wait_idle();
+        if let Some(mut scene) = self.scene.take() {
+            scene.deinit_pipelines(self.instance.device().logical());
+            scene.unload(&mut self.mm);
+        }
+        self.descriptor_cache.destroy();
+        self.descriptor_allocator.destroy();
+        self.sync.destroy(self.instance.device());
+        self.swapchain.destroy(&self.instance);
     }
 
     pub fn draw_frame(&mut self) {
-        let frame_sync = self.sync.next();
+        let frame_sync = self.sync.get(self.frame_no);
         frame_sync.wait_acquire(self.instance.device());
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
             let device = self.instance.device().logical();
@@ -114,6 +142,10 @@ impl RealtimeRenderer {
                     .begin_command_buffer(acquired.cmd, &cmd_ci)
                     .expect("Failed to begin command buffer");
                 device.cmd_begin_render_pass(acquired.cmd, &rp_ci, vk::SubpassContents::INLINE);
+                if let Some(scene) = &self.scene {
+                    let ar = self.render_width as f32 / self.render_height as f32;
+                    draw_objects(scene, ar, device, acquired.cmd);
+                }
                 device.cmd_end_render_pass(acquired.cmd);
                 device
                     .end_command_buffer(acquired.cmd)
@@ -150,8 +182,45 @@ impl RealtimeRenderer {
                     .expect("Failed to submit render task");
             }
             self.swapchain.queue_present(queue, &present_ci);
+            self.frame_no += 1;
         } else {
             return; // out of date swapchain. the resize is called by winit so wait next frame
         }
     }
+}
+
+unsafe fn draw_objects(
+    scene: &VulkanScene<FRAMES_IN_FLIGHT>,
+    ar: f32,
+    device: &ash::Device,
+    cmd: vk::CommandBuffer,
+) {
+    let cam = &scene.current_cam;
+    let mut proj = cam.projection(ar);
+    proj[1][1] *= -1.0;
+    let view = cam.look_at_rh();
+    let viewproj = proj * view;
+    let mut current_shader_id = u8::MAX;
+    device.cmd_bind_vertex_buffers(cmd, 0, &[scene.vertex_buffer.buffer], &[0]);
+    device.cmd_bind_index_buffer(cmd, scene.index_buffer.buffer, 0, vk::IndexType::UINT32); //bind once, use firts_index as offset
+    for obj in &scene.meshes {
+        let material = scene.materials.get(&obj.material).unwrap(); //TODO: unwrap or default material
+        if material.shader_id != current_shader_id {
+            current_shader_id = material.shader_id;
+            let pipeline = scene.pipelines.get(&material.shader_id).unwrap(); //TODO: unwrap or load at runtime
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
+            device.cmd_push_constants(
+                cmd,
+                pipeline.layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                as_u8_slice(&viewproj),
+            )
+        }
+        device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
+    }
+}
+
+unsafe fn as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+    std::slice::from_raw_parts((p as *const T) as *const u8, std::mem::size_of::<T>())
 }

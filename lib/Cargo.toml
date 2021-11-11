@@ -15,8 +15,8 @@ log = "0.4"
 cgmath = "0.18"
 image = "0.23"
 twox-hash = "1.6"
-memoffset = "0.6.0"
-gpu-allocator = {path="../../gpu-allocator", version = "0.9"}
+memoffset = "0.6"
+gpu-allocator = "0.10"
 fnv = "1.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]

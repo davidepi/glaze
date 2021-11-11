@@ -89,9 +89,10 @@ impl DescriptorAllocator {
 
     pub fn destroy(self) {
         self.free_pools
-            .iter()
-            .chain(&self.used_pools)
-            .for_each(|pool| unsafe { self.device.destroy_descriptor_pool(*pool, None) });
+            .into_iter()
+            .chain(self.used_pools)
+            .for_each(|pool| unsafe { self.device.destroy_descriptor_pool(pool, None) });
+        unsafe { self.device.destroy_descriptor_pool(self.current_pool, None) };
     }
 }
 
@@ -183,6 +184,12 @@ impl DescriptorSetLayoutCache {
                 layout
             }
         }
+    }
+
+    pub fn destroy(self) {
+        self.cache.into_iter().for_each(|(_, layout)| unsafe {
+            self.device.destroy_descriptor_set_layout(layout, None)
+        });
     }
 }
 
