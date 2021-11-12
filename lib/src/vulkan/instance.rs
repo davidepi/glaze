@@ -50,6 +50,10 @@ impl PresentInstance {
     pub fn surface_capabilities(&self) -> SurfaceSupport {
         self.device.physical().surface_capabilities(&self.surface)
     }
+
+    pub fn destroy(self) {
+        self.device.destroy();
+    }
 }
 
 impl Instance for PresentInstance {

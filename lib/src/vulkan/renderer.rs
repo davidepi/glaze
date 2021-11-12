@@ -100,8 +100,10 @@ impl RealtimeRenderer {
         }
         self.descriptor_cache.destroy();
         self.descriptor_allocator.destroy();
+        self.mm.destroy();
         self.sync.destroy(self.instance.device());
         self.swapchain.destroy(&self.instance);
+        self.instance.destroy();
     }
 
     pub fn draw_frame(&mut self) {

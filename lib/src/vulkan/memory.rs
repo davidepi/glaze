@@ -12,6 +12,7 @@ pub struct MemoryManager {
 #[derive(Debug)]
 pub struct AllocatedBuffer {
     pub buffer: vk::Buffer,
+    pub size: u64, //not necessarily the same as allocation size
     pub allocation: Allocation,
 }
 impl MemoryManager {
@@ -88,7 +89,11 @@ impl MemoryManager {
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
         }
         .expect("Failed to bind memory");
-        AllocatedBuffer { buffer, allocation }
+        AllocatedBuffer {
+            buffer,
+            size,
+            allocation,
+        }
     }
 
     pub fn free_buffer(&mut self, buf: AllocatedBuffer) {
@@ -96,5 +101,9 @@ impl MemoryManager {
             log::warn!("Failed to free memory");
         }
         unsafe { self.device.destroy_buffer(buf.buffer, None) };
+    }
+
+    pub fn destroy(self) {
+        //do nothing, but consumes self, so the allocator Drop kicks in
     }
 }

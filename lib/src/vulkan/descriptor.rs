@@ -31,7 +31,7 @@ impl DescriptorAllocator {
         DescriptorAllocator {
             current_pool,
             pool_sizes,
-            free_pools: Vec::with_capacity(MAX_POOLS),
+            free_pools,
             used_pools: Vec::with_capacity(MAX_POOLS),
             device,
         }
@@ -91,7 +91,9 @@ impl DescriptorAllocator {
         self.free_pools
             .into_iter()
             .chain(self.used_pools)
-            .for_each(|pool| unsafe { self.device.destroy_descriptor_pool(pool, None) });
+            .for_each(|pool| unsafe {
+                self.device.destroy_descriptor_pool(pool, None);
+            });
         unsafe { self.device.destroy_descriptor_pool(self.current_pool, None) };
     }
 }

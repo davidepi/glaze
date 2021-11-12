@@ -102,6 +102,7 @@ impl<const FRAMES_IN_FLIGHT: usize> VulkanScene<FRAMES_IN_FLIGHT> {
 
     pub fn unload(self, mm: &mut MemoryManager) {
         mm.free_buffer(self.vertex_buffer);
+        mm.free_buffer(self.index_buffer);
     }
 }
 
@@ -123,21 +124,13 @@ fn load_vertices_to_gpu<T: Device>(
         vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
         MemoryLocation::GpuOnly,
     );
-    unsafe {
-        let mapped = device
-            .logical()
-            .map_memory(
-                cpu_buffer.allocation.memory(),
-                cpu_buffer.allocation.offset(),
-                size,
-                vk::MemoryMapFlags::default(),
-            )
-            .expect("Failed to map memory") as *mut Vertex;
-        mapped.copy_from_nonoverlapping(vertices.as_ptr(), vertices.len());
-        device
-            .logical()
-            .unmap_memory(cpu_buffer.allocation.memory());
-    }
+    let mapped = cpu_buffer
+        .allocation
+        .mapped_ptr()
+        .expect("Faield to map memory")
+        .cast()
+        .as_ptr();
+    unsafe { std::ptr::copy_nonoverlapping(vertices.as_ptr(), mapped, vertices.len()) };
     device.copy_buffer(&cpu_buffer, &gpu_buffer);
     mm.free_buffer(cpu_buffer);
     gpu_buffer
@@ -163,30 +156,23 @@ fn load_indices_to_gpu<T: Device>(
         MemoryLocation::GpuOnly,
     );
     let mut converted_meshes = Vec::with_capacity(meshes.len());
-    unsafe {
-        let mapped = device
-            .logical()
-            .map_memory(
-                cpu_buffer.allocation.memory(),
-                cpu_buffer.allocation.offset(),
-                size,
-                vk::MemoryMapFlags::default(),
-            )
-            .expect("Failed to map memory") as *mut u32;
-        let mut offset = 0;
-        for mesh in meshes {
-            mapped.copy_from_nonoverlapping(mesh.indices.as_ptr(), mesh.indices.len());
-            converted_meshes.push(VulkanMesh {
-                index_offset: offset,
-                index_count: mesh.indices.len() as u32,
-                material: mesh.material,
-            });
-            offset += mesh.indices.len() as u32;
-        }
-        device
-            .logical()
-            .unmap_memory(cpu_buffer.allocation.memory());
-        mm.free_buffer(cpu_buffer);
-        (converted_meshes, gpu_buffer)
+    let mapped = cpu_buffer
+        .allocation
+        .mapped_ptr()
+        .expect("Faield to map memory")
+        .cast()
+        .as_ptr();
+    let mut offset = 0;
+    for mesh in meshes {
+        unsafe { std::ptr::copy_nonoverlapping(mesh.indices.as_ptr(), mapped, mesh.indices.len()) };
+        converted_meshes.push(VulkanMesh {
+            index_offset: offset,
+            index_count: mesh.indices.len() as u32,
+            material: mesh.material,
+        });
+        offset += mesh.indices.len() as u32;
     }
+    device.copy_buffer(&cpu_buffer, &gpu_buffer);
+    mm.free_buffer(cpu_buffer);
+    (converted_meshes, gpu_buffer)
 }

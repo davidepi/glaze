@@ -20,7 +20,6 @@ impl Pipeline {
 
 pub struct PipelineBuilder {
     pub shaders: Vec<(Vec<u8>, CString, vk::ShaderStageFlags)>,
-    pub vertex_input: vk::PipelineVertexInputStateCreateInfo,
     pub input_assembly: vk::PipelineInputAssemblyStateCreateInfo,
     pub rasterizer: vk::PipelineRasterizationStateCreateInfo,
     pub multisampling: vk::PipelineMultisampleStateCreateInfo,
@@ -58,6 +57,18 @@ impl PipelineBuilder {
                 p_specialization_info: ptr::null(),
             })
             .collect::<Vec<_>>();
+        // vertex input cannot stay inside the builder because it uses pointer
+        let binding_descriptions = Vertex::binding_descriptions();
+        let attribute_descriptions = Vertex::attribute_descriptions();
+        let vertex_input = vk::PipelineVertexInputStateCreateInfo {
+            s_type: vk::StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: Default::default(),
+            vertex_binding_description_count: binding_descriptions.len() as u32,
+            p_vertex_binding_descriptions: binding_descriptions.as_ptr(),
+            vertex_attribute_description_count: attribute_descriptions.len() as u32,
+            p_vertex_attribute_descriptions: attribute_descriptions.as_ptr(),
+        };
         let viewport_state = vk::PipelineViewportStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_VIEWPORT_STATE_CREATE_INFO,
             p_next: ptr::null(),
@@ -103,7 +114,7 @@ impl PipelineBuilder {
             flags: vk::PipelineCreateFlags::empty(),
             stage_count: shader_stages.len() as u32,
             p_stages: shader_stages.as_ptr(),
-            p_vertex_input_state: &self.vertex_input,
+            p_vertex_input_state: &vertex_input,
             p_input_assembly_state: &self.input_assembly,
             p_tessellation_state: ptr::null(),
             p_viewport_state: &viewport_state,
@@ -132,17 +143,6 @@ impl PipelineBuilder {
 impl Default for PipelineBuilder {
     fn default() -> Self {
         let shaders = Vec::with_capacity(2);
-        let binding_descriptions = Vertex::binding_descriptions();
-        let attribute_descriptions = Vertex::attribute_descriptions();
-        let vertex_input = vk::PipelineVertexInputStateCreateInfo {
-            s_type: vk::StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-            p_next: ptr::null(),
-            flags: Default::default(),
-            vertex_binding_description_count: binding_descriptions.len() as u32,
-            p_vertex_binding_descriptions: binding_descriptions.as_ptr(),
-            vertex_attribute_description_count: attribute_descriptions.len() as u32,
-            p_vertex_attribute_descriptions: attribute_descriptions.as_ptr(),
-        };
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
             p_next: ptr::null(),
@@ -189,7 +189,6 @@ impl Default for PipelineBuilder {
         let blending = (None, [0.0; 4]);
         PipelineBuilder {
             shaders,
-            vertex_input,
             input_assembly,
             rasterizer,
             multisampling,

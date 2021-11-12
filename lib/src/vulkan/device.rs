@@ -1,7 +1,6 @@
 use super::debug::{cchars_to_string, ValidationLayers};
 use super::memory::AllocatedBuffer;
 use super::surface::Surface;
-use super::sync::create_fence;
 use ash::vk;
 use std::collections::HashSet;
 use std::ffi::CStr;
@@ -15,9 +14,10 @@ pub trait Device {
         F: Fn(&ash::Device, vk::CommandBuffer);
     fn copy_buffer(&self, src: &AllocatedBuffer, dst: &AllocatedBuffer) {
         let copy_region = vk::BufferCopy {
-            src_offset: src.allocation.offset(),
-            dst_offset: dst.allocation.offset(),
-            size: src.allocation.size(),
+            // these are not the allocation offset, but the buffer offset!
+            src_offset: 0,
+            dst_offset: 0,
+            size: src.size,
         };
         let command = unsafe {
             |device: &ash::Device, cmd: vk::CommandBuffer| {
@@ -34,6 +34,7 @@ pub struct PresentDevice {
     graphic_index: u32,
     graphic_pool: vk::CommandPool,
     immediate_pool: vk::CommandPool,
+    immediate_fence: vk::Fence,
     graphic_queue: vk::Queue,
 }
 
@@ -54,6 +55,13 @@ impl PresentDevice {
         let logical = create_logical_device(instance, ext, &physical, &all_queues);
         let graphic_pool = create_command_pool(&logical, graphic_index);
         let immediate_pool = create_command_pool(&logical, graphic_index);
+        let ci = vk::FenceCreateInfo {
+            s_type: vk::StructureType::FENCE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::FenceCreateFlags::empty(),
+        };
+        let immediate_fence =
+            unsafe { logical.create_fence(&ci, None) }.expect("Failed to create fence");
         let graphic_queue = unsafe { logical.get_device_queue(graphic_index, 0) };
         PresentDevice {
             logical,
@@ -61,6 +69,7 @@ impl PresentDevice {
             graphic_index,
             graphic_pool,
             immediate_pool,
+            immediate_fence,
             graphic_queue,
         }
     }
@@ -79,13 +88,12 @@ impl PresentDevice {
     pub fn graphic_queue(&self) -> vk::Queue {
         self.graphic_queue
     }
-}
 
-impl Drop for PresentDevice {
-    fn drop(&mut self) {
+    pub fn destroy(self) {
         unsafe {
             self.logical.destroy_command_pool(self.graphic_pool, None);
             self.logical.destroy_command_pool(self.immediate_pool, None);
+            self.logical.destroy_fence(self.immediate_fence, None);
             self.logical.destroy_device(None);
         }
     }
@@ -105,7 +113,6 @@ impl Device for PresentDevice {
         F: Fn(&ash::Device, vk::CommandBuffer),
     {
         let cmds = create_command_buffers(&self.logical, self.graphic_pool, 1);
-        let fence = create_fence(self, false);
         let cmd_begin = vk::CommandBufferBeginInfo {
             s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
             p_next: ptr::null(),
@@ -133,13 +140,13 @@ impl Device for PresentDevice {
                 .end_command_buffer(cmd)
                 .expect("Failed to end command buffer");
             self.logical
-                .queue_submit(self.graphic_queue, &[submit_ci], fence)
+                .queue_submit(self.graphic_queue, &[submit_ci], self.immediate_fence)
                 .expect("Failed to submit to queue");
             self.logical
-                .wait_for_fences(&[fence], true, u64::MAX)
+                .wait_for_fences(&[self.immediate_fence], true, u64::MAX)
                 .expect("Failed to wait on fences");
             self.logical
-                .reset_fences(&[fence])
+                .reset_fences(&[self.immediate_fence])
                 .expect("Failed to reset fence");
             self.logical
                 .reset_command_pool(self.immediate_pool, vk::CommandPoolResetFlags::default())
