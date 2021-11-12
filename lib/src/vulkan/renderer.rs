@@ -8,7 +8,7 @@ use super::sync::PresentSync;
 use crate::materials::Pipeline;
 use crate::Scene;
 use ash::vk;
-use cgmath::Matrix4;
+use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
 use winit::window::Window;
 
@@ -210,14 +210,14 @@ unsafe fn draw_objects(
         if material.shader_id != current_shader_id {
             current_shader_id = material.shader_id;
             let pipeline = scene.pipelines.get(&material.shader_id).unwrap(); //TODO: unwrap or load at runtime
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
             device.cmd_push_constants(
                 cmd,
                 pipeline.layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
                 as_u8_slice(&viewproj),
-            )
+            );
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
         }
         device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
     }

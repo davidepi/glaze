@@ -192,7 +192,7 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<Scene, Box<
             position: Point3::new(0.0, 0.0, 0.0),
             target: Point3::new(0.0, 0.0, 100.0),
             up: Vec3::new(0.0, 1.0, 0.0),
-            fovx: 90.0,
+            fovx: f32::to_radians(90.0),
         }));
     }
     pb.finish_and_clear();

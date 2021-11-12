@@ -1,7 +1,7 @@
 use crate::materials::Pipeline;
-use crate::{Camera, Material, Mesh, PerspectiveCam, Scene, ShaderMat, Vertex};
+use crate::{Camera, Material, Mesh, Scene, ShaderMat, Vertex};
 use ash::vk;
-use cgmath::{Matrix4, Point3, SquareMatrix, Vector3 as Vec3};
+use cgmath::{Matrix4, SquareMatrix};
 use fnv::{FnvHashMap, FnvHashSet};
 use gpu_allocator::MemoryLocation;
 
@@ -33,16 +33,7 @@ impl<const FRAMES_IN_FLIGHT: usize> VulkanScene<FRAMES_IN_FLIGHT> {
             .iter()
             .map(|(id, _, mat)| (*id, mat.clone()))
             .collect();
-        let current_cam = if scene.cameras.is_empty() {
-            Camera::Perspective(PerspectiveCam {
-                position: Point3::new(0.0, 0.0, 0.0),
-                target: Point3::new(0.0, 0.0, 100.0),
-                up: Vec3::new(0.0, 1.0, 0.0),
-                fovx: 90.0,
-            })
-        } else {
-            scene.cameras[0].clone()
-        };
+        let current_cam = scene.cameras[0].clone(); // parser automatically adds a default cam
         let projview = [Matrix4::<f32>::identity(); FRAMES_IN_FLIGHT];
         let pipelines = FnvHashMap::default();
         VulkanScene {
