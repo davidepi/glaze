@@ -1,12 +1,13 @@
+use std::ptr;
+
 use crate::materials::Pipeline;
-use crate::{Camera, Material, Mesh, Scene, ShaderMat, Vertex};
+use crate::{Camera, Material, Mesh, Scene, ShaderMat, Texture, Vertex};
 use ash::vk;
-use cgmath::{Matrix4, SquareMatrix};
 use fnv::{FnvHashMap, FnvHashSet};
 use gpu_allocator::MemoryLocation;
 
 use super::device::Device;
-use super::memory::{AllocatedBuffer, MemoryManager};
+use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 
 pub struct VulkanScene {
     pub current_cam: Camera,
@@ -126,7 +127,18 @@ fn load_vertices_to_gpu<T: Device>(
         .cast()
         .as_ptr();
     unsafe { std::ptr::copy_nonoverlapping(vertices.as_ptr(), mapped, vertices.len()) };
-    device.copy_buffer(&cpu_buffer, &gpu_buffer);
+    let copy_region = vk::BufferCopy {
+        // these are not the allocation offset, but the buffer offset!
+        src_offset: 0,
+        dst_offset: 0,
+        size: cpu_buffer.size,
+    };
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+        }
+    };
+    device.immediate_execute(command);
     mm.free_buffer(cpu_buffer);
     gpu_buffer
 }
@@ -167,7 +179,132 @@ fn load_indices_to_gpu<T: Device>(
         });
         offset += mesh.indices.len() as u32;
     }
-    device.copy_buffer(&cpu_buffer, &gpu_buffer);
+    let copy_region = vk::BufferCopy {
+        // these are not the allocation offset, but the buffer offset!
+        src_offset: 0,
+        dst_offset: 0,
+        size: cpu_buffer.size,
+    };
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+        }
+    };
+    device.immediate_execute(command);
     mm.free_buffer(cpu_buffer);
     (converted_meshes, gpu_buffer)
+}
+
+fn load_single_texture<T: Device>(
+    device: &T,
+    mm: &mut MemoryManager,
+    texture: Texture,
+) -> AllocatedImage {
+    let size = (texture.width() * texture.height() * 4) as u64;
+    let extent = vk::Extent2D {
+        width: texture.width(),
+        height: texture.height(),
+    };
+    let buffer = mm.create_buffer(
+        "TextureBuffer",
+        size,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+        MemoryLocation::CpuToGpu,
+    );
+    let image = mm.create_image_gpu(
+        vk::Format::R8G8B8A8_SRGB,
+        extent,
+        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+        vk::ImageAspectFlags::COLOR,
+    );
+    let mapped = buffer
+        .allocation
+        .mapped_ptr()
+        .expect("Failed to map memory")
+        .cast()
+        .as_ptr();
+    unsafe {
+        std::ptr::copy_nonoverlapping(texture.as_ptr(), mapped, size as usize);
+    }
+    let subresource_range = vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let barrier_transfer = vk::ImageMemoryBarrier {
+        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+        p_next: ptr::null(),
+        src_access_mask: vk::AccessFlags::empty(),
+        dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+        old_layout: vk::ImageLayout::UNDEFINED,
+        new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        image: image.image,
+        subresource_range,
+    };
+    let barrier_use = vk::ImageMemoryBarrier {
+        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+        p_next: ptr::null(),
+        src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+        dst_access_mask: vk::AccessFlags::SHADER_READ,
+        old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        image: image.image,
+        subresource_range,
+    };
+    let image_subresource = vk::ImageSubresourceLayers {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        mip_level: 0,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let copy_region = vk::BufferImageCopy {
+        buffer_offset: 0,
+        buffer_row_length: 0,   // 0 = same as image width
+        buffer_image_height: 0, // 0 = same as image height
+        image_subresource,
+        image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+        image_extent: vk::Extent3D {
+            width: texture.width(),
+            height: texture.height(),
+            depth: 1,
+        },
+    };
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_transfer],
+            );
+            device.cmd_copy_buffer_to_image(
+                cmd,
+                buffer.buffer,
+                image.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[copy_region],
+            );
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_use],
+            );
+        }
+    };
+    device.immediate_execute(command);
+    mm.free_buffer(buffer);
+    image
 }

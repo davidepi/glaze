@@ -12,20 +12,6 @@ pub trait Device {
     fn immediate_execute<F>(&self, command: F)
     where
         F: Fn(&ash::Device, vk::CommandBuffer);
-    fn copy_buffer(&self, src: &AllocatedBuffer, dst: &AllocatedBuffer) {
-        let copy_region = vk::BufferCopy {
-            // these are not the allocation offset, but the buffer offset!
-            src_offset: 0,
-            dst_offset: 0,
-            size: src.size,
-        };
-        let command = unsafe {
-            |device: &ash::Device, cmd: vk::CommandBuffer| {
-                device.cmd_copy_buffer(cmd, src.buffer, dst.buffer, &[copy_region]);
-            }
-        };
-        self.immediate_execute(command);
-    }
 }
 
 pub struct PresentDevice {
