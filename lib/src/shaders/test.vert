@@ -7,6 +7,10 @@ layout(location = 2) in vec2 in_vt;
 layout(location = 0) out vec3 out_vn;
 layout(location = 1) out vec2 out_vt;
 
+layout(set=0, binding=0) uniform fd {
+    float frame_time;
+}FrameData;
+
 layout(push_constant) uniform constants {
     mat4 projview;
 } PushConstants;

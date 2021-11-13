@@ -1,7 +1,7 @@
-use super::descriptor::{DescriptorAllocator, DescriptorSetLayoutCache};
+use super::descriptor::{DescriptorAllocator, DescriptorSetBuilder, DescriptorSetLayoutCache};
 use super::device::Device;
 use super::instance::{Instance, PresentInstance};
-use super::memory::MemoryManager;
+use super::memory::{AllocatedBuffer, MemoryManager};
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
@@ -9,11 +9,27 @@ use crate::materials::Pipeline;
 use crate::Scene;
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
+use std::intrinsics::copy_nonoverlapping;
 use std::ptr;
+use std::time::Instant;
 use winit::window::Window;
 
 const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::UNIFORM_BUFFER, 1.0)];
 const FRAMES_IN_FLIGHT: usize = 2;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct FrameData {
+    pub frame_time: f32,
+}
+
+#[derive(Debug)]
+struct FrameDataBuf {
+    buffer: AllocatedBuffer,
+    data: FrameData,
+    descriptor: vk::DescriptorSet,
+    layout: vk::DescriptorSetLayout,
+}
 
 pub struct RealtimeRenderer {
     instance: PresentInstance,
@@ -23,6 +39,8 @@ pub struct RealtimeRenderer {
     mm: MemoryManager,
     sync: PresentSync<FRAMES_IN_FLIGHT>,
     scene: Option<VulkanScene<FRAMES_IN_FLIGHT>>,
+    frame_data: [FrameDataBuf; FRAMES_IN_FLIGHT],
+    start_time: Instant,
     render_width: u32,
     render_height: u32,
     frame_no: usize,
@@ -31,15 +49,45 @@ pub struct RealtimeRenderer {
 impl RealtimeRenderer {
     pub fn create(window: &Window, width: u32, height: u32) -> Self {
         let mut instance = PresentInstance::new(&window);
-        let descriptor_allocator =
+        let mut descriptor_allocator =
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
-        let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
+        let mut descriptor_cache =
+            DescriptorSetLayoutCache::new(instance.device().logical().clone());
         let mut mm = MemoryManager::new(
             instance.instance(),
             instance.device().logical(),
             instance.device().physical().device,
         );
         let swapchain = Swapchain::create(&mut instance, &mut mm, width, height);
+        let mut frame_data = Vec::with_capacity(FRAMES_IN_FLIGHT);
+        for frame in 0..FRAMES_IN_FLIGHT {
+            let buffer = mm.create_buffer(
+                "FrameData",
+                std::mem::size_of::<FrameData>() as u64,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                gpu_allocator::MemoryLocation::CpuToGpu,
+            );
+            let buf_info = vk::DescriptorBufferInfo {
+                buffer: buffer.buffer,
+                offset: 0,
+                range: std::mem::size_of::<FrameData>() as u64,
+            };
+            let (descriptor, layout) =
+                DescriptorSetBuilder::new(&mut descriptor_cache, &mut descriptor_allocator)
+                    .bind_buffer(
+                        buf_info,
+                        vk::DescriptorType::UNIFORM_BUFFER,
+                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                    )
+                    .build();
+            let data = FrameData { frame_time: 0.0 };
+            frame_data.push(FrameDataBuf {
+                buffer,
+                data,
+                descriptor,
+                layout,
+            });
+        }
         let sync = PresentSync::create(instance.device());
         RealtimeRenderer {
             instance,
@@ -49,6 +97,8 @@ impl RealtimeRenderer {
             mm,
             sync,
             scene: None,
+            start_time: Instant::now(),
+            frame_data: frame_data.try_into().unwrap(),
             render_width: width,
             render_height: height,
             frame_no: 0,
@@ -73,6 +123,7 @@ impl RealtimeRenderer {
                 height,
                 self.instance.device().logical(),
                 self.swapchain.default_render_pass(),
+                self.frame_data[0].layout,
             )
         }
     }
@@ -90,8 +141,10 @@ impl RealtimeRenderer {
             self.render_height,
             self.instance.device().logical(),
             self.swapchain.default_render_pass(),
+            self.frame_data[0].layout,
         );
         self.scene = Some(new);
+        self.start_time = Instant::now();
     }
 
     pub fn destroy(mut self) {
@@ -99,6 +152,9 @@ impl RealtimeRenderer {
         if let Some(mut scene) = self.scene.take() {
             scene.deinit_pipelines(self.instance.device().logical());
             scene.unload(&mut self.mm);
+        }
+        for data in self.frame_data {
+            self.mm.free_buffer(data.buffer);
         }
         self.descriptor_cache.destroy();
         self.descriptor_allocator.destroy();
@@ -112,6 +168,9 @@ impl RealtimeRenderer {
         let frame_sync = self.sync.get(self.frame_no);
         frame_sync.wait_acquire(self.instance.device());
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
+            let current_time = Instant::now();
+            let frame_data = &mut self.frame_data[self.frame_no % FRAMES_IN_FLIGHT];
+            frame_data.data.frame_time = (current_time - self.start_time).as_secs_f32();
             let device = self.instance.device().logical();
             unsafe {
                 device.reset_command_buffer(acquired.cmd, vk::CommandBufferResetFlags::empty())
@@ -156,7 +215,7 @@ impl RealtimeRenderer {
                 device.cmd_begin_render_pass(acquired.cmd, &rp_ci, vk::SubpassContents::INLINE);
                 if let Some(scene) = &self.scene {
                     let ar = self.render_width as f32 / self.render_height as f32;
-                    draw_objects(scene, ar, device, acquired.cmd);
+                    draw_objects(scene, ar, frame_data, device, acquired.cmd);
                 }
                 device.cmd_end_render_pass(acquired.cmd);
                 device
@@ -204,6 +263,7 @@ impl RealtimeRenderer {
 unsafe fn draw_objects(
     scene: &VulkanScene<FRAMES_IN_FLIGHT>,
     ar: f32,
+    frame_data: &mut FrameDataBuf,
     device: &ash::Device,
     cmd: vk::CommandBuffer,
 ) {
@@ -213,6 +273,16 @@ unsafe fn draw_objects(
     let view = cam.look_at_rh();
     let viewproj = proj * view;
     let mut current_shader_id = u8::MAX;
+    //write frame_data to the buffer
+    let buf_ptr = frame_data
+        .buffer
+        .allocation
+        .mapped_ptr()
+        .expect("Failed to map buffer")
+        .cast()
+        .as_ptr();
+    std::ptr::copy_nonoverlapping(&frame_data.data, buf_ptr, std::mem::size_of::<FrameData>());
+    //
     device.cmd_bind_vertex_buffers(cmd, 0, &[scene.vertex_buffer.buffer], &[0]);
     device.cmd_bind_index_buffer(cmd, scene.index_buffer.buffer, 0, vk::IndexType::UINT32); //bind once, use firts_index as offset
     for obj in &scene.meshes {
@@ -228,6 +298,14 @@ unsafe fn draw_objects(
                 as_u8_slice(&viewproj),
             );
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                0,
+                &[frame_data.descriptor],
+                &[],
+            );
         }
         device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
     }

@@ -215,12 +215,13 @@ impl<'a> DescriptorSetBuilder<'a> {
         }
     }
 
+    #[must_use]
     pub fn bind_buffer(
-        &mut self,
+        mut self,
         buf_info: vk::DescriptorBufferInfo,
         descriptor_type: vk::DescriptorType,
         stage_flags: vk::ShaderStageFlags,
-    ) {
+    ) -> Self {
         let binding = self.bindings.len() as u32;
         let layout_binding = vk::DescriptorSetLayoutBinding {
             binding,
@@ -243,6 +244,7 @@ impl<'a> DescriptorSetBuilder<'a> {
         };
         self.bindings.push(layout_binding);
         self.writes.push(write);
+        self
     }
 
     pub fn bind_image(

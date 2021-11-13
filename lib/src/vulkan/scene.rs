@@ -53,6 +53,7 @@ impl<const FRAMES_IN_FLIGHT: usize> VulkanScene<FRAMES_IN_FLIGHT> {
         height: u32,
         device: &ash::Device,
         renderpass: vk::RenderPass,
+        frame_desc_layout: vk::DescriptorSetLayout,
     ) {
         let viewports = [vk::Viewport {
             x: 0.0,
@@ -79,7 +80,13 @@ impl<const FRAMES_IN_FLIGHT: usize> VulkanScene<FRAMES_IN_FLIGHT> {
                     ShaderMat::from_id(id)
                         .expect("Unexpected shader ID")
                         .build_pipeline()
-                        .build(device, renderpass, &viewports, &scissors, &[]),
+                        .build(
+                            device,
+                            renderpass,
+                            &viewports,
+                            &scissors,
+                            &[frame_desc_layout],
+                        ),
                 )
             })
             .collect::<FnvHashMap<_, _>>();
