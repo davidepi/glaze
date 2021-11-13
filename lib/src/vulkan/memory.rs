@@ -4,17 +4,25 @@ use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
 use gpu_allocator::{AllocatorDebugSettings, MemoryLocation};
 
-pub struct MemoryManager {
-    device: ash::Device,
-    allocator: Allocator,
-}
-
 #[derive(Debug)]
 pub struct AllocatedBuffer {
     pub buffer: vk::Buffer,
     pub size: u64, //not necessarily the same as allocation size
     pub allocation: Allocation,
 }
+
+#[derive(Debug)]
+pub struct AllocatedImage {
+    pub image: vk::Image,
+    pub image_view: vk::ImageView,
+    pub allocation: Allocation,
+}
+
+pub struct MemoryManager {
+    device: ash::Device,
+    allocator: Allocator,
+}
+
 impl MemoryManager {
     pub fn new(
         instance: &ash::Instance,
@@ -88,7 +96,7 @@ impl MemoryManager {
             self.device
                 .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
         }
-        .expect("Failed to bind memory");
+        .expect("Failed to bind buffer memory");
         AllocatedBuffer {
             buffer,
             size,
@@ -96,11 +104,93 @@ impl MemoryManager {
         }
     }
 
+    pub fn create_image_gpu(
+        &mut self,
+        format: vk::Format,
+        extent: vk::Extent2D,
+        usage: vk::ImageUsageFlags,
+        aspect_mask: vk::ImageAspectFlags,
+    ) -> AllocatedImage {
+        // this methods default to ImageType 2D so it's weird to ask for a Extent3D
+        let extent3d = vk::Extent3D {
+            width: extent.width,
+            height: extent.height,
+            depth: 1,
+        };
+        let img_ci = vk::ImageCreateInfo {
+            s_type: vk::StructureType::IMAGE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::ImageCreateFlags::empty(),
+            image_type: vk::ImageType::TYPE_2D,
+            format,
+            extent: extent3d,
+            mip_levels: 1,
+            array_layers: 1,
+            samples: vk::SampleCountFlags::TYPE_1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage,
+            sharing_mode: vk::SharingMode::EXCLUSIVE,
+            queue_family_index_count: 0,
+            p_queue_family_indices: ptr::null(),
+            initial_layout: vk::ImageLayout::UNDEFINED,
+        };
+        let image =
+            unsafe { self.device.create_image(&img_ci, None) }.expect("Failed to create image");
+        let requirements = unsafe { self.device.get_image_memory_requirements(image) };
+        let alloc_desc = AllocationCreateDesc {
+            name: "Image",
+            requirements,
+            location: MemoryLocation::GpuOnly,
+            linear: true,
+        };
+        let allocation = self
+            .allocator
+            .allocate(&alloc_desc)
+            .expect("Allocation failed. OOM?");
+        unsafe {
+            self.device
+                .bind_image_memory(image, allocation.memory(), allocation.offset())
+        }
+        .expect("Failed to bind image memory");
+        let subresource_range = vk::ImageSubresourceRange {
+            aspect_mask,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        let iw_ci = vk::ImageViewCreateInfo {
+            s_type: vk::StructureType::IMAGE_VIEW_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::ImageViewCreateFlags::empty(),
+            image,
+            view_type: vk::ImageViewType::TYPE_2D,
+            format,
+            components: vk::ComponentMapping::default(),
+            subresource_range,
+        };
+        let iw = unsafe { self.device.create_image_view(&iw_ci, None) }
+            .expect("Failed to create image view");
+        AllocatedImage {
+            image,
+            image_view: iw,
+            allocation,
+        }
+    }
+
+    pub fn free_image(&mut self, image: AllocatedImage) {
+        unsafe { self.device.destroy_image_view(image.image_view, None) };
+        unsafe { self.device.destroy_image(image.image, None) };
+        if let Err(_) = self.allocator.free(image.allocation) {
+            log::warn!("Failed to free memory");
+        }
+    }
+
     pub fn free_buffer(&mut self, buf: AllocatedBuffer) {
+        unsafe { self.device.destroy_buffer(buf.buffer, None) };
         if let Err(_) = self.allocator.free(buf.allocation) {
             log::warn!("Failed to free memory");
         }
-        unsafe { self.device.destroy_buffer(buf.buffer, None) };
     }
 
     pub fn destroy(self) {

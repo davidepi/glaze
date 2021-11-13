@@ -39,6 +39,9 @@ pub struct PresentDevice {
 }
 
 impl PresentDevice {
+    /// The depth buffer format that will be used by this device.
+    pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
+
     pub fn new(instance: &ash::Instance, ext: &[&'static CStr], surface: &Surface) -> Self {
         let physical = PhysicalDevice::list_all(instance, surface)
             .into_iter()
@@ -48,6 +51,9 @@ impl PresentDevice {
             })
             .filter(|device| device_supports_requested_extensions(instance, ext, device.device))
             .filter(|device| graphics_present_index(instance, device.device, surface).is_some())
+            .filter(|device| {
+                device_supports_depth_buffer(instance, Self::DEPTH_FORMAT, device.device)
+            })
             .last()
             .expect("No compatible devices found");
         let graphic_index = graphics_present_index(instance, physical.device, surface).unwrap();
@@ -250,6 +256,17 @@ fn device_supports_requested_extensions(
     !ext.iter()
         .map(|x| x.to_str().unwrap().to_string())
         .any(|x| !available_extensions.contains(&x))
+}
+
+fn device_supports_depth_buffer(
+    instance: &ash::Instance,
+    format: vk::Format,
+    device: vk::PhysicalDevice,
+) -> bool {
+    let props = unsafe { instance.get_physical_device_format_properties(device, format) };
+    props
+        .optimal_tiling_features
+        .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
 }
 
 fn graphics_present_index(

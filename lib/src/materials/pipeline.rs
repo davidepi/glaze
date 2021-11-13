@@ -23,6 +23,7 @@ pub struct PipelineBuilder {
     pub input_assembly: vk::PipelineInputAssemblyStateCreateInfo,
     pub rasterizer: vk::PipelineRasterizationStateCreateInfo,
     pub multisampling: vk::PipelineMultisampleStateCreateInfo,
+    pub depth_stencil: vk::PipelineDepthStencilStateCreateInfo,
     pub blending_settings: Vec<vk::PipelineColorBlendAttachmentState>,
     pub blending: (Option<vk::LogicOp>, [f32; 4]),
 }
@@ -120,7 +121,7 @@ impl PipelineBuilder {
             p_viewport_state: &viewport_state,
             p_rasterization_state: &self.rasterizer,
             p_multisample_state: &self.multisampling,
-            p_depth_stencil_state: ptr::null(),
+            p_depth_stencil_state: &self.depth_stencil,
             p_color_blend_state: &color_blend,
             p_dynamic_state: ptr::null(),
             layout,
@@ -176,6 +177,20 @@ impl Default for PipelineBuilder {
             alpha_to_coverage_enable: vk::FALSE,
             alpha_to_one_enable: vk::FALSE,
         };
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo {
+            s_type: vk::StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineDepthStencilStateCreateFlags::empty(),
+            depth_test_enable: vk::FALSE,
+            depth_write_enable: vk::FALSE,
+            depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
+            depth_bounds_test_enable: vk::FALSE,
+            stencil_test_enable: vk::FALSE,
+            front: vk::StencilOpState::default(),
+            back: vk::StencilOpState::default(),
+            min_depth_bounds: 0.0,
+            max_depth_bounds: 1.0,
+        };
         let blending_settings = vec![vk::PipelineColorBlendAttachmentState {
             blend_enable: vk::FALSE,
             src_color_blend_factor: vk::BlendFactor::ONE,
@@ -192,6 +207,7 @@ impl Default for PipelineBuilder {
             input_assembly,
             rasterizer,
             multisampling,
+            depth_stencil,
             blending_settings,
             blending,
         }

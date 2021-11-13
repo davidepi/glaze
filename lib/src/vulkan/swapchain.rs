@@ -1,8 +1,9 @@
 use ash::vk;
 use std::ptr;
 
-use super::device::Device;
+use super::device::{Device, PresentDevice};
 use super::instance::{Instance, PresentInstance};
+use super::memory::{AllocatedImage, MemoryManager};
 use super::sync::PresentFrameSync;
 
 pub struct AcquiredImage {
@@ -17,24 +18,25 @@ pub struct Swapchain {
     image_format: vk::Format,
     extent: vk::Extent2D,
     image_views: Vec<vk::ImageView>,
+    depth_image: AllocatedImage,
     renderpass: vk::RenderPass,
     framebuffers: Vec<vk::Framebuffer>,
     command_buffers: Vec<vk::CommandBuffer>,
 }
 
 impl Swapchain {
-    pub fn create(instance: &mut PresentInstance, width: u32, height: u32) -> Self {
-        let swapchain = swapchain_init(instance, width, height, None);
+    pub fn create(
+        instance: &mut PresentInstance,
+        mm: &mut MemoryManager,
+        width: u32,
+        height: u32,
+    ) -> Self {
+        let swapchain = swapchain_init(instance, mm, width, height, None);
         swapchain
     }
 
     pub fn image_format(&self) -> vk::Format {
         self.image_format
-    }
-
-    pub fn re_create(&mut self, instance: &mut PresentInstance, width: u32, height: u32) {
-        swapchain_destroy(&self, instance, true);
-        *self = swapchain_init(instance, width, height, Some(self.swapchain));
     }
 
     pub fn image_views(&self) -> &[vk::ImageView] {
@@ -81,34 +83,30 @@ impl Swapchain {
         self.renderpass
     }
 
-    pub fn destroy(&self, instance: &PresentInstance) {
-        swapchain_destroy(&self, instance, false);
-    }
-}
-
-fn swapchain_destroy(swap: &Swapchain, instance: &PresentInstance, partial: bool) {
-    unsafe {
-        instance
-            .device()
-            .destroy_command_buffers(&swap.command_buffers);
-        swap.framebuffers
-            .iter()
-            .for_each(|fb| instance.device().logical().destroy_framebuffer(*fb, None));
-        instance
-            .device()
-            .logical()
-            .destroy_render_pass(swap.renderpass, None);
-        swap.image_views
-            .iter()
-            .for_each(|iw| instance.device().logical().destroy_image_view(*iw, None));
-        if !partial {
-            swap.loader.destroy_swapchain(swap.swapchain, None);
+    pub fn destroy(self, instance: &PresentInstance, mm: &mut MemoryManager) {
+        unsafe {
+            instance
+                .device()
+                .destroy_command_buffers(&self.command_buffers);
+            self.framebuffers
+                .iter()
+                .for_each(|fb| instance.device().logical().destroy_framebuffer(*fb, None));
+            instance
+                .device()
+                .logical()
+                .destroy_render_pass(self.renderpass, None);
+            self.image_views
+                .iter()
+                .for_each(|iw| instance.device().logical().destroy_image_view(*iw, None));
+            self.loader.destroy_swapchain(self.swapchain, None);
+            mm.free_image(self.depth_image);
         }
     }
 }
 
 fn swapchain_init(
     instance: &PresentInstance,
+    mm: &mut MemoryManager,
     width: u32,
     height: u32,
     old: Option<vk::SwapchainKHR>,
@@ -123,7 +121,11 @@ fn swapchain_init(
             sf.format == vk::Format::B8G8R8A8_SRGB
                 && sf.color_space == vk::ColorSpaceKHR::SRGB_NONLINEAR
         })
-        .unwrap_or_else(|| surface_cap.formats.first().unwrap());
+        .unwrap_or_else(|| {
+            let default = surface_cap.formats.first().unwrap();
+            log::warn!("Failed to find suitable surface format, using the first one available");
+            default
+        });
     let present_mode = *surface_cap
         .present_modes
         .iter()
@@ -151,6 +153,12 @@ fn swapchain_init(
             .max_image_count
             .max(surface_cap.capabilities.min_image_count + 1)
     };
+    let depth_image = mm.create_image_gpu(
+        PresentDevice::DEPTH_FORMAT,
+        extent,
+        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        vk::ImageAspectFlags::DEPTH,
+    );
     let ci = vk::SwapchainCreateInfoKHR {
         s_type: vk::StructureType::SWAPCHAIN_CREATE_INFO_KHR,
         p_next: ptr::null(),
@@ -179,8 +187,15 @@ fn swapchain_init(
         .into_iter()
         .map(|i| create_image_views(device.logical(), i, format.format))
         .collect::<Vec<_>>();
-    let renderpass = create_renderpass(device.logical(), format.format);
-    let framebuffers = create_framebuffers(device.logical(), extent, &image_views, renderpass);
+    let renderpass =
+        create_renderpass(device.logical(), format.format, PresentDevice::DEPTH_FORMAT);
+    let framebuffers = create_framebuffers(
+        device.logical(),
+        extent,
+        &image_views,
+        depth_image.image_view,
+        renderpass,
+    );
     let command_buffers = device.create_command_buffers(framebuffers.len() as u32);
     Swapchain {
         swapchain,
@@ -188,6 +203,7 @@ fn swapchain_init(
         image_format: ci.image_format,
         extent: ci.image_extent,
         image_views,
+        depth_image,
         renderpass,
         framebuffers,
         command_buffers,
@@ -215,8 +231,12 @@ fn create_image_views(device: &ash::Device, image: vk::Image, format: vk::Format
     unsafe { device.create_image_view(&iw_ci, None) }.expect("Failed to create Image View")
 }
 
-fn create_renderpass(device: &ash::Device, format: vk::Format) -> vk::RenderPass {
-    let color_attachment = [vk::AttachmentDescription {
+fn create_renderpass(
+    device: &ash::Device,
+    format: vk::Format,
+    depth_format: vk::Format,
+) -> vk::RenderPass {
+    let color_attachment = vk::AttachmentDescription {
         flags: vk::AttachmentDescriptionFlags::empty(),
         format,
         samples: vk::SampleCountFlags::TYPE_1,
@@ -226,20 +246,36 @@ fn create_renderpass(device: &ash::Device, format: vk::Format) -> vk::RenderPass
         stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
         initial_layout: vk::ImageLayout::UNDEFINED,
         final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
-    }];
-    let color_attachment_ref = [vk::AttachmentReference {
+    };
+    let depth_attachment = vk::AttachmentDescription {
+        flags: vk::AttachmentDescriptionFlags::empty(),
+        format: depth_format,
+        samples: vk::SampleCountFlags::TYPE_1,
+        load_op: vk::AttachmentLoadOp::CLEAR,
+        store_op: vk::AttachmentStoreOp::STORE,
+        stencil_load_op: vk::AttachmentLoadOp::CLEAR,
+        stencil_store_op: vk::AttachmentStoreOp::DONT_CARE,
+        initial_layout: vk::ImageLayout::UNDEFINED,
+        final_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+    let attachments = [color_attachment, depth_attachment];
+    let color_attachments_ref = [vk::AttachmentReference {
         attachment: 0,
         layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+    }];
+    let depth_attachments_ref = [vk::AttachmentReference {
+        attachment: 1,
+        layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
     }];
     let subpass = [vk::SubpassDescription {
         flags: vk::SubpassDescriptionFlags::empty(),
         pipeline_bind_point: vk::PipelineBindPoint::GRAPHICS,
         input_attachment_count: 0,
         p_input_attachments: ptr::null(),
-        color_attachment_count: color_attachment_ref.len() as u32,
-        p_color_attachments: color_attachment_ref.as_ptr(),
+        color_attachment_count: color_attachments_ref.len() as u32,
+        p_color_attachments: color_attachments_ref.as_ptr(),
         p_resolve_attachments: ptr::null(),
-        p_depth_stencil_attachment: ptr::null(),
+        p_depth_stencil_attachment: depth_attachments_ref.as_ptr(),
         preserve_attachment_count: 0,
         p_preserve_attachments: ptr::null(),
     }];
@@ -256,8 +292,8 @@ fn create_renderpass(device: &ash::Device, format: vk::Format) -> vk::RenderPass
         s_type: vk::StructureType::RENDER_PASS_CREATE_INFO,
         p_next: ptr::null(),
         flags: Default::default(),
-        attachment_count: color_attachment.len() as u32,
-        p_attachments: color_attachment.as_ptr(),
+        attachment_count: attachments.len() as u32,
+        p_attachments: attachments.as_ptr(),
         subpass_count: subpass.len() as u32,
         p_subpasses: subpass.as_ptr(),
         dependency_count: dependency.len() as u32,
@@ -271,11 +307,12 @@ fn create_framebuffers(
     device: &ash::Device,
     extent: vk::Extent2D,
     image_views: &[vk::ImageView],
+    depth_view: vk::ImageView,
     render_pass: vk::RenderPass,
 ) -> Vec<vk::Framebuffer> {
     let mut retval = Vec::with_capacity(image_views.len());
     for view in image_views {
-        let attachments = [*view];
+        let attachments = [*view, depth_view];
         let fb_ci = vk::FramebufferCreateInfo {
             s_type: vk::StructureType::FRAMEBUFFER_CREATE_INFO,
             p_next: ptr::null(),

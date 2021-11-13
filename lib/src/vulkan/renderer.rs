@@ -34,12 +34,12 @@ impl RealtimeRenderer {
         let descriptor_allocator =
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
         let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
-        let swapchain = Swapchain::create(&mut instance, width, height);
-        let mm = MemoryManager::new(
+        let mut mm = MemoryManager::new(
             instance.instance(),
             instance.device().logical(),
             instance.device().physical().device,
         );
+        let swapchain = Swapchain::create(&mut instance, &mut mm, width, height);
         let sync = PresentSync::create(instance.device());
         RealtimeRenderer {
             instance,
@@ -63,7 +63,9 @@ impl RealtimeRenderer {
         self.wait_idle();
         self.render_width = width;
         self.render_height = height;
-        self.swapchain.re_create(&mut self.instance, width, height);
+        let mut new_swapchain = Swapchain::create(&mut self.instance, &mut self.mm, width, height);
+        std::mem::swap(&mut self.swapchain, &mut new_swapchain);
+        new_swapchain.destroy(&self.instance, &mut self.mm); //new swapchain is the old one!
         if let Some(scene) = &mut self.scene {
             scene.deinit_pipelines(self.instance.device().logical());
             scene.init_pipelines(
@@ -100,9 +102,9 @@ impl RealtimeRenderer {
         }
         self.descriptor_cache.destroy();
         self.descriptor_allocator.destroy();
+        self.swapchain.destroy(&self.instance, &mut self.mm);
         self.mm.destroy();
         self.sync.destroy(self.instance.device());
-        self.swapchain.destroy(&self.instance);
         self.instance.destroy();
     }
 
@@ -121,11 +123,19 @@ impl RealtimeRenderer {
                 flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
                 p_inheritance_info: ptr::null(),
             };
-            let color = [vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [0.0, 1.0, 0.0, 1.0],
+            let color = [
+                vk::ClearValue {
+                    color: vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 1.0],
+                    },
                 },
-            }];
+                vk::ClearValue {
+                    depth_stencil: vk::ClearDepthStencilValue {
+                        depth: 1.0,
+                        stencil: 0,
+                    },
+                },
+            ];
             let render_area = vk::Rect2D {
                 offset: vk::Offset2D { x: 0, y: 0 },
                 extent: self.swapchain.extent(),
