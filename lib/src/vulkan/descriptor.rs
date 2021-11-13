@@ -7,6 +7,12 @@ use std::ptr;
 const MAX_SETS: usize = 512;
 const MAX_POOLS: usize = 4;
 
+#[derive(Debug, Copy, Clone)]
+pub struct Descriptor {
+    pub set: vk::DescriptorSet,
+    pub layout: vk::DescriptorSetLayout,
+}
+
 pub struct DescriptorAllocator {
     current_pool: vk::DescriptorPool,
     pool_sizes: Vec<vk::DescriptorPoolSize>,
@@ -246,23 +252,45 @@ impl<'a> DescriptorSetBuilder<'a> {
         self.writes.push(write);
         self
     }
-
+    #[must_use]
     pub fn bind_image(
-        &mut self,
+        mut self,
         image_info: vk::DescriptorImageInfo,
         descriptor_type: vk::DescriptorType,
         stage_flags: vk::ShaderStageFlags,
-    ) {
-        todo!()
+    ) -> Self {
+        let binding = self.bindings.len() as u32;
+        let layout_binding = vk::DescriptorSetLayoutBinding {
+            binding,
+            descriptor_type,
+            descriptor_count: 1,
+            stage_flags,
+            p_immutable_samplers: ptr::null(),
+        };
+        let write = vk::WriteDescriptorSet {
+            s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
+            p_next: ptr::null(),
+            dst_set: vk::DescriptorSet::null(), //tmp value
+            dst_binding: binding,
+            dst_array_element: 0,
+            descriptor_count: 1,
+            descriptor_type,
+            p_image_info: &image_info,
+            p_buffer_info: ptr::null(),
+            p_texel_buffer_view: ptr::null(),
+        };
+        self.bindings.push(layout_binding);
+        self.writes.push(write);
+        self
     }
 
-    pub fn build(mut self) -> (vk::DescriptorSet, vk::DescriptorSetLayout) {
+    pub fn build(mut self) -> Descriptor {
         let layout = self.cache.get(&self.bindings);
         let set = self.alloc.alloc(layout);
         self.writes.iter_mut().for_each(|w| w.dst_set = set);
         unsafe {
             self.alloc.device.update_descriptor_sets(&self.writes, &[]);
         }
-        (set, layout)
+        Descriptor { set, layout }
     }
 }

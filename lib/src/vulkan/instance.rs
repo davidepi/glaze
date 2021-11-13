@@ -31,9 +31,16 @@ impl PresentInstance {
     pub fn new(window: &Window) -> Self {
         let instance_extensions = platform::required_extensions();
         let device_extensions = vec![ash::extensions::khr::Swapchain::name()];
+        let mut device_features = vk::PhysicalDeviceFeatures::default();
+        device_features.sampler_anisotropy = vk::TRUE;
         let instance = BasicInstance::new(&instance_extensions);
         let surface = Surface::new(&instance.entry, &instance.instance, &window);
-        let device = PresentDevice::new(&instance.instance, &device_extensions, &surface);
+        let device = PresentDevice::new(
+            &instance.instance,
+            &device_extensions,
+            device_features,
+            &surface,
+        );
         PresentInstance {
             #[cfg(debug_assertions)]
             logger: VkDebugLogger::new(&instance.entry, &instance.instance),

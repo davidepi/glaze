@@ -1,5 +1,4 @@
 use super::debug::{cchars_to_string, ValidationLayers};
-use super::memory::AllocatedBuffer;
 use super::surface::Surface;
 use ash::vk;
 use std::collections::HashSet;
@@ -28,7 +27,12 @@ impl PresentDevice {
     /// The depth buffer format that will be used by this device.
     pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
-    pub fn new(instance: &ash::Instance, ext: &[&'static CStr], surface: &Surface) -> Self {
+    pub fn new(
+        instance: &ash::Instance,
+        ext: &[&'static CStr],
+        features: vk::PhysicalDeviceFeatures,
+        surface: &Surface,
+    ) -> Self {
         let physical = PhysicalDevice::list_all(instance, surface)
             .into_iter()
             .filter(|x| {
@@ -37,6 +41,7 @@ impl PresentDevice {
             })
             .filter(|device| device_supports_requested_extensions(instance, ext, device.device))
             .filter(|device| graphics_present_index(instance, device.device, surface).is_some())
+            .filter(|device| device_supports_features(device, features))
             .filter(|device| {
                 device_supports_depth_buffer(instance, Self::DEPTH_FORMAT, device.device)
             })
@@ -44,7 +49,7 @@ impl PresentDevice {
             .expect("No compatible devices found");
         let graphic_index = graphics_present_index(instance, physical.device, surface).unwrap();
         let all_queues = vec![graphic_index];
-        let logical = create_logical_device(instance, ext, &physical, &all_queues);
+        let logical = create_logical_device(instance, ext, &physical, features, &all_queues);
         let graphic_pool = create_command_pool(&logical, graphic_index);
         let immediate_pool = create_command_pool(&logical, graphic_index);
         let ci = vk::FenceCreateInfo {
@@ -244,6 +249,30 @@ fn device_supports_requested_extensions(
         .any(|x| !available_extensions.contains(&x))
 }
 
+fn device_supports_features(device: &PhysicalDevice, features: vk::PhysicalDeviceFeatures) -> bool {
+    // so, the features class has every feature as a field so it's a bit tricky to check in a loop.
+    // instead, I will bitwise AND the device features and the requested features, and expect the
+    // result to be equal to the requested features.
+    let requested_features = unsafe {
+        std::slice::from_raw_parts(
+            (&features as *const vk::PhysicalDeviceFeatures) as *const u8,
+            std::mem::size_of::<vk::PhysicalDeviceFeatures>(),
+        )
+    };
+    let device_features = unsafe {
+        std::slice::from_raw_parts(
+            (&device.features as *const vk::PhysicalDeviceFeatures) as *const u8,
+            std::mem::size_of::<vk::PhysicalDeviceFeatures>(),
+        )
+    };
+    let result = requested_features
+        .iter()
+        .zip(device_features.iter())
+        .map(|(x, y)| x & y)
+        .collect::<Vec<_>>();
+    result == requested_features
+}
+
 fn device_supports_depth_buffer(
     instance: &ash::Instance,
     format: vk::Format,
@@ -284,6 +313,7 @@ pub fn create_logical_device(
     instance: &ash::Instance,
     ext: &[&'static CStr],
     device: &PhysicalDevice,
+    features_requested: vk::PhysicalDeviceFeatures,
     queue_indices: &[u32],
 ) -> ash::Device {
     let validations = ValidationLayers::application_default();
@@ -301,10 +331,6 @@ pub fn create_logical_device(
         };
         queue_create_infos.push(queue_create_info);
     }
-    //TODO: find a way to set this array (when I have a clearer vision of the overall structure)
-    let mut physical_features = vk::PhysicalDeviceFeatures {
-        ..Default::default()
-    };
     let required_device_extensions = ext.into_iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
     let device_create_info = vk::DeviceCreateInfo {
         s_type: vk::StructureType::DEVICE_CREATE_INFO,
@@ -316,7 +342,7 @@ pub fn create_logical_device(
         pp_enabled_layer_names: validations.as_ptr(),
         enabled_extension_count: required_device_extensions.len() as u32,
         pp_enabled_extension_names: required_device_extensions.as_ptr(),
-        p_enabled_features: &physical_features,
+        p_enabled_features: &features_requested,
     };
     let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
         .expect("Failed to create logical device");

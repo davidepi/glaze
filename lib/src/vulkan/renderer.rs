@@ -1,4 +1,6 @@
-use super::descriptor::{DescriptorAllocator, DescriptorSetBuilder, DescriptorSetLayoutCache};
+use super::descriptor::{
+    Descriptor, DescriptorAllocator, DescriptorSetBuilder, DescriptorSetLayoutCache,
+};
 use super::device::Device;
 use super::instance::{Instance, PresentInstance};
 use super::memory::{AllocatedBuffer, MemoryManager};
@@ -26,8 +28,7 @@ pub struct FrameData {
 struct FrameDataBuf {
     buffer: AllocatedBuffer,
     data: FrameData,
-    descriptor: vk::DescriptorSet,
-    layout: vk::DescriptorSetLayout,
+    descriptor: Descriptor,
 }
 
 pub struct RealtimeRenderer {
@@ -71,7 +72,7 @@ impl RealtimeRenderer {
                 offset: 0,
                 range: std::mem::size_of::<FrameData>() as u64,
             };
-            let (descriptor, layout) =
+            let descriptor =
                 DescriptorSetBuilder::new(&mut descriptor_cache, &mut descriptor_allocator)
                     .bind_buffer(
                         buf_info,
@@ -87,7 +88,6 @@ impl RealtimeRenderer {
                 buffer,
                 data,
                 descriptor,
-                layout,
             });
         }
         let sync = PresentSync::create(instance.device());
@@ -125,7 +125,7 @@ impl RealtimeRenderer {
                 height,
                 self.instance.device().logical(),
                 self.swapchain.default_render_pass(),
-                self.frame_data[0].layout,
+                self.frame_data[0].descriptor.layout,
             )
         }
     }
@@ -134,15 +134,21 @@ impl RealtimeRenderer {
         self.wait_idle();
         if let Some(mut scene) = self.scene.take() {
             scene.deinit_pipelines(self.instance.device().logical());
-            scene.unload(&mut self.mm);
+            scene.unload(self.instance.device(), &mut self.mm);
         }
-        let mut new = VulkanScene::load(self.instance.device(), &mut self.mm, scene);
+        let mut new = VulkanScene::load(
+            self.instance.device(),
+            &mut self.mm,
+            scene,
+            &mut self.descriptor_allocator,
+            &mut self.descriptor_cache,
+        );
         new.init_pipelines(
             self.render_width,
             self.render_height,
             self.instance.device().logical(),
             self.swapchain.default_render_pass(),
-            self.frame_data[0].layout,
+            self.frame_data[0].descriptor.layout,
         );
         self.scene = Some(new);
         self.start_time = Instant::now();
@@ -152,7 +158,7 @@ impl RealtimeRenderer {
         self.wait_idle();
         if let Some(mut scene) = self.scene.take() {
             scene.deinit_pipelines(self.instance.device().logical());
-            scene.unload(&mut self.mm);
+            scene.unload(self.instance.device(), &mut self.mm);
         }
         for data in self.frame_data {
             self.mm.free_buffer(data.buffer);
@@ -287,7 +293,7 @@ unsafe fn draw_objects(
     device.cmd_bind_vertex_buffers(cmd, 0, &[scene.vertex_buffer.buffer], &[0]);
     device.cmd_bind_index_buffer(cmd, scene.index_buffer.buffer, 0, vk::IndexType::UINT32); //bind once, use firts_index as offset
     for obj in &scene.meshes {
-        let material = scene.materials.get(&obj.material).unwrap(); //TODO: unwrap or default material
+        let (material, descriptor) = scene.materials.get(&obj.material).unwrap(); //TODO: unwrap or default material
         if material.shader_id != current_shader_id {
             current_shader_id = material.shader_id;
             let pipeline = scene.pipelines.get(&material.shader_id).unwrap(); //TODO: unwrap or load at runtime
@@ -297,7 +303,7 @@ unsafe fn draw_objects(
                 vk::PipelineBindPoint::GRAPHICS,
                 pipeline.layout,
                 0,
-                &[frame_data.descriptor],
+                &[frame_data.descriptor.set, descriptor.set],
                 &[],
             );
         }

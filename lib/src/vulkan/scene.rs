@@ -2,10 +2,13 @@ use std::ptr;
 
 use crate::materials::Pipeline;
 use crate::{Camera, Material, Mesh, Scene, ShaderMat, Texture, Vertex};
-use ash::vk;
+use ash::vk::{self, DescriptorType};
 use fnv::{FnvHashMap, FnvHashSet};
 use gpu_allocator::MemoryLocation;
 
+use super::descriptor::{
+    Descriptor, DescriptorAllocator, DescriptorSetBuilder, DescriptorSetLayoutCache,
+};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 
@@ -14,8 +17,10 @@ pub struct VulkanScene {
     pub vertex_buffer: AllocatedBuffer,
     pub index_buffer: AllocatedBuffer,
     pub meshes: Vec<VulkanMesh>,
-    pub materials: FnvHashMap<u16, Material>,
+    pub sampler: vk::Sampler,
+    pub materials: FnvHashMap<u16, (Material, Descriptor)>,
     pub pipelines: FnvHashMap<u8, Pipeline>,
+    pub textures: FnvHashMap<u16, AllocatedImage>,
 }
 
 pub struct VulkanMesh {
@@ -25,14 +30,29 @@ pub struct VulkanMesh {
 }
 
 impl VulkanScene {
-    pub fn load<T: Device>(device: &T, mm: &mut MemoryManager, scene: Scene) -> Self {
+    pub fn load<T: Device>(
+        device: &T,
+        mm: &mut MemoryManager,
+        scene: Scene,
+        allocator: &mut DescriptorAllocator,
+        cache: &mut DescriptorSetLayoutCache,
+    ) -> Self {
         let vertex_buffer = load_vertices_to_gpu(device, mm, &scene.vertices[..]);
         let (meshes, index_buffer) = load_indices_to_gpu(device, mm, &scene.meshes[..]);
-        let materials = scene
-            .materials
+        let sampler = create_sampler(device);
+        let textures = scene
+            .textures
             .iter()
-            .map(|(id, _, mat)| (*id, mat.clone()))
+            .map(|(id, _, tex)| (*id, load_single_texture(device, mm, tex)))
             .collect();
+        let materials = load_materials_to_gpu(
+            device,
+            &textures,
+            sampler,
+            &scene.materials.iter().as_slice(),
+            allocator,
+            cache,
+        );
         let current_cam = scene.cameras[0].clone(); // parser automatically adds a default cam
         let pipelines = FnvHashMap::default();
         VulkanScene {
@@ -40,8 +60,10 @@ impl VulkanScene {
             vertex_buffer,
             index_buffer,
             meshes,
+            sampler,
             materials,
             pipelines,
+            textures,
         }
     }
 
@@ -65,29 +87,24 @@ impl VulkanScene {
             offset: vk::Offset2D { x: 0, y: 0 },
             extent: vk::Extent2D { width, height },
         }];
-        // collect all materials requiring a pipeline
-        self.pipelines = self
-            .materials
-            .iter()
-            .map(|(_, mat)| mat.shader_id)
-            .collect::<FnvHashSet<_>>()
-            .into_iter()
-            .map(|id| {
-                (
-                    id,
-                    ShaderMat::from_id(id)
-                        .expect("Unexpected shader ID")
-                        .build_pipeline()
-                        .build(
-                            device,
-                            renderpass,
-                            &viewports,
-                            &scissors,
-                            &[frame_desc_layout],
-                        ),
-                )
-            })
-            .collect::<FnvHashMap<_, _>>();
+        self.pipelines = FnvHashMap::default();
+        for (_, (mat, desc)) in &self.materials {
+            let shader_id = mat.shader_id;
+            if !self.pipelines.contains_key(&shader_id) {
+                // material layout == shader layout
+                let pipeline = ShaderMat::from_id(shader_id)
+                    .expect("Unexpected shader ID")
+                    .build_pipeline()
+                    .build(
+                        device,
+                        renderpass,
+                        &viewports,
+                        &scissors,
+                        &[frame_desc_layout, desc.layout],
+                    );
+                self.pipelines.insert(shader_id, pipeline);
+            }
+        }
     }
 
     pub fn deinit_pipelines(&mut self, device: &ash::Device) {
@@ -96,9 +113,43 @@ impl VulkanScene {
         }
     }
 
-    pub fn unload(self, mm: &mut MemoryManager) {
+    pub fn unload<T: Device>(self, device: &T, mm: &mut MemoryManager) {
+        self.textures
+            .into_iter()
+            .for_each(|(_, tex)| mm.free_image(tex));
+        unsafe { device.logical().destroy_sampler(self.sampler, None) };
         mm.free_buffer(self.vertex_buffer);
         mm.free_buffer(self.index_buffer);
+    }
+}
+
+fn create_sampler<T: Device>(device: &T) -> vk::Sampler {
+    let max_anisotropy = device.physical().properties.limits.max_sampler_anisotropy;
+    let ci = vk::SamplerCreateInfo {
+        s_type: vk::StructureType::SAMPLER_CREATE_INFO,
+        p_next: ptr::null(),
+        flags: vk::SamplerCreateFlags::empty(),
+        mag_filter: vk::Filter::LINEAR,
+        min_filter: vk::Filter::LINEAR,
+        mipmap_mode: vk::SamplerMipmapMode::LINEAR,
+        address_mode_u: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+        address_mode_v: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+        address_mode_w: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+        mip_lod_bias: 0.0,
+        anisotropy_enable: vk::FALSE,
+        max_anisotropy,
+        compare_enable: vk::FALSE,
+        compare_op: vk::CompareOp::ALWAYS,
+        min_lod: 0.0,
+        max_lod: 0.0,
+        border_color: vk::BorderColor::INT_OPAQUE_BLACK,
+        unnormalized_coordinates: vk::FALSE,
+    };
+    unsafe {
+        device
+            .logical()
+            .create_sampler(&ci, None)
+            .expect("Failed to create sampler")
     }
 }
 
@@ -195,10 +246,39 @@ fn load_indices_to_gpu<T: Device>(
     (converted_meshes, gpu_buffer)
 }
 
+fn load_materials_to_gpu<T: Device>(
+    device: &T,
+    textures: &FnvHashMap<u16, AllocatedImage>,
+    sampler: vk::Sampler,
+    materials: &[(u16, String, Material)],
+    allocator: &mut DescriptorAllocator,
+    cache: &mut DescriptorSetLayoutCache,
+) -> FnvHashMap<u16, (Material, Descriptor)> {
+    let mut retval = FnvHashMap::with_capacity_and_hasher(materials.len(), Default::default());
+    for (id, _, mat) in materials {
+        let diffuse_id = mat.diffuse.unwrap_or(0); // TODO: set default texture
+        let diffuse = textures.get(&diffuse_id).expect("Failed to find texture"); //TODO: add default texture
+        let diffuse_image_info = vk::DescriptorImageInfo {
+            sampler,
+            image_view: diffuse.image_view,
+            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        };
+        let descriptor = DescriptorSetBuilder::new(cache, allocator)
+            .bind_image(
+                diffuse_image_info,
+                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                vk::ShaderStageFlags::FRAGMENT,
+            )
+            .build();
+        retval.insert(*id, (mat.clone(), descriptor));
+    }
+    retval
+}
+
 fn load_single_texture<T: Device>(
     device: &T,
     mm: &mut MemoryManager,
-    texture: Texture,
+    texture: &Texture,
 ) -> AllocatedImage {
     let size = (texture.width() * texture.height() * 4) as u64;
     let extent = vk::Extent2D {
