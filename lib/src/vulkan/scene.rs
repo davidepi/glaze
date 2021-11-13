@@ -8,9 +8,8 @@ use gpu_allocator::MemoryLocation;
 use super::device::Device;
 use super::memory::{AllocatedBuffer, MemoryManager};
 
-pub struct VulkanScene<const FRAMES_IN_FLIGHT: usize> {
+pub struct VulkanScene {
     pub current_cam: Camera,
-    pub projview: [Matrix4<f32>; FRAMES_IN_FLIGHT],
     pub vertex_buffer: AllocatedBuffer,
     pub index_buffer: AllocatedBuffer,
     pub meshes: Vec<VulkanMesh>,
@@ -24,7 +23,7 @@ pub struct VulkanMesh {
     pub material: u16,
 }
 
-impl<const FRAMES_IN_FLIGHT: usize> VulkanScene<FRAMES_IN_FLIGHT> {
+impl VulkanScene {
     pub fn load<T: Device>(device: &T, mm: &mut MemoryManager, scene: Scene) -> Self {
         let vertex_buffer = load_vertices_to_gpu(device, mm, &scene.vertices[..]);
         let (meshes, index_buffer) = load_indices_to_gpu(device, mm, &scene.meshes[..]);
@@ -34,11 +33,9 @@ impl<const FRAMES_IN_FLIGHT: usize> VulkanScene<FRAMES_IN_FLIGHT> {
             .map(|(id, _, mat)| (*id, mat.clone()))
             .collect();
         let current_cam = scene.cameras[0].clone(); // parser automatically adds a default cam
-        let projview = [Matrix4::<f32>::identity(); FRAMES_IN_FLIGHT];
         let pipelines = FnvHashMap::default();
         VulkanScene {
             current_cam,
-            projview,
             vertex_buffer,
             index_buffer,
             meshes,

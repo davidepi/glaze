@@ -5,11 +5,9 @@ use super::memory::{AllocatedBuffer, MemoryManager};
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
-use crate::materials::Pipeline;
 use crate::Scene;
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
-use std::intrinsics::copy_nonoverlapping;
 use std::ptr;
 use std::time::Instant;
 use winit::window::Window;
@@ -20,6 +18,7 @@ const FRAMES_IN_FLIGHT: usize = 2;
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FrameData {
+    pub projview: Matrix4<f32>,
     pub frame_time: f32,
 }
 
@@ -38,7 +37,7 @@ pub struct RealtimeRenderer {
     descriptor_cache: DescriptorSetLayoutCache,
     mm: MemoryManager,
     sync: PresentSync<FRAMES_IN_FLIGHT>,
-    scene: Option<VulkanScene<FRAMES_IN_FLIGHT>>,
+    scene: Option<VulkanScene>,
     frame_data: [FrameDataBuf; FRAMES_IN_FLIGHT],
     start_time: Instant,
     render_width: u32,
@@ -80,7 +79,10 @@ impl RealtimeRenderer {
                         vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                     )
                     .build();
-            let data = FrameData { frame_time: 0.0 };
+            let data = FrameData {
+                frame_time: 0.0,
+                projview: Matrix4::identity(),
+            };
             frame_data.push(FrameDataBuf {
                 buffer,
                 data,
@@ -134,8 +136,7 @@ impl RealtimeRenderer {
             scene.deinit_pipelines(self.instance.device().logical());
             scene.unload(&mut self.mm);
         }
-        let mut new =
-            VulkanScene::<FRAMES_IN_FLIGHT>::load(self.instance.device(), &mut self.mm, scene);
+        let mut new = VulkanScene::load(self.instance.device(), &mut self.mm, scene);
         new.init_pipelines(
             self.render_width,
             self.render_height,
@@ -261,7 +262,7 @@ impl RealtimeRenderer {
 }
 
 unsafe fn draw_objects(
-    scene: &VulkanScene<FRAMES_IN_FLIGHT>,
+    scene: &VulkanScene,
     ar: f32,
     frame_data: &mut FrameDataBuf,
     device: &ash::Device,
@@ -271,7 +272,7 @@ unsafe fn draw_objects(
     let mut proj = cam.projection(ar);
     proj[1][1] *= -1.0;
     let view = cam.look_at_rh();
-    let viewproj = proj * view;
+    frame_data.data.projview = proj * view;
     let mut current_shader_id = u8::MAX;
     //write frame_data to the buffer
     let buf_ptr = frame_data
@@ -290,13 +291,6 @@ unsafe fn draw_objects(
         if material.shader_id != current_shader_id {
             current_shader_id = material.shader_id;
             let pipeline = scene.pipelines.get(&material.shader_id).unwrap(); //TODO: unwrap or load at runtime
-            device.cmd_push_constants(
-                cmd,
-                pipeline.layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                as_u8_slice(&viewproj),
-            );
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
             device.cmd_bind_descriptor_sets(
                 cmd,
@@ -309,8 +303,4 @@ unsafe fn draw_objects(
         }
         device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
     }
-}
-
-unsafe fn as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-    std::slice::from_raw_parts((p as *const T) as *const u8, std::mem::size_of::<T>())
 }
