@@ -293,7 +293,7 @@ unsafe fn draw_objects(
     device.cmd_bind_vertex_buffers(cmd, 0, &[scene.vertex_buffer.buffer], &[0]);
     device.cmd_bind_index_buffer(cmd, scene.index_buffer.buffer, 0, vk::IndexType::UINT32); //bind once, use firts_index as offset
     for obj in &scene.meshes {
-        let (material, descriptor) = scene.materials.get(&obj.material).unwrap(); //TODO: unwrap or default material
+        let (material, mat_descriptor) = scene.materials.get(&obj.material).unwrap(); //TODO: unwrap or default material
         if material.shader_id != current_shader_id {
             current_shader_id = material.shader_id;
             let pipeline = scene.pipelines.get(&material.shader_id).unwrap(); //TODO: unwrap or load at runtime
@@ -303,7 +303,7 @@ unsafe fn draw_objects(
                 vk::PipelineBindPoint::GRAPHICS,
                 pipeline.layout,
                 0,
-                &[frame_data.descriptor.set, descriptor.set],
+                &[frame_data.descriptor.set, mat_descriptor.set],
                 &[],
             );
         }
