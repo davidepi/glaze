@@ -19,6 +19,8 @@ impl Pipeline {
 
 pub struct PipelineBuilder {
     pub shaders: Vec<(Vec<u8>, CString, vk::ShaderStageFlags)>,
+    pub binding_descriptions: Vec<vk::VertexInputBindingDescription>,
+    pub attribute_descriptions: Vec<vk::VertexInputAttributeDescription>,
     pub input_assembly: vk::PipelineInputAssemblyStateCreateInfo,
     pub rasterizer: vk::PipelineRasterizationStateCreateInfo,
     pub multisampling: vk::PipelineMultisampleStateCreateInfo,
@@ -57,17 +59,14 @@ impl PipelineBuilder {
                 p_specialization_info: ptr::null(),
             })
             .collect::<Vec<_>>();
-        // vertex input cannot stay inside the builder because it uses pointer
-        let binding_descriptions = Vertex::binding_descriptions();
-        let attribute_descriptions = Vertex::attribute_descriptions();
         let vertex_input = vk::PipelineVertexInputStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             p_next: ptr::null(),
             flags: Default::default(),
-            vertex_binding_description_count: binding_descriptions.len() as u32,
-            p_vertex_binding_descriptions: binding_descriptions.as_ptr(),
-            vertex_attribute_description_count: attribute_descriptions.len() as u32,
-            p_vertex_attribute_descriptions: attribute_descriptions.as_ptr(),
+            vertex_binding_description_count: self.binding_descriptions.len() as u32,
+            p_vertex_binding_descriptions: self.binding_descriptions.as_ptr(),
+            vertex_attribute_description_count: self.attribute_descriptions.len() as u32,
+            p_vertex_attribute_descriptions: self.attribute_descriptions.as_ptr(),
         };
         let viewport_state = vk::PipelineViewportStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_VIEWPORT_STATE_CREATE_INFO,
@@ -138,6 +137,9 @@ impl PipelineBuilder {
 impl Default for PipelineBuilder {
     fn default() -> Self {
         let shaders = Vec::with_capacity(2);
+        // vertex input cannot stay inside the builder because it uses pointer
+        let binding_descriptions = Vertex::binding_descriptions().to_vec();
+        let attribute_descriptions = Vertex::attribute_descriptions().to_vec();
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
             p_next: ptr::null(),
@@ -198,6 +200,8 @@ impl Default for PipelineBuilder {
         let blending = (None, [0.0; 4]);
         PipelineBuilder {
             shaders,
+            binding_descriptions,
+            attribute_descriptions,
             input_assembly,
             rasterizer,
             multisampling,
