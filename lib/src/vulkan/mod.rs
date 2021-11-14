@@ -5,6 +5,7 @@ mod instance;
 mod memory;
 mod platform;
 mod renderer;
+mod renderpass;
 mod scene;
 mod surface;
 mod swapchain;

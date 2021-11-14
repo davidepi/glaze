@@ -24,9 +24,6 @@ pub struct PresentDevice {
 }
 
 impl PresentDevice {
-    /// The depth buffer format that will be used by this device.
-    pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
-
     pub fn new(
         instance: &ash::Instance,
         ext: &[&'static CStr],
@@ -43,7 +40,7 @@ impl PresentDevice {
             .filter(|device| graphics_present_index(instance, device.device, surface).is_some())
             .filter(|device| device_supports_features(device, features))
             .filter(|device| {
-                device_supports_depth_buffer(instance, Self::DEPTH_FORMAT, device.device)
+                device_supports_depth_buffer(instance, vk::Format::D32_SFLOAT, device.device)
             })
             .last()
             .expect("No compatible devices found");

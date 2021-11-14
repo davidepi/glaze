@@ -3,6 +3,7 @@ use ash::vk;
 use std::error::Error;
 use std::ops::Range;
 
+#[macro_export]
 macro_rules! include_shader {
     ($shader_name : expr) => {
         include_bytes!(concat!(env!("OUT_DIR"), "/shaders/", $shader_name, ".spv"))

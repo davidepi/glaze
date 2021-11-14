@@ -1,14 +1,16 @@
 use super::descriptor::{
     Descriptor, DescriptorAllocator, DescriptorSetBuilder, DescriptorSetLayoutCache,
 };
-use super::device::Device;
+use super::device::{Device, PresentDevice};
 use super::instance::{Instance, PresentInstance};
-use super::memory::{AllocatedBuffer, MemoryManager};
+use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
+use super::renderpass::{FinalRenderPass, RenderPass};
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
-use crate::Scene;
-use ash::vk;
+use crate::materials::{Pipeline, PipelineBuilder};
+use crate::{include_shader, Scene};
+use ash::vk::{self, DescriptorSetLayout};
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
 use std::time::Instant;
@@ -36,6 +38,9 @@ pub struct RealtimeRenderer {
     swapchain: Swapchain,
     descriptor_allocator: DescriptorAllocator,
     descriptor_cache: DescriptorSetLayoutCache,
+    copy_sampler: vk::Sampler,
+    copy_pipeline: Pipeline,
+    forward_pass: RenderPass,
     mm: MemoryManager,
     sync: PresentSync<FRAMES_IN_FLIGHT>,
     scene: Option<VulkanScene>,
@@ -49,6 +54,7 @@ pub struct RealtimeRenderer {
 impl RealtimeRenderer {
     pub fn create(window: &Window, width: u32, height: u32) -> Self {
         let mut instance = PresentInstance::new(&window);
+        let extent = vk::Extent2D { width, height };
         let mut descriptor_allocator =
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
         let mut descriptor_cache =
@@ -60,7 +66,7 @@ impl RealtimeRenderer {
         );
         let swapchain = Swapchain::create(&mut instance, &mut mm, width, height);
         let mut frame_data = Vec::with_capacity(FRAMES_IN_FLIGHT);
-        for frame in 0..FRAMES_IN_FLIGHT {
+        for _ in 0..FRAMES_IN_FLIGHT {
             let buffer = mm.create_buffer(
                 "FrameData",
                 std::mem::size_of::<FrameData>() as u64,
@@ -91,16 +97,34 @@ impl RealtimeRenderer {
             });
         }
         let sync = PresentSync::create(instance.device());
+        let copy_sampler = create_copy_sampler(instance.device().logical());
+        let forward_pass = RenderPass::forward(
+            instance.device().logical(),
+            copy_sampler,
+            &mut mm,
+            &mut descriptor_allocator,
+            &mut descriptor_cache,
+            extent,
+        );
+        let copy_pipeline = create_copy_pipeline(
+            instance.device().logical(),
+            swapchain.extent(),
+            swapchain.renderpass(),
+            &[forward_pass.copy_descriptor.layout],
+        );
         RealtimeRenderer {
             instance,
             swapchain,
             descriptor_allocator,
             descriptor_cache,
+            copy_sampler,
+            copy_pipeline,
+            forward_pass,
             mm,
             sync,
             scene: None,
-            start_time: Instant::now(),
             frame_data: frame_data.try_into().unwrap(),
+            start_time: Instant::now(),
             render_width: width,
             render_height: height,
             frame_no: 0,
@@ -111,24 +135,8 @@ impl RealtimeRenderer {
         unsafe { self.instance.device().logical().device_wait_idle() }.expect("Failed to wait idle")
     }
 
-    pub fn change_render_size(&mut self, width: u32, height: u32) {
-        self.wait_idle();
-        self.render_width = width;
-        self.render_height = height;
-        let mut new_swapchain = Swapchain::create(&mut self.instance, &mut self.mm, width, height);
-        std::mem::swap(&mut self.swapchain, &mut new_swapchain);
-        new_swapchain.destroy(&self.instance, &mut self.mm); //new swapchain is the old one!
-        if let Some(scene) = &mut self.scene {
-            scene.deinit_pipelines(self.instance.device().logical());
-            scene.init_pipelines(
-                width,
-                height,
-                self.instance.device().logical(),
-                self.swapchain.default_render_pass(),
-                self.frame_data[0].descriptor.layout,
-            )
-        }
-    }
+    //TODO: readd change_render_size, when there is a good distinction between render size
+    //      and window size
 
     pub fn change_scene(&mut self, scene: Scene) {
         self.wait_idle();
@@ -147,7 +155,7 @@ impl RealtimeRenderer {
             self.render_width,
             self.render_height,
             self.instance.device().logical(),
-            self.swapchain.default_render_pass(),
+            self.forward_pass.renderpass,
             self.frame_data[0].descriptor.layout,
         );
         self.scene = Some(new);
@@ -163,6 +171,15 @@ impl RealtimeRenderer {
         for data in self.frame_data {
             self.mm.free_buffer(data.buffer);
         }
+        unsafe {
+            self.instance
+                .device()
+                .logical()
+                .destroy_sampler(self.copy_sampler, None);
+        };
+        self.forward_pass
+            .destroy(&self.instance.device().logical(), &mut self.mm);
+        self.copy_pipeline.destroy(self.instance.device().logical());
         self.descriptor_cache.destroy();
         self.descriptor_allocator.destroy();
         self.swapchain.destroy(&self.instance, &mut self.mm);
@@ -189,42 +206,23 @@ impl RealtimeRenderer {
                 flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
                 p_inheritance_info: ptr::null(),
             };
-            let color = [
-                vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: [0.0, 0.0, 0.0, 1.0],
-                    },
-                },
-                vk::ClearValue {
-                    depth_stencil: vk::ClearDepthStencilValue {
-                        depth: 1.0,
-                        stencil: 0,
-                    },
-                },
-            ];
-            let render_area = vk::Rect2D {
-                offset: vk::Offset2D { x: 0, y: 0 },
-                extent: self.swapchain.extent(),
-            };
-            let rp_ci = vk::RenderPassBeginInfo {
-                s_type: vk::StructureType::RENDER_PASS_BEGIN_INFO,
-                p_next: ptr::null(),
-                render_pass: self.swapchain.default_render_pass(),
-                framebuffer: acquired.framebuffer,
-                render_area,
-                clear_value_count: color.len() as u32,
-                p_clear_values: color.as_ptr(),
-            };
             unsafe {
                 device
                     .begin_command_buffer(acquired.cmd, &cmd_ci)
                     .expect("Failed to begin command buffer");
-                device.cmd_begin_render_pass(acquired.cmd, &rp_ci, vk::SubpassContents::INLINE);
+                self.forward_pass.begin(device, acquired.cmd);
                 if let Some(scene) = &self.scene {
                     let ar = self.render_width as f32 / self.render_height as f32;
                     draw_objects(scene, ar, frame_data, device, acquired.cmd);
                 }
-                device.cmd_end_render_pass(acquired.cmd);
+                self.forward_pass.end(device, acquired.cmd);
+                copy_renderpass_results(
+                    device,
+                    acquired.cmd,
+                    &self.copy_pipeline,
+                    &[&self.forward_pass],
+                    acquired.renderpass,
+                );
                 device
                     .end_command_buffer(acquired.cmd)
                     .expect("Failed to end command buffer");
@@ -309,4 +307,102 @@ unsafe fn draw_objects(
         }
         device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
     }
+}
+
+fn create_copy_sampler(device: &ash::Device) -> vk::Sampler {
+    let ci = vk::SamplerCreateInfo {
+        s_type: vk::StructureType::SAMPLER_CREATE_INFO,
+        p_next: ptr::null(),
+        flags: vk::SamplerCreateFlags::empty(),
+        mag_filter: vk::Filter::LINEAR,
+        min_filter: vk::Filter::LINEAR,
+        mipmap_mode: vk::SamplerMipmapMode::LINEAR,
+        address_mode_u: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+        address_mode_v: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+        address_mode_w: vk::SamplerAddressMode::CLAMP_TO_BORDER,
+        mip_lod_bias: 0.0,
+        anisotropy_enable: vk::FALSE,
+        max_anisotropy: 1.0,
+        compare_enable: vk::FALSE,
+        compare_op: vk::CompareOp::ALWAYS,
+        min_lod: 0.0,
+        max_lod: 0.0,
+        border_color: vk::BorderColor::INT_OPAQUE_BLACK,
+        unnormalized_coordinates: vk::FALSE,
+    };
+    unsafe {
+        device
+            .create_sampler(&ci, None)
+            .expect("Failed to create sampler")
+    }
+}
+
+fn create_copy_pipeline(
+    device: &ash::Device,
+    extent: vk::Extent2D,
+    renderpass: vk::RenderPass,
+    dset_layout: &[DescriptorSetLayout],
+) -> Pipeline {
+    let mut builder = PipelineBuilder::default();
+    let vs = include_shader!("blit.vert");
+    let fs = include_shader!("blit.frag");
+    builder.push_shader(vs, "main", vk::ShaderStageFlags::VERTEX);
+    builder.push_shader(fs, "main", vk::ShaderStageFlags::FRAGMENT);
+    // vertices will be hard-coded (fullscreen)
+    builder.binding_descriptions = Vec::with_capacity(0);
+    builder.attribute_descriptions = Vec::with_capacity(0);
+    // deactivate depth stencil
+    builder.depth_stencil = vk::PipelineDepthStencilStateCreateInfo {
+        s_type: vk::StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        p_next: ptr::null(),
+        flags: vk::PipelineDepthStencilStateCreateFlags::empty(),
+        depth_test_enable: vk::FALSE,
+        depth_write_enable: vk::FALSE,
+        depth_compare_op: vk::CompareOp::ALWAYS,
+        depth_bounds_test_enable: vk::FALSE,
+        stencil_test_enable: vk::FALSE,
+        front: vk::StencilOpState::default(),
+        back: vk::StencilOpState::default(),
+        min_depth_bounds: 0.0,
+        max_depth_bounds: 1.0,
+    };
+    builder.rasterizer.cull_mode = vk::CullModeFlags::NONE;
+    let viewports = [vk::Viewport {
+        x: 0.0,
+        y: 0.0,
+        width: extent.width as f32,
+        height: extent.height as f32,
+        min_depth: 0.0,
+        max_depth: 1.0,
+    }];
+    let scissors = [vk::Rect2D {
+        offset: vk::Offset2D { x: 0, y: 0 },
+        extent,
+    }];
+    builder.build(device, renderpass, &viewports, &scissors, dset_layout)
+}
+
+fn copy_renderpass_results(
+    device: &ash::Device,
+    cmd: vk::CommandBuffer,
+    copy_pip: &Pipeline,
+    rp: &[&RenderPass],
+    finalpass: &FinalRenderPass,
+) {
+    finalpass.begin(device, cmd);
+    for renderpass in rp {
+        unsafe {
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, copy_pip.pipeline);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                copy_pip.layout,
+                0,
+                &[renderpass.copy_descriptor.set],
+                &[],
+            );
+            device.cmd_draw(cmd, 3, 1, 0, 0);
+        }
+    }
+    finalpass.end(device, cmd);
 }
