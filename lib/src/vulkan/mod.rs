@@ -1,6 +1,7 @@
 mod debug;
 mod descriptor;
 mod device;
+mod imgui;
 mod instance;
 mod memory;
 mod platform;

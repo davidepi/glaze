@@ -1,7 +1,9 @@
 use super::descriptor::{
-    Descriptor, DescriptorAllocator, DescriptorSetBuilder, DescriptorSetLayoutCache,
+    Descriptor, DescriptorAllocator, DescriptorSetBuilder, DescriptorSetCreator,
+    DescriptorSetLayoutCache,
 };
 use super::device::{Device, PresentDevice};
+use super::imgui::ImguiDrawer;
 use super::instance::{Instance, PresentInstance};
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 use super::renderpass::{FinalRenderPass, RenderPass};
@@ -36,11 +38,12 @@ struct FrameDataBuf {
 pub struct RealtimeRenderer {
     instance: PresentInstance,
     swapchain: Swapchain,
-    descriptor_allocator: DescriptorAllocator,
-    descriptor_cache: DescriptorSetLayoutCache,
+    descriptor_creator: DescriptorSetCreator,
     copy_sampler: vk::Sampler,
     copy_pipeline: Pipeline,
     forward_pass: RenderPass,
+    imgui: imgui::Context,
+    imgui_renderer: ImguiDrawer,
     mm: MemoryManager,
     sync: PresentSync<FRAMES_IN_FLIGHT>,
     scene: Option<VulkanScene>,
@@ -55,10 +58,11 @@ impl RealtimeRenderer {
     pub fn create(window: &Window, width: u32, height: u32) -> Self {
         let mut instance = PresentInstance::new(&window);
         let extent = vk::Extent2D { width, height };
-        let mut descriptor_allocator =
+        let descriptor_allocator =
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
-        let mut descriptor_cache =
-            DescriptorSetLayoutCache::new(instance.device().logical().clone());
+        let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
+        let mut descriptor_creator =
+            DescriptorSetCreator::new(descriptor_allocator, descriptor_cache);
         let mut mm = MemoryManager::new(
             instance.instance(),
             instance.device().logical(),
@@ -78,14 +82,14 @@ impl RealtimeRenderer {
                 offset: 0,
                 range: std::mem::size_of::<FrameData>() as u64,
             };
-            let descriptor =
-                DescriptorSetBuilder::new(&mut descriptor_cache, &mut descriptor_allocator)
-                    .bind_buffer(
-                        buf_info,
-                        vk::DescriptorType::UNIFORM_BUFFER,
-                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                    )
-                    .build();
+            let descriptor = descriptor_creator
+                .new_set()
+                .bind_buffer(
+                    buf_info,
+                    vk::DescriptorType::UNIFORM_BUFFER,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                )
+                .build();
             let data = FrameData {
                 frame_time: 0.0,
                 projview: Matrix4::identity(),
@@ -102,8 +106,7 @@ impl RealtimeRenderer {
             instance.device().logical(),
             copy_sampler,
             &mut mm,
-            &mut descriptor_allocator,
-            &mut descriptor_cache,
+            &mut descriptor_creator,
             extent,
         );
         let copy_pipeline = create_copy_pipeline(
@@ -112,14 +115,24 @@ impl RealtimeRenderer {
             swapchain.renderpass(),
             &[forward_pass.copy_descriptor.layout],
         );
+        let mut imgui = imgui::Context::create();
+        let imgui_renderer = ImguiDrawer::new(
+            &mut imgui,
+            instance.device(),
+            copy_sampler,
+            &mut mm,
+            &mut descriptor_creator,
+            swapchain.extent(),
+        );
         RealtimeRenderer {
             instance,
             swapchain,
-            descriptor_allocator,
-            descriptor_cache,
+            descriptor_creator,
             copy_sampler,
             copy_pipeline,
             forward_pass,
+            imgui,
+            imgui_renderer,
             mm,
             sync,
             scene: None,
@@ -148,8 +161,7 @@ impl RealtimeRenderer {
             self.instance.device(),
             &mut self.mm,
             scene,
-            &mut self.descriptor_allocator,
-            &mut self.descriptor_cache,
+            &mut self.descriptor_creator,
         );
         new.init_pipelines(
             self.render_width,
@@ -164,6 +176,8 @@ impl RealtimeRenderer {
 
     pub fn destroy(mut self) {
         self.wait_idle();
+        self.imgui_renderer
+            .destroy(self.instance.device().logical(), &mut self.mm);
         if let Some(mut scene) = self.scene.take() {
             scene.deinit_pipelines(self.instance.device().logical());
             scene.unload(self.instance.device(), &mut self.mm);
@@ -180,8 +194,7 @@ impl RealtimeRenderer {
         self.forward_pass
             .destroy(&self.instance.device().logical(), &mut self.mm);
         self.copy_pipeline.destroy(self.instance.device().logical());
-        self.descriptor_cache.destroy();
-        self.descriptor_allocator.destroy();
+        self.descriptor_creator.destroy();
         self.swapchain.destroy(&self.instance, &mut self.mm);
         self.mm.destroy();
         self.sync.destroy(self.instance.device());
@@ -216,11 +229,17 @@ impl RealtimeRenderer {
                     draw_objects(scene, ar, frame_data, device, acquired.cmd);
                 }
                 self.forward_pass.end(device, acquired.cmd);
+                self.imgui_renderer.draw(
+                    device,
+                    acquired.cmd,
+                    self.imgui.frame().render(),
+                    &mut self.mm,
+                );
                 copy_renderpass_results(
                     device,
                     acquired.cmd,
                     &self.copy_pipeline,
-                    &[&self.forward_pass],
+                    &[&self.forward_pass, self.imgui_renderer.ui_pass()],
                     acquired.renderpass,
                 );
                 device
@@ -352,34 +371,9 @@ fn create_copy_pipeline(
     builder.binding_descriptions = Vec::with_capacity(0);
     builder.attribute_descriptions = Vec::with_capacity(0);
     // deactivate depth stencil
-    builder.depth_stencil = vk::PipelineDepthStencilStateCreateInfo {
-        s_type: vk::StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        p_next: ptr::null(),
-        flags: vk::PipelineDepthStencilStateCreateFlags::empty(),
-        depth_test_enable: vk::FALSE,
-        depth_write_enable: vk::FALSE,
-        depth_compare_op: vk::CompareOp::ALWAYS,
-        depth_bounds_test_enable: vk::FALSE,
-        stencil_test_enable: vk::FALSE,
-        front: vk::StencilOpState::default(),
-        back: vk::StencilOpState::default(),
-        min_depth_bounds: 0.0,
-        max_depth_bounds: 1.0,
-    };
+    builder.no_depth();
     builder.rasterizer.cull_mode = vk::CullModeFlags::NONE;
-    let viewports = [vk::Viewport {
-        x: 0.0,
-        y: 0.0,
-        width: extent.width as f32,
-        height: extent.height as f32,
-        min_depth: 0.0,
-        max_depth: 1.0,
-    }];
-    let scissors = [vk::Rect2D {
-        offset: vk::Offset2D { x: 0, y: 0 },
-        extent,
-    }];
-    builder.build(device, renderpass, &viewports, &scissors, dset_layout)
+    builder.build(device, renderpass, extent, dset_layout)
 }
 
 fn copy_renderpass_results(

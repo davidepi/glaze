@@ -1,16 +1,13 @@
 use std::ptr;
 
+use super::descriptor::{Descriptor, DescriptorSetCreator};
+use super::device::Device;
+use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 use crate::materials::Pipeline;
 use crate::{Camera, Material, Mesh, Scene, ShaderMat, Texture, Vertex};
 use ash::vk::{self, DescriptorType};
 use fnv::{FnvHashMap, FnvHashSet};
 use gpu_allocator::MemoryLocation;
-
-use super::descriptor::{
-    Descriptor, DescriptorAllocator, DescriptorSetBuilder, DescriptorSetLayoutCache,
-};
-use super::device::Device;
-use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 
 pub struct VulkanScene {
     pub current_cam: Camera,
@@ -34,8 +31,7 @@ impl VulkanScene {
         device: &T,
         mm: &mut MemoryManager,
         scene: Scene,
-        allocator: &mut DescriptorAllocator,
-        cache: &mut DescriptorSetLayoutCache,
+        descriptor_creator: &mut DescriptorSetCreator,
     ) -> Self {
         let vertex_buffer = load_vertices_to_gpu(device, mm, &scene.vertices[..]);
         let (meshes, index_buffer) = load_indices_to_gpu(device, mm, &scene.meshes[..]);
@@ -50,8 +46,7 @@ impl VulkanScene {
             &textures,
             sampler,
             &scene.materials.iter().as_slice(),
-            allocator,
-            cache,
+            descriptor_creator,
         );
         let current_cam = scene.cameras[0].clone(); // parser automatically adds a default cam
         let pipelines = FnvHashMap::default();
@@ -75,18 +70,6 @@ impl VulkanScene {
         renderpass: vk::RenderPass,
         frame_desc_layout: vk::DescriptorSetLayout,
     ) {
-        let viewports = [vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: width as f32,
-            height: height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        }];
-        let scissors = [vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: vk::Extent2D { width, height },
-        }];
         self.pipelines = FnvHashMap::default();
         for (_, (mat, desc)) in &self.materials {
             let shader_id = mat.shader_id;
@@ -98,8 +81,7 @@ impl VulkanScene {
                     .build(
                         device,
                         renderpass,
-                        &viewports,
-                        &scissors,
+                        vk::Extent2D { width, height },
                         &[frame_desc_layout, desc.layout],
                     );
                 self.pipelines.insert(shader_id, pipeline);
@@ -251,8 +233,7 @@ fn load_materials_to_gpu<T: Device>(
     textures: &FnvHashMap<u16, AllocatedImage>,
     sampler: vk::Sampler,
     materials: &[(u16, String, Material)],
-    allocator: &mut DescriptorAllocator,
-    cache: &mut DescriptorSetLayoutCache,
+    descriptor_creator: &mut DescriptorSetCreator,
 ) -> FnvHashMap<u16, (Material, Descriptor)> {
     let mut retval = FnvHashMap::with_capacity_and_hasher(materials.len(), Default::default());
     for (id, _, mat) in materials {
@@ -263,7 +244,8 @@ fn load_materials_to_gpu<T: Device>(
             image_view: diffuse.image_view,
             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         };
-        let descriptor = DescriptorSetBuilder::new(cache, allocator)
+        let descriptor = descriptor_creator
+            .new_set()
             .bind_image(
                 diffuse_image_info,
                 vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -292,6 +274,7 @@ fn load_single_texture<T: Device>(
         MemoryLocation::CpuToGpu,
     );
     let image = mm.create_image_gpu(
+        "Texture Image",
         vk::Format::R8G8B8A8_SRGB,
         extent,
         vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
@@ -309,9 +292,9 @@ fn load_single_texture<T: Device>(
     let subresource_range = vk::ImageSubresourceRange {
         aspect_mask: vk::ImageAspectFlags::COLOR,
         base_mip_level: 0,
-        level_count: 1,
+        level_count: vk::REMAINING_MIP_LEVELS,
         base_array_layer: 0,
-        layer_count: 1,
+        layer_count: vk::REMAINING_ARRAY_LAYERS,
     };
     let barrier_transfer = vk::ImageMemoryBarrier {
         s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,

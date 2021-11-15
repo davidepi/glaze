@@ -1,5 +1,5 @@
 use crate::geometry::Vertex;
-use ash::vk;
+use ash::vk::{self, PushConstantRange};
 use std::ffi::CString;
 use std::ptr;
 
@@ -27,6 +27,7 @@ pub struct PipelineBuilder {
     pub depth_stencil: vk::PipelineDepthStencilStateCreateInfo,
     pub blending_settings: Vec<vk::PipelineColorBlendAttachmentState>,
     pub blending: (Option<vk::LogicOp>, [f32; 4]),
+    pub push_constant: Option<vk::PushConstantRange>,
 }
 
 impl PipelineBuilder {
@@ -42,8 +43,7 @@ impl PipelineBuilder {
         self,
         device: &ash::Device,
         renderpass: vk::RenderPass,
-        viewports: &[vk::Viewport],
-        scissors: &[vk::Rect2D],
+        extent: vk::Extent2D,
         set_layout: &[vk::DescriptorSetLayout],
     ) -> Pipeline {
         let shader_stages = self
@@ -68,6 +68,18 @@ impl PipelineBuilder {
             vertex_attribute_description_count: self.attribute_descriptions.len() as u32,
             p_vertex_attribute_descriptions: self.attribute_descriptions.as_ptr(),
         };
+        let viewports = [vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }];
+        let scissors = [vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent,
+        }];
         let viewport_state = vk::PipelineViewportStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_VIEWPORT_STATE_CREATE_INFO,
             p_next: ptr::null(),
@@ -91,14 +103,19 @@ impl PipelineBuilder {
             p_attachments: self.blending_settings.as_ptr(),
             blend_constants: self.blending.1,
         };
+        let push_constants = if let Some(pc) = self.push_constant {
+            vec![pc]
+        } else {
+            Vec::with_capacity(0)
+        };
         let pipeline_layout = vk::PipelineLayoutCreateInfo {
             s_type: vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineLayoutCreateFlags::empty(),
             set_layout_count: set_layout.len() as u32,
             p_set_layouts: set_layout.as_ptr(),
-            push_constant_range_count: 0,
-            p_push_constant_ranges: ptr::null(),
+            push_constant_range_count: push_constants.len() as u32,
+            p_push_constant_ranges: push_constants.as_ptr(),
         };
         let layout = unsafe { device.create_pipeline_layout(&pipeline_layout, None) }
             .expect("Failed to create Pipeline Layout");
@@ -131,6 +148,31 @@ impl PipelineBuilder {
             .iter()
             .for_each(|ci| destroy_shader_module(device, ci.module));
         Pipeline { pipeline, layout }
+    }
+
+    pub fn no_depth(&mut self) {
+        self.depth_stencil = vk::PipelineDepthStencilStateCreateInfo {
+            s_type: vk::StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineDepthStencilStateCreateFlags::empty(),
+            depth_test_enable: vk::FALSE,
+            depth_write_enable: vk::FALSE,
+            depth_compare_op: vk::CompareOp::ALWAYS,
+            depth_bounds_test_enable: vk::FALSE,
+            stencil_test_enable: vk::FALSE,
+            front: vk::StencilOpState::default(),
+            back: vk::StencilOpState::default(),
+            min_depth_bounds: 0.0,
+            max_depth_bounds: 1.0,
+        };
+    }
+
+    pub fn push_constants(&mut self, size: usize, stage: vk::ShaderStageFlags) {
+        self.push_constant = Some(vk::PushConstantRange {
+            stage_flags: stage,
+            offset: 0,
+            size: size as u32,
+        });
     }
 }
 
@@ -208,6 +250,7 @@ impl Default for PipelineBuilder {
             depth_stencil,
             blending_settings,
             blending,
+            push_constant: None,
         }
     }
 }

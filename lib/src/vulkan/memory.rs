@@ -106,6 +106,7 @@ impl MemoryManager {
 
     pub fn create_image_gpu(
         &mut self,
+        name: &'static str,
         format: vk::Format,
         extent: vk::Extent2D,
         usage: vk::ImageUsageFlags,
@@ -138,7 +139,7 @@ impl MemoryManager {
             unsafe { self.device.create_image(&img_ci, None) }.expect("Failed to create image");
         let requirements = unsafe { self.device.get_image_memory_requirements(image) };
         let alloc_desc = AllocationCreateDesc {
-            name: "Image",
+            name,
             requirements,
             location: MemoryLocation::GpuOnly,
             linear: true,
