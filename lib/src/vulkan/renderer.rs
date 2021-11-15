@@ -1,5 +1,6 @@
 use super::descriptor::{
-    Descriptor, DescriptorAllocator, DescriptorSetBuilder, DescriptorSetLayoutCache,
+    Descriptor, DescriptorAllocator, DescriptorSetBuilder, DescriptorSetCreator,
+    DescriptorSetLayoutCache,
 };
 use super::device::{Device, PresentDevice};
 use super::instance::{Instance, PresentInstance};
@@ -36,8 +37,7 @@ struct FrameDataBuf {
 pub struct RealtimeRenderer {
     instance: PresentInstance,
     swapchain: Swapchain,
-    descriptor_allocator: DescriptorAllocator,
-    descriptor_cache: DescriptorSetLayoutCache,
+    descriptor_creator: DescriptorSetCreator,
     copy_sampler: vk::Sampler,
     copy_pipeline: Pipeline,
     forward_pass: RenderPass,
@@ -55,10 +55,11 @@ impl RealtimeRenderer {
     pub fn create(window: &Window, width: u32, height: u32) -> Self {
         let mut instance = PresentInstance::new(&window);
         let extent = vk::Extent2D { width, height };
-        let mut descriptor_allocator =
+        let descriptor_allocator =
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
-        let mut descriptor_cache =
-            DescriptorSetLayoutCache::new(instance.device().logical().clone());
+        let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
+        let mut descriptor_creator =
+            DescriptorSetCreator::new(descriptor_allocator, descriptor_cache);
         let mut mm = MemoryManager::new(
             instance.instance(),
             instance.device().logical(),
@@ -78,14 +79,14 @@ impl RealtimeRenderer {
                 offset: 0,
                 range: std::mem::size_of::<FrameData>() as u64,
             };
-            let descriptor =
-                DescriptorSetBuilder::new(&mut descriptor_cache, &mut descriptor_allocator)
-                    .bind_buffer(
-                        buf_info,
-                        vk::DescriptorType::UNIFORM_BUFFER,
-                        vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
-                    )
-                    .build();
+            let descriptor = descriptor_creator
+                .new_set()
+                .bind_buffer(
+                    buf_info,
+                    vk::DescriptorType::UNIFORM_BUFFER,
+                    vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                )
+                .build();
             let data = FrameData {
                 frame_time: 0.0,
                 projview: Matrix4::identity(),
@@ -102,8 +103,7 @@ impl RealtimeRenderer {
             instance.device().logical(),
             copy_sampler,
             &mut mm,
-            &mut descriptor_allocator,
-            &mut descriptor_cache,
+            &mut descriptor_creator,
             extent,
         );
         let copy_pipeline = create_copy_pipeline(
@@ -115,8 +115,7 @@ impl RealtimeRenderer {
         RealtimeRenderer {
             instance,
             swapchain,
-            descriptor_allocator,
-            descriptor_cache,
+            descriptor_creator,
             copy_sampler,
             copy_pipeline,
             forward_pass,
@@ -148,8 +147,7 @@ impl RealtimeRenderer {
             self.instance.device(),
             &mut self.mm,
             scene,
-            &mut self.descriptor_allocator,
-            &mut self.descriptor_cache,
+            &mut self.descriptor_creator,
         );
         new.init_pipelines(
             self.render_width,
@@ -180,8 +178,7 @@ impl RealtimeRenderer {
         self.forward_pass
             .destroy(&self.instance.device().logical(), &mut self.mm);
         self.copy_pipeline.destroy(self.instance.device().logical());
-        self.descriptor_cache.destroy();
-        self.descriptor_allocator.destroy();
+        self.descriptor_creator.destroy();
         self.swapchain.destroy(&self.instance, &mut self.mm);
         self.mm.destroy();
         self.sync.destroy(self.instance.device());

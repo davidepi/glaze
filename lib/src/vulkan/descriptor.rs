@@ -1,5 +1,5 @@
 // this entire file is based on https://vkguide.dev/docs/extra-chapter/abstracting_descriptors/
-use ash::vk;
+use ash::vk::{self, DescriptorSetLayout};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ptr;
@@ -201,6 +201,34 @@ impl DescriptorSetLayoutCache {
     }
 }
 
+pub struct DescriptorSetCreator {
+    cache: DescriptorSetLayoutCache,
+    alloc: DescriptorAllocator,
+}
+
+impl DescriptorSetCreator {
+    pub fn new(
+        alloc: DescriptorAllocator,
+        cache: DescriptorSetLayoutCache,
+    ) -> DescriptorSetCreator {
+        DescriptorSetCreator { cache, alloc }
+    }
+
+    pub fn new_set(&mut self) -> DescriptorSetBuilder {
+        DescriptorSetBuilder {
+            alloc: &mut self.alloc,
+            cache: &mut self.cache,
+            writes: Vec::new(),
+            bindings: Vec::new(),
+        }
+    }
+
+    pub fn destroy(self) {
+        self.cache.destroy();
+        self.alloc.destroy();
+    }
+}
+
 pub struct DescriptorSetBuilder<'a> {
     cache: &'a mut DescriptorSetLayoutCache,
     alloc: &'a mut DescriptorAllocator,
@@ -209,18 +237,6 @@ pub struct DescriptorSetBuilder<'a> {
 }
 
 impl<'a> DescriptorSetBuilder<'a> {
-    pub fn new(
-        cache: &'a mut DescriptorSetLayoutCache,
-        alloc: &'a mut DescriptorAllocator,
-    ) -> Self {
-        DescriptorSetBuilder {
-            cache,
-            alloc,
-            writes: Vec::new(),
-            bindings: Vec::new(),
-        }
-    }
-
     #[must_use]
     pub fn bind_buffer(
         mut self,

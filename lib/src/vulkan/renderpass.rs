@@ -1,8 +1,6 @@
 use std::ptr;
 
-use super::descriptor::{
-    Descriptor, DescriptorAllocator, DescriptorSetBuilder, DescriptorSetLayoutCache,
-};
+use super::descriptor::{Descriptor, DescriptorSetCreator};
 use super::memory::{AllocatedImage, MemoryManager};
 use ash::vk;
 
@@ -21,8 +19,7 @@ impl RenderPass {
         device: &ash::Device,
         copy_sampler: vk::Sampler,
         mm: &mut MemoryManager,
-        alloc: &mut DescriptorAllocator,
-        cache: &mut DescriptorSetLayoutCache,
+        descriptor_creator: &mut DescriptorSetCreator,
         extent: vk::Extent2D,
     ) -> RenderPass {
         let color_format = vk::Format::R8G8B8A8_SRGB;
@@ -123,7 +120,8 @@ impl RenderPass {
             image_view: color_img.image_view,
             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         };
-        let copy_descriptor = DescriptorSetBuilder::new(cache, alloc)
+        let copy_descriptor = descriptor_creator
+            .new_set()
             .bind_image(
                 image_info,
                 vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
