@@ -141,9 +141,9 @@ impl ImguiDrawer {
             s_type: vk::StructureType::SAMPLER_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::SamplerCreateFlags::empty(),
-            mag_filter: vk::Filter::NEAREST,
-            min_filter: vk::Filter::NEAREST,
-            mipmap_mode: vk::SamplerMipmapMode::NEAREST,
+            mag_filter: vk::Filter::LINEAR,
+            min_filter: vk::Filter::LINEAR,
+            mipmap_mode: vk::SamplerMipmapMode::LINEAR,
             address_mode_u: vk::SamplerAddressMode::REPEAT,
             address_mode_v: vk::SamplerAddressMode::REPEAT,
             address_mode_w: vk::SamplerAddressMode::REPEAT,
@@ -219,7 +219,7 @@ impl ImguiDrawer {
             );
             self.vertex_size = new_size;
             std::mem::swap(&mut self.vertex_buf, &mut new_vertex_buf);
-            mm.free_buffer(new_vertex_buf);
+            mm.deferred_free_buffer(new_vertex_buf);
         }
         // reallocate index buffer if not enough
         let idx_required_mem =
@@ -234,7 +234,7 @@ impl ImguiDrawer {
             );
             self.index_size = new_size;
             std::mem::swap(&mut self.index_buf, &mut new_index_buf);
-            mm.free_buffer(new_index_buf);
+            mm.deferred_free_buffer(new_index_buf);
         }
         // setup pipeline
         let scale = Vec2::new(

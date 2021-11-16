@@ -20,6 +20,8 @@ pub struct AllocatedImage {
 
 pub struct MemoryManager {
     device: ash::Device,
+    frames_in_flight: u8,
+    deferred_buffers: Vec<(AllocatedBuffer, u8)>,
     allocator: Allocator,
 }
 
@@ -28,6 +30,7 @@ impl MemoryManager {
         instance: &ash::Instance,
         device: &ash::Device,
         physical_device: vk::PhysicalDevice,
+        frames_in_flight: u8,
     ) -> Self {
         let debug_settings = if cfg!(debug_assertions) {
             AllocatorDebugSettings {
@@ -58,6 +61,8 @@ impl MemoryManager {
         let allocator = Allocator::new(&acd).expect("Failed to create memory allocator");
         MemoryManager {
             device: device.clone(),
+            frames_in_flight,
+            deferred_buffers: Vec::new(),
             allocator,
         }
     }
@@ -194,7 +199,30 @@ impl MemoryManager {
         }
     }
 
-    pub fn destroy(self) {
-        //do nothing, but consumes self, so the allocator Drop kicks in
+    pub fn deferred_free_buffer(&mut self, buf: AllocatedBuffer) {
+        self.deferred_buffers.push((buf, 0));
+    }
+
+    pub fn frame_end_clean(&mut self) {
+        if !self.deferred_buffers.is_empty() {
+            let mut retain = Vec::with_capacity(self.deferred_buffers.len());
+            let mut drop = Vec::with_capacity(self.deferred_buffers.len());
+            while let Some((buf, mut frame_count)) = self.deferred_buffers.pop() {
+                frame_count += 1;
+                if frame_count > self.frames_in_flight {
+                    drop.push(buf);
+                } else {
+                    retain.push((buf, frame_count));
+                }
+            }
+            drop.into_iter().for_each(|buf| self.free_buffer(buf));
+            self.deferred_buffers = retain;
+        }
+    }
+
+    pub fn destroy(mut self) {
+        while let Some((buf, _)) = self.deferred_buffers.pop() {
+            self.free_buffer(buf);
+        }
     }
 }

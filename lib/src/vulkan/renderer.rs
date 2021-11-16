@@ -65,6 +65,7 @@ impl RealtimeRenderer {
             instance.instance(),
             instance.device().logical(),
             instance.device().physical().device,
+            FRAMES_IN_FLIGHT as u8,
         );
         let swapchain = Swapchain::create(&mut instance, width, height);
         let mut frame_data = Vec::with_capacity(FRAMES_IN_FLIGHT);
@@ -275,6 +276,7 @@ impl RealtimeRenderer {
                     .expect("Failed to submit render task");
             }
             self.swapchain.queue_present(queue, &present_ci);
+            self.mm.frame_end_clean();
             self.frame_no += 1;
         } else {
             // out of date swapchain. the resize is called by winit so wait next frame
