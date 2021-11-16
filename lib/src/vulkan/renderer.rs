@@ -108,19 +108,19 @@ impl RealtimeRenderer {
             &mut descriptor_creator,
             extent,
         );
-        let copy_pipeline = create_copy_pipeline(
-            instance.device().logical(),
-            swapchain.extent(),
-            swapchain.renderpass(),
-            &[forward_pass.copy_descriptor.layout],
-        );
         let imgui_renderer = ImguiDrawer::new(
             imgui,
             instance.device(),
             copy_sampler,
             &mut mm,
             &mut descriptor_creator,
+            &swapchain,
+        );
+        let copy_pipeline = create_copy_pipeline(
+            instance.device().logical(),
             swapchain.extent(),
+            swapchain.renderpass(),
+            &[forward_pass.copy_descriptor.layout],
         );
         RealtimeRenderer {
             instance,
@@ -198,7 +198,7 @@ impl RealtimeRenderer {
         self.instance.destroy();
     }
 
-    pub fn draw_frame(&mut self, imgui_data: &imgui::DrawData) {
+    pub fn draw_frame(&mut self, imgui_data: Option<&imgui::DrawData>) {
         let frame_sync = self.sync.get(self.frame_no);
         frame_sync.wait_acquire(self.instance.device());
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
@@ -226,25 +226,23 @@ impl RealtimeRenderer {
                     draw_objects(scene, ar, frame_data, device, acquired.cmd);
                 }
                 self.forward_pass.end(device, acquired.cmd);
-                if imgui_data.total_vtx_count > 0 {
-                    self.imgui_renderer
-                        .draw(device, acquired.cmd, imgui_data, &mut self.mm);
-                    copy_renderpass_results(
-                        device,
-                        acquired.cmd,
-                        &self.copy_pipeline,
-                        &[&self.forward_pass, self.imgui_renderer.ui_pass()],
-                        acquired.renderpass,
-                    );
-                } else {
-                    copy_renderpass_results(
-                        device,
-                        acquired.cmd,
-                        &self.copy_pipeline,
-                        &[&self.forward_pass],
-                        acquired.renderpass,
-                    );
+                acquired.renderpass.begin(device, acquired.cmd);
+                copy_renderpass_to_swapchain(
+                    device,
+                    acquired.cmd,
+                    &self.copy_pipeline,
+                    &[&self.forward_pass],
+                    acquired.renderpass,
+                );
+                // draw ui directly on the swapchain
+                // tried doing it on its own attachment but results in blending problems
+                if let Some(dd) = imgui_data {
+                    if dd.total_vtx_count > 0 {
+                        self.imgui_renderer
+                            .draw(device, acquired.cmd, dd, &mut self.mm);
+                    }
                 }
+                acquired.renderpass.end(device, acquired.cmd);
                 device
                     .end_command_buffer(acquired.cmd)
                     .expect("Failed to end command buffer");
@@ -379,14 +377,13 @@ fn create_copy_pipeline(
     builder.build(device, renderpass, extent, dset_layout)
 }
 
-fn copy_renderpass_results(
+fn copy_renderpass_to_swapchain(
     device: &ash::Device,
     cmd: vk::CommandBuffer,
     copy_pip: &Pipeline,
     rp: &[&RenderPass],
     finalpass: &FinalRenderPass,
 ) {
-    finalpass.begin(device, cmd);
     for renderpass in rp {
         unsafe {
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, copy_pip.pipeline);
@@ -401,5 +398,4 @@ fn copy_renderpass_results(
             device.cmd_draw(cmd, 3, 1, 0, 0);
         }
     }
-    finalpass.end(device, cmd);
 }

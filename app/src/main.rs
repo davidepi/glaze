@@ -60,7 +60,7 @@ fn main() {
                     });
                 platform.prepare_render(&ui, &window);
                 let draw_data = ui.render();
-                renderer.draw_frame(draw_data);
+                renderer.draw_frame(Some(draw_data));
             }
             Event::LoopDestroyed => renderer.wait_idle(),
             _ => (),

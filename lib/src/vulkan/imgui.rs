@@ -1,15 +1,14 @@
-use std::ptr;
-
 use super::descriptor::{Descriptor, DescriptorSetCreator};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 use super::renderpass::RenderPass;
+use super::swapchain::Swapchain;
 use crate::include_shader;
 use crate::materials::{Pipeline, PipelineBuilder};
 use ash::vk;
 use cgmath::Vector2 as Vec2;
 use gpu_allocator::MemoryLocation;
-use image::RgbaImage;
+use std::ptr;
 
 const DEFAULT_VERTEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawVert>() as u64;
 const DEFAULT_INDEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawIdx>() as u64;
@@ -29,7 +28,6 @@ pub struct ImguiDrawer {
     font: AllocatedImage,
     pipeline: Pipeline,
     sampler: vk::Sampler,
-    renderpass: RenderPass,
     descriptor: Descriptor,
     extent: vk::Extent2D,
 }
@@ -41,17 +39,10 @@ impl ImguiDrawer {
         copy_sampler: vk::Sampler,
         mm: &mut MemoryManager,
         descriptor_creator: &mut DescriptorSetCreator,
-        extent: vk::Extent2D,
+        swapchain: &Swapchain,
     ) -> Self {
         let vertex_size = DEFAULT_VERTEX_SIZE;
         let index_size = DEFAULT_INDEX_SIZE;
-        let renderpass = RenderPass::ui(
-            device.logical(),
-            copy_sampler,
-            mm,
-            descriptor_creator,
-            extent,
-        );
         let mut builder = PipelineBuilder::default();
         builder.binding_descriptions = vec![vk::VertexInputBindingDescription {
             binding: 0,
@@ -91,7 +82,16 @@ impl ImguiDrawer {
             vk::ShaderStageFlags::FRAGMENT,
         );
         builder.push_constants(std::mem::size_of::<ImguiPC>(), vk::ShaderStageFlags::VERTEX);
-        builder.dynamic_states = vec![vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        builder.blending_settings = vec![vk::PipelineColorBlendAttachmentState {
+            blend_enable: vk::TRUE,
+            color_write_mask: vk::ColorComponentFlags::all(),
+            alpha_blend_op: vk::BlendOp::ADD,
+            color_blend_op: vk::BlendOp::ADD,
+            src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,
+            dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+            src_alpha_blend_factor: vk::BlendFactor::ONE,
+            dst_alpha_blend_factor: vk::BlendFactor::ZERO,
+        }];
         let fonts_gpu_buf;
         {
             let mut fonts_ref = context.fonts();
@@ -173,9 +173,11 @@ impl ImguiDrawer {
                 vk::ShaderStageFlags::FRAGMENT,
             )
             .build();
+
+        let extent = swapchain.extent();
         let pipeline = builder.build(
             device.logical(),
-            renderpass.renderpass,
+            swapchain.renderpass(),
             extent,
             &[descriptor.layout],
         );
@@ -187,7 +189,6 @@ impl ImguiDrawer {
             font: fonts_gpu_buf,
             pipeline,
             sampler,
-            renderpass,
             descriptor,
             extent,
         }
@@ -196,14 +197,9 @@ impl ImguiDrawer {
     pub fn destroy(self, device: &ash::Device, mm: &mut MemoryManager) {
         self.pipeline.destroy(device);
         unsafe { device.destroy_sampler(self.sampler, None) };
-        self.renderpass.destroy(device, mm);
         mm.free_buffer(self.vertex_buf);
         mm.free_buffer(self.index_buf);
         mm.free_image(self.font);
-    }
-
-    pub fn ui_pass(&self) -> &RenderPass {
-        &self.renderpass
     }
 
     pub fn draw(
@@ -244,7 +240,6 @@ impl ImguiDrawer {
             mm.free_buffer(new_index_buf);
         }
         // setup pipeline
-        self.renderpass.begin(device, cmd);
         let scale = Vec2::new(
             2.0 / draw_data.display_size[0],
             2.0 / draw_data.display_size[1],
@@ -254,21 +249,7 @@ impl ImguiDrawer {
             -1.0 - draw_data.display_pos[1] * scale[1],
         );
         let imguipc = ImguiPC { scale, translate };
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: self.extent.width as f32,
-            height: self.extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent: self.extent,
-        };
         unsafe {
-            device.cmd_set_viewport(cmd, 0, &[viewport]);
-            device.cmd_set_scissor(cmd, 0, &[scissor]);
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.pipeline);
             device.cmd_push_constants(
                 cmd,
@@ -286,7 +267,6 @@ impl ImguiDrawer {
                 &[],
             );
         }
-        // iterates the draw lists and copy them to the vertex and index buffers
         let mut vert_offset = 0;
         let mut idx_offset = 0;
         for draw_list in draw_data.draw_lists() {
@@ -332,18 +312,7 @@ impl ImguiDrawer {
             for command in draw_list.commands() {
                 match command {
                     imgui::DrawCmd::Elements { count, cmd_params } => {
-                        let scissor_rect = vk::Rect2D {
-                            offset: vk::Offset2D {
-                                x: cmd_params.clip_rect[0] as i32,
-                                y: cmd_params.clip_rect[1] as i32,
-                            },
-                            extent: vk::Extent2D {
-                                width: (cmd_params.clip_rect[2] - cmd_params.clip_rect[0]) as u32,
-                                height: (cmd_params.clip_rect[3] - cmd_params.clip_rect[1]) as u32,
-                            },
-                        };
                         unsafe {
-                            device.cmd_set_scissor(cmd, 0, &[scissor_rect]);
                             device.cmd_draw_indexed(
                                 cmd,
                                 count as u32,
@@ -358,7 +327,6 @@ impl ImguiDrawer {
                 }
             }
         }
-        self.renderpass.end(device, cmd);
     }
 }
 
