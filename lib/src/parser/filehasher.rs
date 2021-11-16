@@ -7,7 +7,7 @@ pub struct FileHasher<T: Hasher> {
 
 impl<T: Hasher> FileHasher<T> {
     pub fn new(hasher: T) -> FileHasher<T> {
-        FileHasher { hasher: hasher }
+        FileHasher { hasher }
     }
 
     pub fn hash<R: Read>(mut self, file: &mut R) -> Result<u64, Error> {

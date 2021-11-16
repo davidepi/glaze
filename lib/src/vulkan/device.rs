@@ -30,7 +30,7 @@ impl PresentDevice {
         features: vk::PhysicalDeviceFeatures,
         surface: &Surface,
     ) -> Self {
-        let physical = PhysicalDevice::list_all(instance, surface)
+        let physical = PhysicalDevice::list_all(instance)
             .into_iter()
             .filter(|x| {
                 x.surface_capabilities(surface)
@@ -75,7 +75,7 @@ impl PresentDevice {
     pub fn destroy_command_buffers(&self, buffers: &[vk::CommandBuffer]) {
         unsafe {
             self.logical
-                .free_command_buffers(self.graphic_pool, &buffers);
+                .free_command_buffers(self.graphic_pool, buffers);
         }
     }
 
@@ -168,12 +168,12 @@ pub struct PhysicalDevice {
 }
 
 impl PhysicalDevice {
-    pub fn list_all(instance: &ash::Instance, surface: &Surface) -> Vec<Self> {
+    pub fn list_all(instance: &ash::Instance) -> Vec<Self> {
         let physical_devices =
             unsafe { instance.enumerate_physical_devices() }.expect("No physical devices found");
         let mut wscores = physical_devices
             .into_iter()
-            .map(|device| rate_physical_device_suitability(instance, device, surface))
+            .map(|device| rate_physical_device_suitability(instance, device))
             .filter(|(score, _)| *score > 0)
             .collect::<Vec<_>>();
         wscores.sort_by_key(|(score, _)| *score);
@@ -210,7 +210,6 @@ impl PhysicalDevice {
 fn rate_physical_device_suitability(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
-    surface: &Surface,
 ) -> (u32, PhysicalDevice) {
     let vkinstance = &instance;
     let device_properties = unsafe { vkinstance.get_physical_device_properties(physical_device) };
@@ -219,7 +218,7 @@ fn rate_physical_device_suitability(
         vk::PhysicalDeviceType::DISCRETE_GPU => 1000,
         vk::PhysicalDeviceType::INTEGRATED_GPU => 100,
         vk::PhysicalDeviceType::CPU => 1,
-        vk::PhysicalDeviceType::OTHER | _ => 0,
+        _ => 0,
     };
     (
         score,
@@ -291,8 +290,8 @@ fn graphics_present_index(
     queue_families
         .into_iter()
         .enumerate()
-        .filter(|(index, prop)| prop.queue_flags.contains(vk::QueueFlags::GRAPHICS))
-        .filter(|(index, prop)| {
+        .filter(|(_, prop)| prop.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+        .filter(|(index, _)| {
             unsafe {
                 surface.loader.get_physical_device_surface_support(
                     physical_device,
@@ -328,7 +327,7 @@ pub fn create_logical_device(
         };
         queue_create_infos.push(queue_create_info);
     }
-    let required_device_extensions = ext.into_iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
+    let required_device_extensions = ext.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
     let device_create_info = vk::DeviceCreateInfo {
         s_type: vk::StructureType::DEVICE_CREATE_INFO,
         p_next: ptr::null(),
@@ -341,9 +340,8 @@ pub fn create_logical_device(
         pp_enabled_extension_names: required_device_extensions.as_ptr(),
         p_enabled_features: &features_requested,
     };
-    let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
-        .expect("Failed to create logical device");
-    device
+    unsafe { instance.create_device(physical_device, &device_create_info, None) }
+        .expect("Failed to create logical device")
 }
 
 fn create_command_pool(device: &ash::Device, queue_family_index: u32) -> vk::CommandPool {

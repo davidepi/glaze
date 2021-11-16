@@ -1,4 +1,4 @@
-use cgmath::{ortho, perspective, Deg, Matrix4, Point3, Rad, Vector3 as Vec3};
+use cgmath::{ortho, perspective, Matrix4, Point3, Rad, Vector3 as Vec3};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PerspectiveCam {

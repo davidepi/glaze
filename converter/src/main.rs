@@ -11,6 +11,7 @@ use russimp::scene::{PostProcess, Scene as RussimpScene};
 use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 fn main() {
     let supported_versions = [ParserVersion::V1]

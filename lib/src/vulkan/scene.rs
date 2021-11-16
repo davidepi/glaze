@@ -5,8 +5,8 @@ use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 use crate::materials::Pipeline;
 use crate::{Camera, Material, Mesh, Scene, ShaderMat, Texture, Vertex};
-use ash::vk::{self, DescriptorType};
-use fnv::{FnvHashMap, FnvHashSet};
+use ash::vk;
+use fnv::FnvHashMap;
 use gpu_allocator::MemoryLocation;
 
 pub struct VulkanScene {
@@ -42,10 +42,9 @@ impl VulkanScene {
             .map(|(id, _, tex)| (*id, load_single_texture(device, mm, tex)))
             .collect();
         let materials = load_materials_to_gpu(
-            device,
             &textures,
             sampler,
-            &scene.materials.iter().as_slice(),
+            scene.materials.iter().as_slice(),
             descriptor_creator,
         );
         let current_cam = scene.cameras[0].clone(); // parser automatically adds a default cam
@@ -71,11 +70,10 @@ impl VulkanScene {
         frame_desc_layout: vk::DescriptorSetLayout,
     ) {
         self.pipelines = FnvHashMap::default();
-        for (_, (mat, desc)) in &self.materials {
+        for (mat, desc) in self.materials.values() {
             let shader_id = mat.shader_id;
-            if !self.pipelines.contains_key(&shader_id) {
-                // material layout == shader layout
-                let pipeline = ShaderMat::from_id(shader_id)
+            self.pipelines.entry(shader_id).or_insert_with(|| {
+                ShaderMat::from_id(shader_id)
                     .expect("Unexpected shader ID")
                     .build_pipeline()
                     .build(
@@ -83,9 +81,8 @@ impl VulkanScene {
                         renderpass,
                         vk::Extent2D { width, height },
                         &[frame_desc_layout, desc.layout],
-                    );
-                self.pipelines.insert(shader_id, pipeline);
-            }
+                    )
+            });
         }
     }
 
@@ -228,8 +225,7 @@ fn load_indices_to_gpu<T: Device>(
     (converted_meshes, gpu_buffer)
 }
 
-fn load_materials_to_gpu<T: Device>(
-    device: &T,
+fn load_materials_to_gpu(
     textures: &FnvHashMap<u16, AllocatedImage>,
     sampler: vk::Sampler,
     materials: &[(u16, String, Material)],

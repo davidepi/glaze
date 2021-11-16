@@ -1,6 +1,7 @@
 use super::PipelineBuilder;
 use ash::vk;
 use std::error::Error;
+#[cfg(test)]
 use std::ops::Range;
 
 #[macro_export]
@@ -35,6 +36,7 @@ impl ShaderMat {
     }
 
     // used in tests to generate random shaders
+    #[cfg(test)]
     pub(crate) fn ids_range() -> Range<u8> {
         0..1
     }

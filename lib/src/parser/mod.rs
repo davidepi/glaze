@@ -1,11 +1,11 @@
 use self::v1::ContentV1;
 use crate::geometry::{Camera, Mesh, Scene, Vertex};
 use crate::{Library, Material, Texture};
-use std::convert::TryInto;
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufReader, Error, ErrorKind, Read, Write};
 use std::path::Path;
+use std::str::FromStr;
 
 // DO NOT CHANGE THESE TWO! Any changes should be made with a new ParserVersion, changing the inner
 // content of the file, but the header must not change to retain backward compatibility.
@@ -48,11 +48,15 @@ impl ParserVersion {
             ParserVersion::V1 => "V1",
         }
     }
+}
 
-    pub fn from_str(string: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        match string {
+impl FromStr for ParserVersion {
+    type Err = ParseVersionError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
             "V1" => Ok(ParserVersion::V1),
-            _ => Err("Unrecognized ParserVersion".into()),
+            _ => Err(ParseVersionError {}),
         }
     }
 }
@@ -60,6 +64,18 @@ impl ParserVersion {
 impl Display for ParserVersion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_str())
+    }
+}
+
+#[derive(Debug)]
+/// Error struct used to report versioning error.
+///
+/// This is used in [ParserVersion::from_str] to report a wrong or unsupported version.
+pub struct ParseVersionError;
+
+impl Display for ParseVersionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unrecognized parser version")
     }
 }
 

@@ -97,8 +97,8 @@ impl ContentV1 {
         let vert_chunk = VertexChunk::encode(&scene.vertices);
         let mesh_chunk = MeshChunk::encode(&scene.meshes);
         let cam_chunk = CameraChunk::encode(&scene.cameras);
-        let tex_chunk = TextureChunk::encode(&scene.textures.iter().as_slice());
-        let mat_chunk = MaterialChunk::encode(&scene.materials.iter().as_slice());
+        let tex_chunk = TextureChunk::encode(scene.textures.iter().as_slice());
+        let mat_chunk = MaterialChunk::encode(scene.materials.iter().as_slice());
         let vert_size = vert_chunk.size_bytes();
         let mesh_size = mesh_chunk.size_bytes();
         let cam_size = cam_chunk.size_bytes();
@@ -177,7 +177,7 @@ impl ParsedChunk for VertexChunk {
     type Item = Vertex;
 
     fn encode(item: &[Self::Item]) -> Self {
-        let data = item.into_iter().flat_map(vertex_to_bytes).collect();
+        let data = item.iter().flat_map(vertex_to_bytes).collect();
         VertexChunk { data }
     }
 

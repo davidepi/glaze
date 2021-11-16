@@ -9,9 +9,9 @@ pub struct Surface {
 
 impl Surface {
     pub fn new(entry: &ash::Entry, instance: &ash::Instance, window: &Window) -> Self {
-        let surface = unsafe { platform::create_surface(&entry, &instance, window) }
+        let surface = unsafe { platform::create_surface(entry, instance, window) }
             .expect("Failed to create surface");
-        let surface_loader = ash::extensions::khr::Surface::new(&entry, &instance);
+        let surface_loader = ash::extensions::khr::Surface::new(entry, instance);
         Surface {
             surface,
             loader: surface_loader,

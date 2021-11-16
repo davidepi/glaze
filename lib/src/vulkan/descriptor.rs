@@ -1,5 +1,5 @@
 // this entire file is based on https://vkguide.dev/docs/extra-chapter/abstracting_descriptors/
-use ash::vk::{self, DescriptorSetLayout};
+use ash::vk;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ptr;
@@ -61,11 +61,10 @@ impl DescriptorAllocator {
                     .unwrap_or_else(|| create_descriptor_pool(&self.device, &self.pool_sizes));
                 self.used_pools.push(self.current_pool);
                 self.current_pool = new_pool;
-                let desc = unsafe { self.device.allocate_descriptor_sets(&alloc_ci) }
+                unsafe { self.device.allocate_descriptor_sets(&alloc_ci) }
                     .expect("Failed to allocate descriptor set")
                     .pop()
-                    .unwrap();
-                desc
+                    .unwrap()
             }
             _ => panic!("Failed to allocate descriptor set"),
         }

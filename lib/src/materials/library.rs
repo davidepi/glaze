@@ -35,6 +35,10 @@ impl<T> Library<T> {
         self.data.len() as u16
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
     pub fn names(&self) -> HashMap<&str, u16> {
         self.data
             .iter()
@@ -44,6 +48,12 @@ impl<T> Library<T> {
 
     pub fn iter(&self) -> std::slice::Iter<(u16, String, T)> {
         self.data.iter()
+    }
+}
+
+impl<T> Default for Library<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

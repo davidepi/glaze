@@ -1,7 +1,6 @@
 use super::descriptor::{Descriptor, DescriptorSetCreator};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
-use super::renderpass::RenderPass;
 use super::swapchain::Swapchain;
 use crate::include_shader;
 use crate::materials::{Pipeline, PipelineBuilder};
@@ -29,46 +28,46 @@ pub struct ImguiDrawer {
     pipeline: Pipeline,
     sampler: vk::Sampler,
     descriptor: Descriptor,
-    extent: vk::Extent2D,
 }
 
 impl ImguiDrawer {
     pub fn new<T: Device>(
         context: &mut imgui::Context,
         device: &T,
-        copy_sampler: vk::Sampler,
         mm: &mut MemoryManager,
         descriptor_creator: &mut DescriptorSetCreator,
         swapchain: &Swapchain,
     ) -> Self {
         let vertex_size = DEFAULT_VERTEX_SIZE;
         let index_size = DEFAULT_INDEX_SIZE;
-        let mut builder = PipelineBuilder::default();
-        builder.binding_descriptions = vec![vk::VertexInputBindingDescription {
-            binding: 0,
-            stride: std::mem::size_of::<imgui::DrawVert>() as u32,
-            input_rate: vk::VertexInputRate::VERTEX,
-        }];
-        builder.attribute_descriptions = vec![
-            vk::VertexInputAttributeDescription {
-                location: 0,
+        let mut builder = PipelineBuilder {
+            binding_descriptions: vec![vk::VertexInputBindingDescription {
                 binding: 0,
-                format: vk::Format::R32G32_SFLOAT,
-                offset: 0,
-            },
-            vk::VertexInputAttributeDescription {
-                location: 1,
-                binding: 0,
-                format: vk::Format::R32G32_SFLOAT,
-                offset: 8,
-            },
-            vk::VertexInputAttributeDescription {
-                location: 2,
-                binding: 0,
-                format: vk::Format::R8G8B8A8_UNORM,
-                offset: 16,
-            },
-        ];
+                stride: std::mem::size_of::<imgui::DrawVert>() as u32,
+                input_rate: vk::VertexInputRate::VERTEX,
+            }],
+            attribute_descriptions: vec![
+                vk::VertexInputAttributeDescription {
+                    location: 0,
+                    binding: 0,
+                    format: vk::Format::R32G32_SFLOAT,
+                    offset: 0,
+                },
+                vk::VertexInputAttributeDescription {
+                    location: 1,
+                    binding: 0,
+                    format: vk::Format::R32G32_SFLOAT,
+                    offset: 8,
+                },
+                vk::VertexInputAttributeDescription {
+                    location: 2,
+                    binding: 0,
+                    format: vk::Format::R8G8B8A8_UNORM,
+                    offset: 16,
+                },
+            ],
+            ..Default::default()
+        };
         builder.no_depth();
         builder.rasterizer.cull_mode = vk::CullModeFlags::NONE;
         builder.push_shader(
@@ -174,11 +173,10 @@ impl ImguiDrawer {
             )
             .build();
 
-        let extent = swapchain.extent();
         let pipeline = builder.build(
             device.logical(),
             swapchain.renderpass(),
-            extent,
+            swapchain.extent(),
             &[descriptor.layout],
         );
         Self {
@@ -190,7 +188,6 @@ impl ImguiDrawer {
             pipeline,
             sampler,
             descriptor,
-            extent,
         }
     }
 

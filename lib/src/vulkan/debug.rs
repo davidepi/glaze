@@ -120,7 +120,7 @@ pub mod logger {
 
     impl VkDebugLogger {
         pub fn new(entry: &ash::Entry, instance: &ash::Instance) -> VkDebugLogger {
-            let debug_loader = ash::extensions::ext::DebugUtils::new(&entry, &instance);
+            let debug_loader = ash::extensions::ext::DebugUtils::new(entry, instance);
             let ci = vk::DebugUtilsMessengerCreateInfoEXT {
                 s_type: vk::StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
                 p_next: ptr::null(),

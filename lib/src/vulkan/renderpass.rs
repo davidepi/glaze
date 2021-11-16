@@ -149,7 +149,7 @@ impl RenderPass {
             extent,
             color: color_img,
             depth: Some(depth_img),
-            copy_descriptor: copy_descriptor,
+            copy_descriptor,
             clear_color,
         }
     }

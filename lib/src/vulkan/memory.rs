@@ -182,14 +182,14 @@ impl MemoryManager {
     pub fn free_image(&mut self, image: AllocatedImage) {
         unsafe { self.device.destroy_image_view(image.image_view, None) };
         unsafe { self.device.destroy_image(image.image, None) };
-        if let Err(_) = self.allocator.free(image.allocation) {
+        if self.allocator.free(image.allocation).is_err() {
             log::warn!("Failed to free memory");
         }
     }
 
     pub fn free_buffer(&mut self, buf: AllocatedBuffer) {
         unsafe { self.device.destroy_buffer(buf.buffer, None) };
-        if let Err(_) = self.allocator.free(buf.allocation) {
+        if self.allocator.free(buf.allocation).is_err() {
             log::warn!("Failed to free memory");
         }
     }

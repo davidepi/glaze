@@ -1,12 +1,11 @@
 use super::descriptor::{
-    Descriptor, DescriptorAllocator, DescriptorSetBuilder, DescriptorSetCreator,
-    DescriptorSetLayoutCache,
+    Descriptor, DescriptorAllocator, DescriptorSetCreator, DescriptorSetLayoutCache,
 };
-use super::device::{Device, PresentDevice};
+use super::device::Device;
 use super::imgui::ImguiDrawer;
 use super::instance::{Instance, PresentInstance};
-use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
-use super::renderpass::{FinalRenderPass, RenderPass};
+use super::memory::{AllocatedBuffer, MemoryManager};
+use super::renderpass::RenderPass;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
@@ -55,7 +54,7 @@ pub struct RealtimeRenderer {
 
 impl RealtimeRenderer {
     pub fn create(window: &Window, imgui: &mut imgui::Context, width: u32, height: u32) -> Self {
-        let mut instance = PresentInstance::new(&window);
+        let mut instance = PresentInstance::new(window);
         let extent = vk::Extent2D { width, height };
         let descriptor_allocator =
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
@@ -67,7 +66,7 @@ impl RealtimeRenderer {
             instance.device().logical(),
             instance.device().physical().device,
         );
-        let swapchain = Swapchain::create(&mut instance, &mut mm, width, height);
+        let swapchain = Swapchain::create(&mut instance, width, height);
         let mut frame_data = Vec::with_capacity(FRAMES_IN_FLIGHT);
         for _ in 0..FRAMES_IN_FLIGHT {
             let buffer = mm.create_buffer(
@@ -111,7 +110,6 @@ impl RealtimeRenderer {
         let imgui_renderer = ImguiDrawer::new(
             imgui,
             instance.device(),
-            copy_sampler,
             &mut mm,
             &mut descriptor_creator,
             &swapchain,
@@ -189,10 +187,10 @@ impl RealtimeRenderer {
                 .destroy_sampler(self.copy_sampler, None);
         };
         self.forward_pass
-            .destroy(&self.instance.device().logical(), &mut self.mm);
+            .destroy(self.instance.device().logical(), &mut self.mm);
         self.copy_pipeline.destroy(self.instance.device().logical());
         self.descriptor_creator.destroy();
-        self.swapchain.destroy(&self.instance, &mut self.mm);
+        self.swapchain.destroy(&self.instance);
         self.mm.destroy();
         self.sync.destroy(self.instance.device());
         self.instance.destroy();
@@ -232,7 +230,6 @@ impl RealtimeRenderer {
                     acquired.cmd,
                     &self.copy_pipeline,
                     &[&self.forward_pass],
-                    acquired.renderpass,
                 );
                 // draw ui directly on the swapchain
                 // tried doing it on its own attachment but results in blending problems
@@ -280,7 +277,7 @@ impl RealtimeRenderer {
             self.swapchain.queue_present(queue, &present_ci);
             self.frame_no += 1;
         } else {
-            return; // out of date swapchain. the resize is called by winit so wait next frame
+            // out of date swapchain. the resize is called by winit so wait next frame
         }
     }
 }
@@ -306,7 +303,7 @@ unsafe fn draw_objects(
         .expect("Failed to map buffer")
         .cast()
         .as_ptr();
-    std::ptr::copy_nonoverlapping(&frame_data.data, buf_ptr, std::mem::size_of::<FrameData>());
+    std::ptr::copy_nonoverlapping(&frame_data.data, buf_ptr, 1);
     //
     device.cmd_bind_vertex_buffers(cmd, 0, &[scene.vertex_buffer.buffer], &[0]);
     device.cmd_bind_index_buffer(cmd, scene.index_buffer.buffer, 0, vk::IndexType::UINT32); //bind once, use firts_index as offset
@@ -382,7 +379,6 @@ fn copy_renderpass_to_swapchain(
     cmd: vk::CommandBuffer,
     copy_pip: &Pipeline,
     rp: &[&RenderPass],
-    finalpass: &FinalRenderPass,
 ) {
     for renderpass in rp {
         unsafe {

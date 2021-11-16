@@ -1,9 +1,8 @@
 use ash::vk;
 use std::ptr;
 
-use super::device::{Device, PresentDevice};
+use super::device::Device;
 use super::instance::{Instance, PresentInstance};
-use super::memory::{AllocatedImage, MemoryManager};
 use super::renderpass::FinalRenderPass;
 use super::sync::PresentFrameSync;
 
@@ -24,22 +23,8 @@ pub struct Swapchain {
 }
 
 impl Swapchain {
-    pub fn create(
-        instance: &mut PresentInstance,
-        mm: &mut MemoryManager,
-        width: u32,
-        height: u32,
-    ) -> Self {
-        let swapchain = swapchain_init(instance, mm, width, height, None);
-        swapchain
-    }
-
-    pub fn image_format(&self) -> vk::Format {
-        self.image_format
-    }
-
-    pub fn image_views(&self) -> &[vk::ImageView] {
-        &self.image_views
+    pub fn create(instance: &mut PresentInstance, width: u32, height: u32) -> Self {
+        swapchain_init(instance, width, height, None)
     }
 
     pub fn extent(&self) -> vk::Extent2D {
@@ -77,12 +62,12 @@ impl Swapchain {
                 renderpass: &self.render_passes[index as usize],
                 cmd: self.command_buffers[index as usize],
             }),
-            Err(val @ vk::Result::ERROR_OUT_OF_DATE_KHR) => None,
+            Err(_val @ vk::Result::ERROR_OUT_OF_DATE_KHR) => None,
             _ => panic!("Failed to acquire next image"),
         }
     }
 
-    pub fn destroy(self, instance: &PresentInstance, mm: &mut MemoryManager) {
+    pub fn destroy(self, instance: &PresentInstance) {
         unsafe {
             instance
                 .device()
@@ -100,7 +85,6 @@ impl Swapchain {
 
 fn swapchain_init(
     instance: &PresentInstance,
-    mm: &mut MemoryManager,
     width: u32,
     height: u32,
     old: Option<vk::SwapchainKHR>,
@@ -165,7 +149,7 @@ fn swapchain_init(
         composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
         present_mode,
         clipped: vk::TRUE,
-        old_swapchain: old.unwrap_or_else(|| vk::SwapchainKHR::null()),
+        old_swapchain: old.unwrap_or_else(vk::SwapchainKHR::null),
     };
     let loader = ash::extensions::khr::Swapchain::new(instance.instance(), device.logical());
     let swapchain =

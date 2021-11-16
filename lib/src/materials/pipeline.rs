@@ -1,5 +1,5 @@
 use crate::geometry::Vertex;
-use ash::vk::{self, PushConstantRange};
+use ash::vk;
 use std::ffi::CString;
 use std::ptr;
 
@@ -55,7 +55,7 @@ impl PipelineBuilder {
                 p_next: ptr::null(),
                 flags: vk::PipelineShaderStageCreateFlags::empty(),
                 stage: *stage,
-                module: create_shader_module(device, &shader),
+                module: create_shader_module(device, shader),
                 p_name: func.as_c_str().as_ptr(),
                 p_specialization_info: ptr::null(),
             })

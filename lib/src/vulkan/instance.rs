@@ -31,10 +31,12 @@ impl PresentInstance {
     pub fn new(window: &Window) -> Self {
         let instance_extensions = platform::required_extensions();
         let device_extensions = vec![ash::extensions::khr::Swapchain::name()];
-        let mut device_features = vk::PhysicalDeviceFeatures::default();
-        device_features.sampler_anisotropy = vk::TRUE;
+        let device_features = vk::PhysicalDeviceFeatures {
+            sampler_anisotropy: vk::TRUE,
+            ..Default::default()
+        };
         let instance = BasicInstance::new(&instance_extensions);
-        let surface = Surface::new(&instance.entry, &instance.instance, &window);
+        let surface = Surface::new(&instance.entry, &instance.instance, window);
         let device = PresentDevice::new(
             &instance.instance,
             &device_extensions,
@@ -117,8 +119,8 @@ fn create_instance(entry: &ash::Entry, extensions: &[&'static CStr]) -> ash::Ins
     let ver_major = env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap();
     let ver_minor = env!("CARGO_PKG_VERSION_MINOR").parse::<u32>().unwrap();
     let ver_patch = env!("CARGO_PKG_VERSION_PATCH").parse::<u32>().unwrap();
-    let application_name = CString::new(&app_name_string[..]).unwrap();
-    let engine_name = CString::new(&engine_name_string[..]).unwrap();
+    let application_name = CString::new(app_name_string).unwrap();
+    let engine_name = CString::new(engine_name_string).unwrap();
     let app_info = vk::ApplicationInfo {
         s_type: vk::StructureType::APPLICATION_INFO,
         p_next: ptr::null(),

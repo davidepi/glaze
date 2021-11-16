@@ -1,4 +1,3 @@
-use shaderc;
 use shaderc::{CompileOptions, Compiler, OptimizationLevel, ShaderKind};
 use std::env;
 use std::error::Error;
