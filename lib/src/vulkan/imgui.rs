@@ -9,7 +9,7 @@ use crate::materials::{Pipeline, PipelineBuilder};
 use ash::vk;
 use cgmath::Vector2 as Vec2;
 use gpu_allocator::MemoryLocation;
-use imgui;
+use image::RgbaImage;
 
 const DEFAULT_VERTEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawVert>() as u64;
 const DEFAULT_INDEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawIdx>() as u64;
@@ -31,6 +31,7 @@ pub struct ImguiDrawer {
     sampler: vk::Sampler,
     renderpass: RenderPass,
     descriptor: Descriptor,
+    extent: vk::Extent2D,
 }
 
 impl ImguiDrawer {
@@ -90,6 +91,7 @@ impl ImguiDrawer {
             vk::ShaderStageFlags::FRAGMENT,
         );
         builder.push_constants(std::mem::size_of::<ImguiPC>(), vk::ShaderStageFlags::VERTEX);
+        builder.dynamic_states = vec![vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let fonts_gpu_buf;
         {
             let mut fonts_ref = context.fonts();
@@ -107,7 +109,7 @@ impl ImguiDrawer {
             );
             fonts_gpu_buf = mm.create_image_gpu(
                 "Font atals GPU",
-                vk::Format::R8G8B8A8_SNORM,
+                vk::Format::R8G8B8A8_UNORM,
                 fonts_extent,
                 vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
                 vk::ImageAspectFlags::COLOR,
@@ -187,6 +189,7 @@ impl ImguiDrawer {
             sampler,
             renderpass,
             descriptor,
+            extent,
         }
     }
 
@@ -210,15 +213,11 @@ impl ImguiDrawer {
         draw_data: &imgui::DrawData,
         mm: &mut MemoryManager,
     ) {
-        if draw_data.total_vtx_count == 0 {
-            return;
-        }
-
         // reallocate vertex buffer if not enough
-        if draw_data.total_vtx_count as u64 > self.vertex_size {
-            let min_size =
-                draw_data.total_vtx_count as usize * std::mem::size_of::<imgui::DrawVert>();
-            let new_size = std::cmp::max(min_size as u64, self.vertex_size);
+        let vert_required_mem =
+            (draw_data.total_vtx_count as usize * std::mem::size_of::<imgui::DrawVert>()) as u64;
+        if vert_required_mem > self.vertex_size {
+            let new_size = std::cmp::max(vert_required_mem, self.vertex_size);
             let mut new_vertex_buf = mm.create_buffer(
                 "Imgui vertex buffer",
                 new_size,
@@ -230,10 +229,10 @@ impl ImguiDrawer {
             mm.free_buffer(new_vertex_buf);
         }
         // reallocate index buffer if not enough
-        if draw_data.total_idx_count as u64 > self.index_size {
-            let min_size =
-                draw_data.total_idx_count as usize * std::mem::size_of::<imgui::DrawIdx>();
-            let new_size = std::cmp::max(min_size as u64, self.index_size);
+        let idx_required_mem =
+            (draw_data.total_idx_count as usize * std::mem::size_of::<imgui::DrawIdx>()) as u64;
+        if idx_required_mem > self.index_size {
+            let new_size = std::cmp::max(idx_required_mem, self.index_size);
             let mut new_index_buf = mm.create_buffer(
                 "Imgui index buffer",
                 new_size,
@@ -255,7 +254,21 @@ impl ImguiDrawer {
             -1.0 - draw_data.display_pos[1] * scale[1],
         );
         let imguipc = ImguiPC { scale, translate };
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: self.extent.width as f32,
+            height: self.extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent: self.extent,
+        };
         unsafe {
+            device.cmd_set_viewport(cmd, 0, &[viewport]);
+            device.cmd_set_scissor(cmd, 0, &[scissor]);
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.pipeline);
             device.cmd_push_constants(
                 cmd,

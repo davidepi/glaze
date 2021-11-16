@@ -28,6 +28,7 @@ pub struct PipelineBuilder {
     pub blending_settings: Vec<vk::PipelineColorBlendAttachmentState>,
     pub blending: (Option<vk::LogicOp>, [f32; 4]),
     pub push_constant: Option<vk::PushConstantRange>,
+    pub dynamic_states: Vec<vk::DynamicState>,
 }
 
 impl PipelineBuilder {
@@ -119,6 +120,13 @@ impl PipelineBuilder {
         };
         let layout = unsafe { device.create_pipeline_layout(&pipeline_layout, None) }
             .expect("Failed to create Pipeline Layout");
+        let dynamic_state_ci = vk::PipelineDynamicStateCreateInfo {
+            s_type: vk::StructureType::PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineDynamicStateCreateFlags::empty(),
+            dynamic_state_count: self.dynamic_states.len() as u32,
+            p_dynamic_states: self.dynamic_states.as_ptr(),
+        };
         let create_info = vk::GraphicsPipelineCreateInfo {
             s_type: vk::StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
             p_next: ptr::null(),
@@ -133,7 +141,7 @@ impl PipelineBuilder {
             p_multisample_state: &self.multisampling,
             p_depth_stencil_state: &self.depth_stencil,
             p_color_blend_state: &color_blend,
-            p_dynamic_state: ptr::null(),
+            p_dynamic_state: &dynamic_state_ci,
             layout,
             render_pass: renderpass,
             subpass: 0,
@@ -251,6 +259,7 @@ impl Default for PipelineBuilder {
             blending_settings,
             blending,
             push_constant: None,
+            dynamic_states: Vec::with_capacity(0),
         }
     }
 }

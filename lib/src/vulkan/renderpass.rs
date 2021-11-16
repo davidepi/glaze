@@ -161,7 +161,7 @@ impl RenderPass {
         descriptor_creator: &mut DescriptorSetCreator,
         extent: vk::Extent2D,
     ) -> RenderPass {
-        let color_format = vk::Format::R8G8B8A8_SRGB;
+        let color_format = vk::Format::R8G8B8A8_UNORM;
         let color_img = mm.create_image_gpu(
             "UI pass color image",
             color_format,
@@ -171,7 +171,7 @@ impl RenderPass {
         );
         let color_attachment = vk::AttachmentDescription {
             flags: vk::AttachmentDescriptionFlags::empty(),
-            format: vk::Format::R8G8B8A8_SRGB,
+            format: vk::Format::R8G8B8A8_UNORM,
             samples: vk::SampleCountFlags::TYPE_1,
             load_op: vk::AttachmentLoadOp::CLEAR,
             store_op: vk::AttachmentStoreOp::STORE,

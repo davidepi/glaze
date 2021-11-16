@@ -42,7 +42,6 @@ pub struct RealtimeRenderer {
     copy_sampler: vk::Sampler,
     copy_pipeline: Pipeline,
     forward_pass: RenderPass,
-    imgui: imgui::Context,
     imgui_renderer: ImguiDrawer,
     mm: MemoryManager,
     sync: PresentSync<FRAMES_IN_FLIGHT>,
@@ -55,7 +54,7 @@ pub struct RealtimeRenderer {
 }
 
 impl RealtimeRenderer {
-    pub fn create(window: &Window, width: u32, height: u32) -> Self {
+    pub fn create(window: &Window, imgui: &mut imgui::Context, width: u32, height: u32) -> Self {
         let mut instance = PresentInstance::new(&window);
         let extent = vk::Extent2D { width, height };
         let descriptor_allocator =
@@ -115,9 +114,8 @@ impl RealtimeRenderer {
             swapchain.renderpass(),
             &[forward_pass.copy_descriptor.layout],
         );
-        let mut imgui = imgui::Context::create();
         let imgui_renderer = ImguiDrawer::new(
-            &mut imgui,
+            imgui,
             instance.device(),
             copy_sampler,
             &mut mm,
@@ -131,7 +129,6 @@ impl RealtimeRenderer {
             copy_sampler,
             copy_pipeline,
             forward_pass,
-            imgui,
             imgui_renderer,
             mm,
             sync,
@@ -201,7 +198,7 @@ impl RealtimeRenderer {
         self.instance.destroy();
     }
 
-    pub fn draw_frame(&mut self) {
+    pub fn draw_frame(&mut self, imgui_data: &imgui::DrawData) {
         let frame_sync = self.sync.get(self.frame_no);
         frame_sync.wait_acquire(self.instance.device());
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
@@ -229,19 +226,25 @@ impl RealtimeRenderer {
                     draw_objects(scene, ar, frame_data, device, acquired.cmd);
                 }
                 self.forward_pass.end(device, acquired.cmd);
-                self.imgui_renderer.draw(
-                    device,
-                    acquired.cmd,
-                    self.imgui.frame().render(),
-                    &mut self.mm,
-                );
-                copy_renderpass_results(
-                    device,
-                    acquired.cmd,
-                    &self.copy_pipeline,
-                    &[&self.forward_pass, self.imgui_renderer.ui_pass()],
-                    acquired.renderpass,
-                );
+                if imgui_data.total_vtx_count > 0 {
+                    self.imgui_renderer
+                        .draw(device, acquired.cmd, imgui_data, &mut self.mm);
+                    copy_renderpass_results(
+                        device,
+                        acquired.cmd,
+                        &self.copy_pipeline,
+                        &[&self.forward_pass, self.imgui_renderer.ui_pass()],
+                        acquired.renderpass,
+                    );
+                } else {
+                    copy_renderpass_results(
+                        device,
+                        acquired.cmd,
+                        &self.copy_pipeline,
+                        &[&self.forward_pass],
+                        acquired.renderpass,
+                    );
+                }
                 device
                     .end_command_buffer(acquired.cmd)
                     .expect("Failed to end command buffer");
