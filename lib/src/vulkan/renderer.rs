@@ -1,3 +1,4 @@
+use super::cmd::CommandManager;
 use super::descriptor::{
     Descriptor, DescriptorAllocator, DescriptorSetCreator, DescriptorSetLayoutCache,
 };
@@ -43,6 +44,7 @@ pub struct RealtimeRenderer {
     forward_pass: RenderPass,
     imgui_renderer: ImguiDrawer,
     mm: MemoryManager,
+    cmdm: CommandManager,
     sync: PresentSync<FRAMES_IN_FLIGHT>,
     scene: Option<VulkanScene>,
     frame_data: [FrameDataBuf; FRAMES_IN_FLIGHT],
@@ -66,6 +68,10 @@ impl RealtimeRenderer {
             instance.device().logical(),
             instance.device().physical().device,
             FRAMES_IN_FLIGHT as u8,
+        );
+        let mut cmdm = CommandManager::new(
+            instance.device().logical().clone(),
+            instance.present_device().graphic_index(),
         );
         let swapchain = Swapchain::create(&mut instance, width, height);
         let mut frame_data = Vec::with_capacity(FRAMES_IN_FLIGHT);
@@ -112,6 +118,7 @@ impl RealtimeRenderer {
             imgui,
             instance.device(),
             &mut mm,
+            &mut cmdm,
             &mut descriptor_creator,
             &swapchain,
         );
@@ -130,6 +137,7 @@ impl RealtimeRenderer {
             forward_pass,
             imgui_renderer,
             mm,
+            cmdm,
             sync,
             scene: None,
             frame_data: frame_data.try_into().unwrap(),
@@ -156,6 +164,7 @@ impl RealtimeRenderer {
         let mut new = VulkanScene::load(
             self.instance.device(),
             &mut self.mm,
+            &mut self.cmdm,
             scene,
             &mut self.descriptor_creator,
         );
@@ -192,6 +201,7 @@ impl RealtimeRenderer {
         self.copy_pipeline.destroy(self.instance.device().logical());
         self.descriptor_creator.destroy();
         self.swapchain.destroy(&self.instance);
+        self.cmdm.destroy();
         self.mm.destroy();
         self.sync.destroy(self.instance.device());
         self.instance.destroy();
@@ -201,14 +211,11 @@ impl RealtimeRenderer {
         let frame_sync = self.sync.get(self.frame_no);
         frame_sync.wait_acquire(self.instance.device());
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
+            let cmd = self.cmdm.get_cmd_buffer();
             let current_time = Instant::now();
             let frame_data = &mut self.frame_data[self.frame_no % FRAMES_IN_FLIGHT];
             frame_data.data.frame_time = (current_time - self.start_time).as_secs_f32();
             let device = self.instance.device().logical();
-            unsafe {
-                device.reset_command_buffer(acquired.cmd, vk::CommandBufferResetFlags::empty())
-            }
-            .expect("Failed to reset command buffer");
             let cmd_ci = vk::CommandBufferBeginInfo {
                 s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
                 p_next: ptr::null(),
@@ -217,18 +224,18 @@ impl RealtimeRenderer {
             };
             unsafe {
                 device
-                    .begin_command_buffer(acquired.cmd, &cmd_ci)
+                    .begin_command_buffer(cmd, &cmd_ci)
                     .expect("Failed to begin command buffer");
-                self.forward_pass.begin(device, acquired.cmd);
+                self.forward_pass.begin(device, cmd);
                 if let Some(scene) = &self.scene {
                     let ar = self.render_width as f32 / self.render_height as f32;
-                    draw_objects(scene, ar, frame_data, device, acquired.cmd);
+                    draw_objects(scene, ar, frame_data, device, cmd);
                 }
-                self.forward_pass.end(device, acquired.cmd);
-                acquired.renderpass.begin(device, acquired.cmd);
+                self.forward_pass.end(device, cmd);
+                acquired.renderpass.begin(device, cmd);
                 copy_renderpass_to_swapchain(
                     device,
-                    acquired.cmd,
+                    cmd,
                     &self.copy_pipeline,
                     &[&self.forward_pass],
                 );
@@ -236,13 +243,12 @@ impl RealtimeRenderer {
                 // tried doing it on its own attachment but results in blending problems
                 if let Some(dd) = imgui_data {
                     if dd.total_vtx_count > 0 {
-                        self.imgui_renderer
-                            .draw(device, acquired.cmd, dd, &mut self.mm);
+                        self.imgui_renderer.draw(device, cmd, dd, &mut self.mm);
                     }
                 }
-                acquired.renderpass.end(device, acquired.cmd);
+                acquired.renderpass.end(device, cmd);
                 device
-                    .end_command_buffer(acquired.cmd)
+                    .end_command_buffer(cmd)
                     .expect("Failed to end command buffer");
             }
             let wait_sem = [frame_sync.image_available()];
@@ -254,7 +260,7 @@ impl RealtimeRenderer {
                 p_wait_semaphores: wait_sem.as_ptr(),
                 p_wait_dst_stage_mask: &vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
                 command_buffer_count: 1,
-                p_command_buffers: &acquired.cmd,
+                p_command_buffers: &cmd,
                 signal_semaphore_count: signal_sem.len() as u32,
                 p_signal_semaphores: signal_sem.as_ptr(),
             };

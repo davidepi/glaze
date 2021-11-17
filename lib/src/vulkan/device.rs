@@ -8,7 +8,7 @@ use std::ptr;
 pub trait Device {
     fn logical(&self) -> &ash::Device;
     fn physical(&self) -> &PhysicalDevice;
-    fn immediate_execute<F>(&self, command: F)
+    fn immediate_execute<F>(&self, cmd: vk::CommandBuffer, command: F)
     where
         F: Fn(&ash::Device, vk::CommandBuffer);
 }
@@ -17,8 +17,6 @@ pub struct PresentDevice {
     logical: ash::Device,
     physical: PhysicalDevice,
     graphic_index: u32,
-    graphic_pool: vk::CommandPool,
-    immediate_pool: vk::CommandPool,
     immediate_fence: vk::Fence,
     graphic_queue: vk::Queue,
 }
@@ -47,8 +45,6 @@ impl PresentDevice {
         let graphic_index = graphics_present_index(instance, physical.device, surface).unwrap();
         let all_queues = vec![graphic_index];
         let logical = create_logical_device(instance, ext, &physical, features, &all_queues);
-        let graphic_pool = create_command_pool(&logical, graphic_index);
-        let immediate_pool = create_command_pool(&logical, graphic_index);
         let ci = vk::FenceCreateInfo {
             s_type: vk::StructureType::FENCE_CREATE_INFO,
             p_next: ptr::null(),
@@ -61,22 +57,13 @@ impl PresentDevice {
             logical,
             physical,
             graphic_index,
-            graphic_pool,
-            immediate_pool,
             immediate_fence,
             graphic_queue,
         }
     }
 
-    pub fn create_command_buffers(&self, count: u32) -> Vec<vk::CommandBuffer> {
-        create_command_buffers(&self.logical, self.graphic_pool, count)
-    }
-
-    pub fn destroy_command_buffers(&self, buffers: &[vk::CommandBuffer]) {
-        unsafe {
-            self.logical
-                .free_command_buffers(self.graphic_pool, buffers);
-        }
+    pub fn graphic_index(&self) -> u32 {
+        self.graphic_index
     }
 
     pub fn graphic_queue(&self) -> vk::Queue {
@@ -85,8 +72,6 @@ impl PresentDevice {
 
     pub fn destroy(self) {
         unsafe {
-            self.logical.destroy_command_pool(self.graphic_pool, None);
-            self.logical.destroy_command_pool(self.immediate_pool, None);
             self.logical.destroy_fence(self.immediate_fence, None);
             self.logical.destroy_device(None);
         }
@@ -102,11 +87,10 @@ impl Device for PresentDevice {
         &self.physical
     }
 
-    fn immediate_execute<F>(&self, command: F)
+    fn immediate_execute<F>(&self, cmd: vk::CommandBuffer, command: F)
     where
         F: Fn(&ash::Device, vk::CommandBuffer),
     {
-        let cmds = create_command_buffers(&self.logical, self.graphic_pool, 1);
         let cmd_begin = vk::CommandBufferBeginInfo {
             s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
             p_next: ptr::null(),
@@ -119,13 +103,12 @@ impl Device for PresentDevice {
             wait_semaphore_count: 0,
             p_wait_semaphores: ptr::null(),
             p_wait_dst_stage_mask: ptr::null(),
-            command_buffer_count: cmds.len() as u32,
-            p_command_buffers: cmds.as_ptr(),
+            command_buffer_count: 1,
+            p_command_buffers: [cmd].as_ptr(),
             signal_semaphore_count: 0,
             p_signal_semaphores: ptr::null(),
         };
         unsafe {
-            let cmd = cmds[0];
             self.logical
                 .begin_command_buffer(cmd, &cmd_begin)
                 .expect("Failed to begin command");
@@ -142,9 +125,6 @@ impl Device for PresentDevice {
             self.logical
                 .reset_fences(&[self.immediate_fence])
                 .expect("Failed to reset fence");
-            self.logical
-                .reset_command_pool(self.immediate_pool, vk::CommandPoolResetFlags::default())
-                .expect("Failed to reset immediate pool");
         }
     }
 }

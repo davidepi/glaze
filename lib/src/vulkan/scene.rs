@@ -1,5 +1,6 @@
 use std::ptr;
 
+use super::cmd::CommandManager;
 use super::descriptor::{Descriptor, DescriptorSetCreator};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
@@ -30,16 +31,17 @@ impl VulkanScene {
     pub fn load<T: Device>(
         device: &T,
         mm: &mut MemoryManager,
+        cmdm: &mut CommandManager,
         scene: Scene,
         descriptor_creator: &mut DescriptorSetCreator,
     ) -> Self {
-        let vertex_buffer = load_vertices_to_gpu(device, mm, &scene.vertices[..]);
-        let (meshes, index_buffer) = load_indices_to_gpu(device, mm, &scene.meshes[..]);
+        let vertex_buffer = load_vertices_to_gpu(device, mm, cmdm, &scene.vertices[..]);
+        let (meshes, index_buffer) = load_indices_to_gpu(device, mm, cmdm, &scene.meshes[..]);
         let sampler = create_sampler(device);
         let textures = scene
             .textures
             .iter()
-            .map(|(id, _, tex)| (*id, load_single_texture(device, mm, tex)))
+            .map(|(id, _, tex)| (*id, load_single_texture(device, mm, cmdm, tex)))
             .collect();
         let materials = load_materials_to_gpu(
             &textures,
@@ -135,6 +137,7 @@ fn create_sampler<T: Device>(device: &T) -> vk::Sampler {
 fn load_vertices_to_gpu<T: Device>(
     device: &T,
     mm: &mut MemoryManager,
+    cmdm: &mut CommandManager,
     vertices: &[Vertex],
 ) -> AllocatedBuffer {
     let size = (std::mem::size_of::<Vertex>() * vertices.len()) as u64;
@@ -168,7 +171,8 @@ fn load_vertices_to_gpu<T: Device>(
             device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
         }
     };
-    device.immediate_execute(command);
+    let cmd = cmdm.get_cmd_buffer();
+    device.immediate_execute(cmd, command);
     mm.free_buffer(cpu_buffer);
     gpu_buffer
 }
@@ -176,6 +180,7 @@ fn load_vertices_to_gpu<T: Device>(
 fn load_indices_to_gpu<T: Device>(
     device: &T,
     mm: &mut MemoryManager,
+    cmdm: &mut CommandManager,
     meshes: &[Mesh],
 ) -> (Vec<VulkanMesh>, AllocatedBuffer) {
     let size =
@@ -220,7 +225,8 @@ fn load_indices_to_gpu<T: Device>(
             device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
         }
     };
-    device.immediate_execute(command);
+    let cmd = cmdm.get_cmd_buffer();
+    device.immediate_execute(cmd, command);
     mm.free_buffer(cpu_buffer);
     (converted_meshes, gpu_buffer)
 }
@@ -256,6 +262,7 @@ fn load_materials_to_gpu(
 fn load_single_texture<T: Device>(
     device: &T,
     mm: &mut MemoryManager,
+    cmdm: &mut CommandManager,
     texture: &Texture,
 ) -> AllocatedImage {
     let size = (texture.width() * texture.height() * 4) as u64;
@@ -363,7 +370,8 @@ fn load_single_texture<T: Device>(
             );
         }
     };
-    device.immediate_execute(command);
+    let cmd = cmdm.get_cmd_buffer();
+    device.immediate_execute(cmd, command);
     mm.free_buffer(buffer);
     image
 }

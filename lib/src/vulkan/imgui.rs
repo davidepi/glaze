@@ -1,3 +1,4 @@
+use super::cmd::CommandManager;
 use super::descriptor::{Descriptor, DescriptorSetCreator};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
@@ -35,6 +36,7 @@ impl ImguiDrawer {
         context: &mut imgui::Context,
         device: &T,
         mm: &mut MemoryManager,
+        cmdm: &mut CommandManager,
         descriptor_creator: &mut DescriptorSetCreator,
         swapchain: &Swapchain,
     ) -> Self {
@@ -122,7 +124,7 @@ impl ImguiDrawer {
             unsafe {
                 std::ptr::copy_nonoverlapping(fonts.data.as_ptr(), mapped, fonts_size as usize);
             }
-            upload_image(device, &fonts_cpu_buf, &fonts_gpu_buf, fonts_extent);
+            upload_image(device, cmdm, &fonts_cpu_buf, &fonts_gpu_buf, fonts_extent);
             mm.free_buffer(fonts_cpu_buf);
         }
         let vertex_buf = mm.create_buffer(
@@ -329,6 +331,7 @@ impl ImguiDrawer {
 
 fn upload_image<T: Device>(
     device: &T,
+    cmdm: &mut CommandManager,
     cpu_buf: &AllocatedBuffer,
     gpu_buf: &AllocatedImage,
     extent: vk::Extent2D,
@@ -411,7 +414,8 @@ fn upload_image<T: Device>(
             );
         }
     };
-    device.immediate_execute(command);
+    let cmd = cmdm.get_cmd_buffer();
+    device.immediate_execute(cmd, command);
 }
 
 unsafe fn as_u8_slice<T: Sized>(p: &T) -> &[u8] {

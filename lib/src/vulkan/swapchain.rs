@@ -9,7 +9,6 @@ use super::sync::PresentFrameSync;
 pub struct AcquiredImage<'a> {
     pub index: u32,
     pub renderpass: &'a FinalRenderPass,
-    pub cmd: vk::CommandBuffer,
 }
 
 pub struct Swapchain {
@@ -19,7 +18,6 @@ pub struct Swapchain {
     extent: vk::Extent2D,
     image_views: Vec<vk::ImageView>,
     render_passes: Vec<FinalRenderPass>,
-    command_buffers: Vec<vk::CommandBuffer>,
 }
 
 impl Swapchain {
@@ -60,7 +58,6 @@ impl Swapchain {
             Ok((index, _)) => Some(AcquiredImage {
                 index,
                 renderpass: &self.render_passes[index as usize],
-                cmd: self.command_buffers[index as usize],
             }),
             Err(_val @ vk::Result::ERROR_OUT_OF_DATE_KHR) => None,
             _ => panic!("Failed to acquire next image"),
@@ -69,9 +66,6 @@ impl Swapchain {
 
     pub fn destroy(self, instance: &PresentInstance) {
         unsafe {
-            instance
-                .device()
-                .destroy_command_buffers(&self.command_buffers);
             self.render_passes
                 .into_iter()
                 .for_each(|r| r.destroy(instance.device().logical()));
@@ -163,14 +157,12 @@ fn swapchain_init(
         .iter()
         .map(|iw| FinalRenderPass::new(device.logical(), format.format, *iw, extent))
         .collect();
-    let command_buffers = device.create_command_buffers(image_views.len() as u32);
     Swapchain {
         swapchain,
         loader,
         image_format: ci.image_format,
         extent: ci.image_extent,
         image_views,
-        command_buffers,
         render_passes,
     }
 }

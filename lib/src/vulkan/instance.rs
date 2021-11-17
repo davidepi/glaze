@@ -52,6 +52,10 @@ impl PresentInstance {
         }
     }
 
+    pub fn present_device(&self) -> &PresentDevice {
+        &self.device
+    }
+
     pub fn surface(&self) -> &Surface {
         &self.surface
     }

@@ -1,3 +1,4 @@
+mod cmd;
 mod debug;
 mod descriptor;
 mod device;
