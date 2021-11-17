@@ -13,7 +13,7 @@ use super::sync::PresentSync;
 use crate::materials::{Pipeline, PipelineBuilder};
 use crate::{include_shader, Scene};
 use ash::vk;
-use cgmath::{Matrix4, SquareMatrix};
+use cgmath::{Matrix4, Point3, SquareMatrix};
 use std::ptr;
 use std::time::{Duration, Instant};
 use winit::window::Window;
@@ -185,6 +185,17 @@ impl RealtimeRenderer {
 
     pub fn stats(&self) -> Stats {
         self.stats.last_val
+    }
+
+    pub fn camera_position(&mut self) -> Option<(&mut Point3<f32>, &mut Point3<f32>)> {
+        if let Some(scene) = &mut self.scene {
+            match &mut scene.current_cam {
+                crate::Camera::Perspective(cam) => Some((&mut cam.position, &mut cam.target)),
+                crate::Camera::Orthographic(cam) => Some((&mut cam.position, &mut cam.target)),
+            }
+        } else {
+            None
+        }
     }
 
     pub fn update_render_size(&mut self, window_width: u32, window_height: u32, scale: f32) {

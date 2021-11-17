@@ -1,9 +1,10 @@
-use std::error::Error;
-
+use cgmath::num_traits::real::Real;
+use cgmath::{Point3, Vector3 as Vec3};
 use glaze::RealtimeRenderer;
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use winit::dpi::PhysicalSize;
-use winit::event::{Event, WindowEvent};
+use std::error::Error;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::event::{ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::platform::run_return::EventLoopExtRunReturn;
 use winit::window::{Window, WindowBuilder};
@@ -15,6 +16,8 @@ pub struct InteractiveView {
     renderer: RealtimeRenderer,
     platform: WinitPlatform,
     imgui: imgui::Context,
+    mouse_pos: (f32, f32),
+    lmb_down: bool,
     state: UiState,
 }
 
@@ -44,6 +47,8 @@ impl InteractiveView {
                 renderer,
                 platform,
                 imgui,
+                mouse_pos: (0.0, 0.0),
+                lmb_down: false,
                 state,
             })
         } else {
@@ -67,6 +72,17 @@ impl InteractiveView {
                         let scale = self.renderer.render_scale();
                         self.renderer
                             .update_render_size(size.width, size.height, scale);
+                    }
+                    WindowEvent::KeyboardInput { input, .. } => handle_keyboard(input, self),
+                    WindowEvent::CursorMoved { position, .. } => mouse_moved(position, self),
+                    WindowEvent::MouseInput { state, button, .. } => {
+                        if button == MouseButton::Left {
+                            if state == ElementState::Pressed {
+                                self.lmb_down = true;
+                            } else {
+                                self.lmb_down = false;
+                            }
+                        }
                     }
                     _ => {}
                 },
@@ -100,5 +116,45 @@ impl InteractiveView {
     pub fn destroy(self) {
         self.renderer.wait_idle();
         self.renderer.destroy()
+    }
+}
+
+fn handle_keyboard(input: KeyboardInput, view: &mut InteractiveView) {
+    match input.virtual_keycode {
+        Some(VirtualKeyCode::W) => camera_pos_advance(view, 0.1),
+        Some(VirtualKeyCode::S) => camera_pos_advance(view, -0.1),
+        Some(VirtualKeyCode::A) => camera_pos_strafe(view, -0.1),
+        Some(VirtualKeyCode::D) => camera_pos_strafe(view, 0.1),
+        _ => {}
+    }
+}
+
+fn camera_pos_strafe(view: &mut InteractiveView, magnitude: f32) {
+    if let Some((pos, target)) = view.renderer.camera_position() {
+        *pos += magnitude * Vec3::unit_x();
+        *target += magnitude * Vec3::unit_x();
+    }
+}
+
+fn camera_pos_advance(view: &mut InteractiveView, magnitude: f32) {
+    if let Some((pos, target)) = view.renderer.camera_position() {
+        let delta = magnitude * Vec3::new(target.x, target.y, 1.0);
+        *pos += delta;
+        *target += delta;
+    }
+}
+
+fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
+    let (x, y) = (new_pos.x as f32, new_pos.y as f32);
+    let (old_x, old_y) = view.mouse_pos;
+    let delta = (x - old_x, y - old_y);
+    view.mouse_pos = (x, y);
+    // if lmb pressed, move camera
+    if view.lmb_down {
+        let pos = view.renderer.camera_position();
+        if let Some((_, target)) = pos {
+            // TODO: move this '-' into some sort of control settings
+            *target += Vec3::<f32>::new(delta.0, -delta.1, 0.0);
+        }
     }
 }
