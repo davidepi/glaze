@@ -2,6 +2,7 @@ use super::cmd::CommandManager;
 use super::descriptor::{Descriptor, DescriptorSetCreator};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
+use super::renderer::InternalStats;
 use super::swapchain::Swapchain;
 use crate::include_shader;
 use crate::materials::{Pipeline, PipelineBuilder};
@@ -156,6 +157,7 @@ impl ImguiDrawer {
         cmd: vk::CommandBuffer,
         draw_data: &imgui::DrawData,
         mm: &mut MemoryManager,
+        stats: &mut InternalStats,
     ) {
         // reallocate vertex buffer if not enough
         let vert_required_mem =
@@ -268,7 +270,8 @@ impl ImguiDrawer {
                                 cmd_params.idx_offset as u32,
                                 cmd_params.vtx_offset as i32,
                                 0,
-                            )
+                            );
+                            stats.done_draw_call();
                         };
                     }
                     _ => todo!(),

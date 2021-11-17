@@ -8,18 +8,24 @@ use super::instance::{Instance, PresentInstance};
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::renderpass::RenderPass;
 use super::scene::VulkanScene;
-use super::swapchain::{self, Swapchain};
+use super::swapchain::Swapchain;
 use super::sync::PresentSync;
 use crate::materials::{Pipeline, PipelineBuilder};
 use crate::{include_shader, Scene};
-use ash::vk::{self, DescriptorSetLayout};
+use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::window::Window;
 
 const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::UNIFORM_BUFFER, 1.0)];
 const FRAMES_IN_FLIGHT: usize = 2;
+
+#[derive(Debug, Copy, Clone)]
+pub struct Stats {
+    pub fps: f32,
+    pub avg_draw_calls: f32,
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +58,7 @@ pub struct RealtimeRenderer {
     render_scale: f32,
     frame_no: usize,
     paused: bool,
+    stats: InternalStats,
 }
 
 impl RealtimeRenderer {
@@ -154,6 +161,7 @@ impl RealtimeRenderer {
             render_scale,
             frame_no: 0,
             paused: false,
+            stats: InternalStats::default(),
         }
     }
 
@@ -173,6 +181,10 @@ impl RealtimeRenderer {
 
     pub fn render_scale(&self) -> f32 {
         self.render_scale
+    }
+
+    pub fn stats(&self) -> Stats {
+        self.stats.last_val
     }
 
     pub fn update_render_size(&mut self, window_width: u32, window_height: u32, scale: f32) {
@@ -275,6 +287,7 @@ impl RealtimeRenderer {
         if self.paused {
             return;
         }
+        self.stats.update();
         let frame_sync = self.sync.get(self.frame_no);
         frame_sync.wait_acquire(self.instance.device());
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
@@ -297,7 +310,7 @@ impl RealtimeRenderer {
                 if let Some(scene) = &self.scene {
                     let ar = self.swapchain.extent().width as f32
                         / self.swapchain.extent().height as f32;
-                    draw_objects(scene, ar, frame_data, device, cmd);
+                    draw_objects(scene, ar, frame_data, device, cmd, &mut self.stats);
                 }
                 self.forward_pass.end(device, cmd);
                 acquired.renderpass.begin(device, cmd);
@@ -306,12 +319,14 @@ impl RealtimeRenderer {
                     cmd,
                     &self.copy_pipeline,
                     &[&self.forward_pass],
+                    &mut self.stats,
                 );
                 // draw ui directly on the swapchain
                 // tried doing it on its own attachment but results in blending problems
                 if let Some(dd) = imgui_data {
                     if dd.total_vtx_count > 0 {
-                        self.imgui_renderer.draw(device, cmd, dd, &mut self.mm);
+                        self.imgui_renderer
+                            .draw(device, cmd, dd, &mut self.mm, &mut self.stats);
                     }
                 }
                 acquired.renderpass.end(device, cmd);
@@ -352,6 +367,7 @@ impl RealtimeRenderer {
             self.swapchain.queue_present(queue, &present_ci);
             self.mm.frame_end_clean();
             self.frame_no += 1;
+            self.stats.done_frame();
         } else {
             // out of date swapchain. the resize is called by winit so wait next frame
         }
@@ -364,6 +380,7 @@ unsafe fn draw_objects(
     frame_data: &mut FrameDataBuf,
     device: &ash::Device,
     cmd: vk::CommandBuffer,
+    stats: &mut InternalStats,
 ) {
     let cam = &scene.current_cam;
     let mut proj = cam.projection(ar);
@@ -399,6 +416,7 @@ unsafe fn draw_objects(
             );
         }
         device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
+        stats.done_draw_call();
     }
 }
 
@@ -434,7 +452,7 @@ fn create_copy_pipeline(
     device: &ash::Device,
     extent: vk::Extent2D,
     renderpass: vk::RenderPass,
-    dset_layout: &[DescriptorSetLayout],
+    dset_layout: &[vk::DescriptorSetLayout],
 ) -> Pipeline {
     let mut builder = PipelineBuilder::default();
     let vs = include_shader!("blit.vert");
@@ -455,6 +473,7 @@ fn copy_renderpass_to_swapchain(
     cmd: vk::CommandBuffer,
     copy_pip: &Pipeline,
     rp: &[&RenderPass],
+    stats: &mut InternalStats,
 ) {
     for renderpass in rp {
         unsafe {
@@ -468,6 +487,52 @@ fn copy_renderpass_to_swapchain(
                 &[],
             );
             device.cmd_draw(cmd, 3, 1, 0, 0);
+            stats.done_draw_call();
         }
+    }
+}
+
+// not frame-time precise (counts after the CPU time, not the GPU) but the average should be correct
+pub struct InternalStats {
+    time_start: Instant,
+    frame_count: u32,
+    draw_calls: u32,
+    last_val: Stats,
+}
+
+impl Default for InternalStats {
+    fn default() -> Self {
+        Self {
+            time_start: Instant::now(),
+            frame_count: 0,
+            draw_calls: 0,
+            last_val: Stats {
+                fps: 0.0,
+                avg_draw_calls: 0.0,
+            },
+        }
+    }
+}
+
+impl InternalStats {
+    fn update(&mut self) {
+        let elapsed = Duration::as_secs_f32(&(Instant::now() - self.time_start));
+        if elapsed > 1.0 {
+            self.last_val = Stats {
+                fps: self.frame_count as f32 / elapsed,
+                avg_draw_calls: self.draw_calls as f32 / self.frame_count as f32,
+            };
+            self.frame_count = 0;
+            self.draw_calls = 0;
+            self.time_start = Instant::now();
+        }
+    }
+
+    pub fn done_draw_call(&mut self) {
+        self.draw_calls += 1;
+    }
+
+    pub fn done_frame(&mut self) {
+        self.frame_count += 1;
     }
 }
