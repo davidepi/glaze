@@ -14,15 +14,25 @@ pub struct AcquiredImage<'a> {
 pub struct Swapchain {
     swapchain: vk::SwapchainKHR,
     loader: ash::extensions::khr::Swapchain,
-    image_format: vk::Format,
     extent: vk::Extent2D,
     image_views: Vec<vk::ImageView>,
     render_passes: Vec<FinalRenderPass>,
 }
 
 impl Swapchain {
-    pub fn create(instance: &mut PresentInstance, width: u32, height: u32) -> Self {
+    pub fn create(instance: &PresentInstance, width: u32, height: u32) -> Self {
         swapchain_init(instance, width, height, None)
+    }
+
+    pub fn recreate(&mut self, instance: &PresentInstance) {
+        destroy(self, instance, true);
+        let new = swapchain_init(
+            instance,
+            self.extent.width,
+            self.extent.height,
+            Some(self.swapchain),
+        );
+        *self = new;
     }
 
     pub fn extent(&self) -> vk::Extent2D {
@@ -39,9 +49,13 @@ impl Swapchain {
 
     pub fn queue_present(&self, queue: vk::Queue, present_info: &vk::PresentInfoKHR) {
         unsafe {
-            self.loader
-                .queue_present(queue, present_info)
-                .expect("Failed to present image on screen");
+            match self.loader.queue_present(queue, present_info) {
+                Ok(_) => (),
+                Err(_val @ vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    log::debug!("Refusing to present out of date swapchain");
+                }
+                _ => panic!("Failed to acquire next image"),
+            }
         }
     }
 
@@ -64,15 +78,21 @@ impl Swapchain {
         }
     }
 
-    pub fn destroy(self, instance: &PresentInstance) {
-        unsafe {
-            self.render_passes
-                .into_iter()
-                .for_each(|r| r.destroy(instance.device().logical()));
-            self.image_views
-                .iter()
-                .for_each(|iw| instance.device().logical().destroy_image_view(*iw, None));
-            self.loader.destroy_swapchain(self.swapchain, None);
+    pub fn destroy(mut self, instance: &PresentInstance) {
+        destroy(&mut self, instance, false);
+    }
+}
+
+fn destroy(sc: &mut Swapchain, instance: &PresentInstance, partial: bool) {
+    unsafe {
+        sc.render_passes
+            .drain(..)
+            .for_each(|r| r.destroy(instance.device().logical()));
+        sc.image_views
+            .drain(..)
+            .for_each(|iw| instance.device().logical().destroy_image_view(iw, None));
+        if !partial {
+            sc.loader.destroy_swapchain(sc.swapchain, None);
         }
     }
 }
@@ -160,7 +180,6 @@ fn swapchain_init(
     Swapchain {
         swapchain,
         loader,
-        image_format: ci.image_format,
         extent: ci.image_extent,
         image_views,
         render_passes,

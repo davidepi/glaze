@@ -42,57 +42,6 @@ impl ImguiDrawer {
     ) -> Self {
         let vertex_size = DEFAULT_VERTEX_SIZE;
         let index_size = DEFAULT_INDEX_SIZE;
-        let mut builder = PipelineBuilder {
-            binding_descriptions: vec![vk::VertexInputBindingDescription {
-                binding: 0,
-                stride: std::mem::size_of::<imgui::DrawVert>() as u32,
-                input_rate: vk::VertexInputRate::VERTEX,
-            }],
-            attribute_descriptions: vec![
-                vk::VertexInputAttributeDescription {
-                    location: 0,
-                    binding: 0,
-                    format: vk::Format::R32G32_SFLOAT,
-                    offset: 0,
-                },
-                vk::VertexInputAttributeDescription {
-                    location: 1,
-                    binding: 0,
-                    format: vk::Format::R32G32_SFLOAT,
-                    offset: 8,
-                },
-                vk::VertexInputAttributeDescription {
-                    location: 2,
-                    binding: 0,
-                    format: vk::Format::R8G8B8A8_UNORM,
-                    offset: 16,
-                },
-            ],
-            ..Default::default()
-        };
-        builder.no_depth();
-        builder.rasterizer.cull_mode = vk::CullModeFlags::NONE;
-        builder.push_shader(
-            include_shader!("imgui.vert"),
-            "main",
-            vk::ShaderStageFlags::VERTEX,
-        );
-        builder.push_shader(
-            include_shader!("imgui.frag"),
-            "main",
-            vk::ShaderStageFlags::FRAGMENT,
-        );
-        builder.push_constants(std::mem::size_of::<ImguiPC>(), vk::ShaderStageFlags::VERTEX);
-        builder.blending_settings = vec![vk::PipelineColorBlendAttachmentState {
-            blend_enable: vk::TRUE,
-            color_write_mask: vk::ColorComponentFlags::all(),
-            alpha_blend_op: vk::BlendOp::ADD,
-            color_blend_op: vk::BlendOp::ADD,
-            src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,
-            dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
-            src_alpha_blend_factor: vk::BlendFactor::ONE,
-            dst_alpha_blend_factor: vk::BlendFactor::ZERO,
-        }];
         let fonts_gpu_buf;
         {
             let mut fonts_ref = context.fonts();
@@ -174,13 +123,7 @@ impl ImguiDrawer {
                 vk::ShaderStageFlags::FRAGMENT,
             )
             .build();
-
-        let pipeline = builder.build(
-            device.logical(),
-            swapchain.renderpass(),
-            swapchain.extent(),
-            &[descriptor.layout],
-        );
+        let pipeline = build_imgui_pipeline(device.logical(), &swapchain, &descriptor);
         Self {
             vertex_size,
             vertex_buf,
@@ -191,6 +134,12 @@ impl ImguiDrawer {
             sampler,
             descriptor,
         }
+    }
+
+    pub fn update(&mut self, device: &ash::Device, swapchain: &Swapchain) {
+        let mut pipeline = build_imgui_pipeline(device, swapchain, &self.descriptor);
+        std::mem::swap(&mut self.pipeline, &mut pipeline);
+        pipeline.destroy(device);
     }
 
     pub fn destroy(self, device: &ash::Device, mm: &mut MemoryManager) {
@@ -327,6 +276,70 @@ impl ImguiDrawer {
             }
         }
     }
+}
+
+fn build_imgui_pipeline(
+    device: &ash::Device,
+    swapchain: &Swapchain,
+    descriptor: &Descriptor,
+) -> Pipeline {
+    let mut builder = PipelineBuilder {
+        binding_descriptions: vec![vk::VertexInputBindingDescription {
+            binding: 0,
+            stride: std::mem::size_of::<imgui::DrawVert>() as u32,
+            input_rate: vk::VertexInputRate::VERTEX,
+        }],
+        attribute_descriptions: vec![
+            vk::VertexInputAttributeDescription {
+                location: 0,
+                binding: 0,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: 0,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 1,
+                binding: 0,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: 8,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 2,
+                binding: 0,
+                format: vk::Format::R8G8B8A8_UNORM,
+                offset: 16,
+            },
+        ],
+        ..Default::default()
+    };
+    builder.no_depth();
+    builder.rasterizer.cull_mode = vk::CullModeFlags::NONE;
+    builder.push_shader(
+        include_shader!("imgui.vert"),
+        "main",
+        vk::ShaderStageFlags::VERTEX,
+    );
+    builder.push_shader(
+        include_shader!("imgui.frag"),
+        "main",
+        vk::ShaderStageFlags::FRAGMENT,
+    );
+    builder.push_constants(std::mem::size_of::<ImguiPC>(), vk::ShaderStageFlags::VERTEX);
+    builder.blending_settings = vec![vk::PipelineColorBlendAttachmentState {
+        blend_enable: vk::TRUE,
+        color_write_mask: vk::ColorComponentFlags::all(),
+        alpha_blend_op: vk::BlendOp::ADD,
+        color_blend_op: vk::BlendOp::ADD,
+        src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,
+        dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+        src_alpha_blend_factor: vk::BlendFactor::ONE,
+        dst_alpha_blend_factor: vk::BlendFactor::ZERO,
+    }];
+    builder.build(
+        device,
+        swapchain.renderpass(),
+        swapchain.extent(),
+        &[descriptor.layout],
+    )
 }
 
 fn upload_image<T: Device>(

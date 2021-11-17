@@ -49,15 +49,15 @@ pub struct RealtimeRenderer {
     scene: Option<VulkanScene>,
     frame_data: [FrameDataBuf; FRAMES_IN_FLIGHT],
     start_time: Instant,
-    render_width: u32,
-    render_height: u32,
+    render_size: vk::Extent2D,
     frame_no: usize,
+    paused: bool,
 }
 
 impl RealtimeRenderer {
     pub fn create(window: &Window, imgui: &mut imgui::Context, width: u32, height: u32) -> Self {
         let mut instance = PresentInstance::new(window);
-        let extent = vk::Extent2D { width, height };
+        let render_size = vk::Extent2D { width, height };
         let descriptor_allocator =
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
         let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
@@ -112,7 +112,7 @@ impl RealtimeRenderer {
             copy_sampler,
             &mut mm,
             &mut descriptor_creator,
-            extent,
+            render_size,
         );
         let imgui_renderer = ImguiDrawer::new(
             imgui,
@@ -142,9 +142,9 @@ impl RealtimeRenderer {
             scene: None,
             frame_data: frame_data.try_into().unwrap(),
             start_time: Instant::now(),
-            render_width: width,
-            render_height: height,
+            render_size,
             frame_no: 0,
+            paused: false,
         }
     }
 
@@ -152,8 +152,43 @@ impl RealtimeRenderer {
         unsafe { self.instance.device().logical().device_wait_idle() }.expect("Failed to wait idle")
     }
 
-    //TODO: readd change_render_size, when there is a good distinction between render size
-    //      and window size
+    pub fn pause(&mut self) {
+        self.wait_idle();
+        self.paused = true;
+    }
+
+    pub fn resume(&mut self) {
+        self.wait_idle();
+        self.paused = false;
+    }
+
+    pub fn update_render_size(&mut self, width: u32, height: u32) {
+        self.wait_idle();
+        if let Some(scene) = &mut self.scene {
+            scene.deinit_pipelines(self.instance.device().logical());
+        }
+        self.swapchain.recreate(&self.instance);
+        self.imgui_renderer
+            .update(&self.instance.device().logical(), &self.swapchain);
+        self.render_size = vk::Extent2D { width, height };
+        let mut forward_pass = RenderPass::forward(
+            self.instance.device().logical(),
+            self.copy_sampler,
+            &mut self.mm,
+            &mut self.descriptor_creator,
+            self.render_size,
+        );
+        std::mem::swap(&mut self.forward_pass, &mut forward_pass);
+        forward_pass.destroy(&self.instance.device().logical(), &mut self.mm);
+        if let Some(scene) = &mut self.scene {
+            scene.init_pipelines(
+                self.render_size,
+                self.instance.device().logical(),
+                self.forward_pass.renderpass,
+                self.frame_data[0].descriptor.layout,
+            );
+        }
+    }
 
     pub fn change_scene(&mut self, scene: Scene) {
         self.wait_idle();
@@ -169,8 +204,7 @@ impl RealtimeRenderer {
             &mut self.descriptor_creator,
         );
         new.init_pipelines(
-            self.render_width,
-            self.render_height,
+            self.render_size,
             self.instance.device().logical(),
             self.forward_pass.renderpass,
             self.frame_data[0].descriptor.layout,
@@ -207,7 +241,14 @@ impl RealtimeRenderer {
         self.instance.destroy();
     }
 
+    pub fn render_size(&self) -> (u32, u32) {
+        (self.render_size.width, self.render_size.height)
+    }
+
     pub fn draw_frame(&mut self, imgui_data: Option<&imgui::DrawData>) {
+        if self.paused {
+            return;
+        }
         let frame_sync = self.sync.get(self.frame_no);
         frame_sync.wait_acquire(self.instance.device());
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
@@ -228,7 +269,7 @@ impl RealtimeRenderer {
                     .expect("Failed to begin command buffer");
                 self.forward_pass.begin(device, cmd);
                 if let Some(scene) = &self.scene {
-                    let ar = self.render_width as f32 / self.render_height as f32;
+                    let ar = self.render_size.width as f32 / self.render_size.height as f32;
                     draw_objects(scene, ar, frame_data, device, cmd);
                 }
                 self.forward_pass.end(device, cmd);

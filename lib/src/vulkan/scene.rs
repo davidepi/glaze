@@ -65,8 +65,7 @@ impl VulkanScene {
 
     pub fn init_pipelines(
         &mut self,
-        width: u32,
-        height: u32,
+        render_size: vk::Extent2D,
         device: &ash::Device,
         renderpass: vk::RenderPass,
         frame_desc_layout: vk::DescriptorSetLayout,
@@ -81,7 +80,7 @@ impl VulkanScene {
                     .build(
                         device,
                         renderpass,
-                        vk::Extent2D { width, height },
+                        render_size,
                         &[frame_desc_layout, desc.layout],
                     )
             });
