@@ -1,36 +1,20 @@
 use glaze::{parse, RealtimeRenderer};
-use imgui::{ComboBox, Condition, MenuItem, Selectable, Ui};
+use imgui::{CollapsingHeader, Condition, MenuItem, Slider, Ui};
 use nfd2::Response;
 use winit::window::Window;
 
-const VIEWPORT_MASK: u32 = 0x1;
-
 pub struct UiState {
-    visible_windows: u32,
-    sel_rs: u8,
-    cur_rs: u8,
-    rs: Vec<(u32, u32)>,
+    render_window: bool,
+    render_scale_cur: f32,
+    render_scale_sel: f32,
 }
 
 impl UiState {
-    pub fn new(monitor_size: (u32, u32)) -> Self {
-        let multipliers = [
-            0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.10, 1.15, 1.25, 1.5, 1.75, 2.0,
-            2.25, 2.5,
-        ];
-        let mut available_render_size = Vec::with_capacity(multipliers.len());
-        for i in multipliers {
-            let size = (
-                (monitor_size.0 as f32 * i) as u32,
-                (monitor_size.1 as f32 * i) as u32,
-            );
-            available_render_size.push(size);
-        }
+    pub fn new() -> Self {
         UiState {
-            visible_windows: 0,
-            sel_rs: 4,
-            cur_rs: 4,
-            rs: available_render_size,
+            render_window: false,
+            render_scale_cur: 1.0,
+            render_scale_sel: 1.0,
         }
     }
 }
@@ -48,56 +32,49 @@ pub fn draw_ui(
             }
         });
         ui.menu("Window", || {
-            ui.checkbox_flags("Viewport", &mut state.visible_windows, VIEWPORT_MASK);
+            ui.checkbox("Render", &mut state.render_window);
         });
     });
-    if state.visible_windows != 0 {
-        render_windows(ui, state, window, renderer);
+    if state.render_window {
+        render_window(ui, state, window, renderer);
     }
 }
 
-fn render_windows(
+fn render_window(
     ui: &mut Ui,
     state: &mut UiState,
     window: &mut Window,
     renderer: &mut RealtimeRenderer,
 ) {
-    if state.visible_windows & VIEWPORT_MASK != 0 {
-        imgui::Window::new("Viewport")
-            .size([400.0, 300.0], Condition::Appearing)
-            .build(ui, || {
-                ui.text("Viewport");
-                ui.separator();
-                ui.text("Current render size:");
+    let mut closed = state.render_window;
+    imgui::Window::new("Render")
+        .size([400.0, 300.0], Condition::Appearing)
+        .opened(&mut closed)
+        .build(ui, || {
+            if CollapsingHeader::new("Viewport Options").build(ui) {
+                ui.text("Current render scale:");
                 ui.text(format!(
-                    "Render size: {}x{}",
-                    state.rs[state.cur_rs as usize].0, state.rs[state.cur_rs as usize].1
+                    "Render scale: {}x ({}x{})",
+                    state.render_scale_cur,
+                    (window.inner_size().width as f32 * state.render_scale_cur) as u32,
+                    (window.inner_size().height as f32 * state.render_scale_cur) as u32,
                 ));
                 ui.separator();
-                let selected_rs = state.rs[state.sel_rs as usize];
-                let preview_rs = format!("{}x{}", selected_rs.0, selected_rs.1);
-                if let Some(token) = ComboBox::new("Render size")
-                    .preview_value(preview_rs)
-                    .begin(ui)
-                {
-                    for (idx, (width, height)) in state.rs.iter().enumerate() {
-                        if Selectable::new(format!("{}x{}", width, height)).build(ui) {
-                            state.sel_rs = idx as u8;
-                        }
-                    }
-                    token.end();
-                };
+                Slider::new("Render scale", 0.1, 2.5).build(ui, &mut state.render_scale_sel);
                 if ui.button("Apply") {
+                    let w_size = window.inner_size();
                     renderer.pause();
                     renderer.update_render_size(
-                        state.rs[state.sel_rs as usize].0,
-                        state.rs[state.sel_rs as usize].1,
+                        w_size.width,
+                        w_size.height,
+                        state.render_scale_sel,
                     );
-                    state.cur_rs = state.sel_rs;
+                    state.render_scale_cur = state.render_scale_sel;
                     renderer.resume();
                 }
-            });
-    }
+            }
+        });
+    state.render_window = closed;
 }
 
 fn open_scene(renderer: &mut RealtimeRenderer) {

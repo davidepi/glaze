@@ -8,7 +8,7 @@ use super::instance::{Instance, PresentInstance};
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::renderpass::RenderPass;
 use super::scene::VulkanScene;
-use super::swapchain::Swapchain;
+use super::swapchain::{self, Swapchain};
 use super::sync::PresentSync;
 use crate::materials::{Pipeline, PipelineBuilder};
 use crate::{include_shader, Scene};
@@ -49,15 +49,20 @@ pub struct RealtimeRenderer {
     scene: Option<VulkanScene>,
     frame_data: [FrameDataBuf; FRAMES_IN_FLIGHT],
     start_time: Instant,
-    render_size: vk::Extent2D,
+    render_scale: f32,
     frame_no: usize,
     paused: bool,
 }
 
 impl RealtimeRenderer {
-    pub fn create(window: &Window, imgui: &mut imgui::Context, width: u32, height: u32) -> Self {
+    pub fn create(
+        window: &Window,
+        imgui: &mut imgui::Context,
+        window_width: u32,
+        window_height: u32,
+        render_scale: f32,
+    ) -> Self {
         let mut instance = PresentInstance::new(window);
-        let render_size = vk::Extent2D { width, height };
         let descriptor_allocator =
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
         let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
@@ -73,7 +78,11 @@ impl RealtimeRenderer {
             instance.device().logical().clone(),
             instance.present_device().graphic_index(),
         );
-        let swapchain = Swapchain::create(&mut instance, width, height);
+        let swapchain = Swapchain::create(&mut instance, window_width, window_height);
+        let render_size = vk::Extent2D {
+            width: (window_width as f32 * render_scale) as u32,
+            height: (window_height as f32 * render_scale) as u32,
+        };
         let mut frame_data = Vec::with_capacity(FRAMES_IN_FLIGHT);
         for _ in 0..FRAMES_IN_FLIGHT {
             let buffer = mm.create_buffer(
@@ -142,7 +151,7 @@ impl RealtimeRenderer {
             scene: None,
             frame_data: frame_data.try_into().unwrap(),
             start_time: Instant::now(),
-            render_size,
+            render_scale,
             frame_no: 0,
             paused: false,
         }
@@ -162,27 +171,44 @@ impl RealtimeRenderer {
         self.paused = false;
     }
 
-    pub fn update_render_size(&mut self, width: u32, height: u32) {
+    pub fn render_scale(&self) -> f32 {
+        self.render_scale
+    }
+
+    pub fn update_render_size(&mut self, window_width: u32, window_height: u32, scale: f32) {
         self.wait_idle();
         if let Some(scene) = &mut self.scene {
             scene.deinit_pipelines(self.instance.device().logical());
         }
-        self.swapchain.recreate(&self.instance);
+        self.render_scale = scale;
+        self.swapchain
+            .recreate(&self.instance, window_width, window_height);
         self.imgui_renderer
             .update(&self.instance.device().logical(), &self.swapchain);
-        self.render_size = vk::Extent2D { width, height };
+        let render_size = vk::Extent2D {
+            width: (window_width as f32 * scale) as u32,
+            height: (window_height as f32 * scale) as u32,
+        };
         let mut forward_pass = RenderPass::forward(
             self.instance.device().logical(),
             self.copy_sampler,
             &mut self.mm,
             &mut self.descriptor_creator,
-            self.render_size,
+            render_size,
         );
         std::mem::swap(&mut self.forward_pass, &mut forward_pass);
         forward_pass.destroy(&self.instance.device().logical(), &mut self.mm);
+        let mut copy_pipeline = create_copy_pipeline(
+            self.instance.device().logical(),
+            self.swapchain.extent(),
+            self.swapchain.renderpass(),
+            &[self.forward_pass.copy_descriptor.layout],
+        );
+        std::mem::swap(&mut self.copy_pipeline, &mut copy_pipeline);
+        copy_pipeline.destroy(&self.instance.device().logical());
         if let Some(scene) = &mut self.scene {
             scene.init_pipelines(
-                self.render_size,
+                render_size,
                 self.instance.device().logical(),
                 self.forward_pass.renderpass,
                 self.frame_data[0].descriptor.layout,
@@ -203,8 +229,12 @@ impl RealtimeRenderer {
             scene,
             &mut self.descriptor_creator,
         );
+        let render_size = vk::Extent2D {
+            width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
+            height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
+        };
         new.init_pipelines(
-            self.render_size,
+            render_size,
             self.instance.device().logical(),
             self.forward_pass.renderpass,
             self.frame_data[0].descriptor.layout,
@@ -241,10 +271,6 @@ impl RealtimeRenderer {
         self.instance.destroy();
     }
 
-    pub fn render_size(&self) -> (u32, u32) {
-        (self.render_size.width, self.render_size.height)
-    }
-
     pub fn draw_frame(&mut self, imgui_data: Option<&imgui::DrawData>) {
         if self.paused {
             return;
@@ -269,7 +295,8 @@ impl RealtimeRenderer {
                     .expect("Failed to begin command buffer");
                 self.forward_pass.begin(device, cmd);
                 if let Some(scene) = &self.scene {
-                    let ar = self.render_size.width as f32 / self.render_size.height as f32;
+                    let ar = self.swapchain.extent().width as f32
+                        / self.swapchain.extent().height as f32;
                     draw_objects(scene, ar, frame_data, device, cmd);
                 }
                 self.forward_pass.end(device, cmd);

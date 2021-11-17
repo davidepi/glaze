@@ -24,14 +24,9 @@ impl Swapchain {
         swapchain_init(instance, width, height, None)
     }
 
-    pub fn recreate(&mut self, instance: &PresentInstance) {
+    pub fn recreate(&mut self, instance: &PresentInstance, width: u32, height: u32) {
         destroy(self, instance, true);
-        let new = swapchain_init(
-            instance,
-            self.extent.width,
-            self.extent.height,
-            Some(self.swapchain),
-        );
+        let new = swapchain_init(instance, width, height, Some(self.swapchain));
         *self = new;
     }
 

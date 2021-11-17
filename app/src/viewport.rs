@@ -26,17 +26,17 @@ impl InteractiveView {
             let window = WindowBuilder::new()
                 .with_title(env!("CARGO_PKG_NAME"))
                 .with_inner_size(default_size)
-                .with_resizable(false)
                 .build(&event_loop)
                 .unwrap();
             let mut imgui = imgui::Context::create();
             let mut platform = WinitPlatform::init(&mut imgui);
-            platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
+            platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
             let renderer = RealtimeRenderer::create(
                 &window,
                 &mut imgui,
                 default_size.width,
                 default_size.height,
+                1.0,
             );
             let state = UiState::new();
             Ok(InteractiveView {
@@ -63,6 +63,11 @@ impl InteractiveView {
                     WindowEvent::CloseRequested => {
                         *control_flow = ControlFlow::Exit;
                     }
+                    WindowEvent::Resized(size) => {
+                        let scale = self.renderer.render_scale();
+                        self.renderer
+                            .update_render_size(size.width, size.height, scale);
+                    }
                     _ => {}
                 },
                 Event::MainEventsCleared => {
@@ -76,7 +81,12 @@ impl InteractiveView {
                         .prepare_frame(self.imgui.io_mut(), &self.window)
                         .expect("Failed to prepare frame");
                     let mut ui = self.imgui.frame();
-                    draw_ui(&mut ui, &mut self.state, &mut self.renderer);
+                    draw_ui(
+                        &mut ui,
+                        &mut self.state,
+                        &mut self.window,
+                        &mut self.renderer,
+                    );
                     self.platform.prepare_render(&ui, &self.window);
                     let draw_data = ui.render();
                     self.renderer.draw_frame(Some(draw_data));
