@@ -4,16 +4,37 @@ use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Scene, Vert
 use crate::materials::{Library, Texture};
 use crate::Material;
 use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
+use image::png::{PngDecoder, PngEncoder};
+use image::ImageDecoder;
 use std::convert::TryInto;
 use std::hash::Hasher;
 use std::io::{Error, Read, Seek, SeekFrom};
 use twox_hash::XxHash64;
+use xz2::read::{XzDecoder, XzEncoder};
 
 const CONTENT_LIST_SIZE: usize = std::mem::size_of::<Offsets>();
 const HASHER_SEED: u64 = 0x368262AAA1DEB64D;
 const HASH_SIZE: usize = std::mem::size_of::<u64>();
 fn get_hasher() -> impl Hasher {
     XxHash64::with_seed(HASHER_SEED)
+}
+
+fn compress(data: &[u8]) -> Vec<u8> {
+    let mut compressed = Vec::new();
+    let mut encoder = XzEncoder::new(data, 9);
+    encoder
+        .read_to_end(&mut compressed)
+        .expect("Failed to compress data");
+    compressed
+}
+
+fn decompress(data: &[u8]) -> Vec<u8> {
+    let mut decoder = XzDecoder::new(data);
+    let mut decompressed = Vec::new();
+    decoder
+        .read_to_end(&mut decompressed)
+        .expect("Failed to decompress data");
+    decompressed
 }
 
 #[repr(packed)]
@@ -177,8 +198,10 @@ impl ParsedChunk for VertexChunk {
     type Item = Vertex;
 
     fn encode(item: &[Self::Item]) -> Self {
-        let data = item.iter().flat_map(vertex_to_bytes).collect();
-        VertexChunk { data }
+        let data = item.iter().flat_map(vertex_to_bytes).collect::<Vec<_>>();
+        VertexChunk {
+            data: compress(&data),
+        }
     }
 
     fn decode(data: Vec<u8>) -> Self {
@@ -190,7 +213,8 @@ impl ParsedChunk for VertexChunk {
     }
 
     fn elements(self) -> Vec<Self::Item> {
-        self.data.chunks_exact(32).map(bytes_to_vertex).collect()
+        let decompressed = decompress(&self.data);
+        decompressed.chunks_exact(32).map(bytes_to_vertex).collect()
     }
 
     fn data(self) -> Vec<u8> {
@@ -244,7 +268,9 @@ impl ParsedChunk for MeshChunk {
             data.extend(encoded_len.to_le_bytes().iter());
             data.extend(encoded);
         }
-        MeshChunk { data }
+        MeshChunk {
+            data: compress(&data),
+        }
     }
 
     fn decode(data: Vec<u8>) -> Self {
@@ -256,14 +282,15 @@ impl ParsedChunk for MeshChunk {
     }
 
     fn elements(self) -> Vec<Self::Item> {
-        let len = u32::from_le_bytes(self.data[0..4].try_into().unwrap());
+        let decompressed = decompress(&self.data);
+        let len = u32::from_le_bytes(decompressed[0..4].try_into().unwrap());
         let mut retval = Vec::with_capacity(len as usize);
         let mut index = 4;
-        while index < self.size_bytes() {
+        while index < decompressed.len() {
             let encoded_len =
-                u32::from_le_bytes(self.data[index..index + 4].try_into().unwrap()) as usize;
+                u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap()) as usize;
             index += 4;
-            let mesh = bytes_to_mesh(&self.data[index..index + encoded_len]);
+            let mesh = bytes_to_mesh(&decompressed[index..index + encoded_len]);
             index += encoded_len;
             retval.push(mesh);
         }
@@ -350,7 +377,9 @@ impl ParsedChunk for CameraChunk {
             data.push(encoded_len);
             data.extend(encoded);
         }
-        CameraChunk { data }
+        CameraChunk {
+            data: compress(&data),
+        }
     }
 
     fn decode(data: Vec<u8>) -> Self {
@@ -362,13 +391,14 @@ impl ParsedChunk for CameraChunk {
     }
 
     fn elements(self) -> Vec<Self::Item> {
-        let len = self.data[0];
+        let decompressed = decompress(&self.data);
+        let len = decompressed[0];
         let mut retval = Vec::with_capacity(len as usize);
         let mut index = 1;
-        while index < self.size_bytes() {
-            let encoded_len = self.data[index] as usize;
+        while index < decompressed.len() {
+            let encoded_len = decompressed[index] as usize;
             index += 1;
-            let camera = bytes_to_camera(&self.data[index..index + encoded_len]);
+            let camera = bytes_to_camera(&decompressed[index..index + encoded_len]);
             index += encoded_len;
             retval.push(camera);
         }
@@ -503,21 +533,26 @@ impl ParsedChunk for TextureChunk {
 fn texture_to_bytes((index, name, texture): &(u16, String, Texture)) -> Vec<u8> {
     let str_len = name.bytes().len();
     assert!(str_len < 256);
-    let tex_width = texture.width();
-    let tex_height = texture.height();
-    let tex_data = texture.as_raw();
+    let mut tex_data = Vec::new();
+    // ad-hoc compression surely better than general purpose one
+    PngEncoder::new_with_quality(
+        &mut tex_data,
+        image::png::CompressionType::Best,
+        image::png::FilterType::Up,
+    )
+    .encode(
+        &texture.as_raw(),
+        texture.width(),
+        texture.height(),
+        image::ColorType::Rgba8,
+    )
+    .expect("Failed to encode texture");
     let tex_len = tex_data.len();
-    let total_len = std::mem::size_of::<u16>()
-        + std::mem::size_of::<u8>()
-        + str_len
-        + 2 * std::mem::size_of::<u32>()
-        + tex_len;
+    let total_len = std::mem::size_of::<u16>() + std::mem::size_of::<u8>() + str_len + tex_len;
     let mut retval = Vec::with_capacity(total_len);
     retval.extend(index.to_le_bytes());
     retval.push(str_len as u8);
     retval.extend(name.bytes());
-    retval.extend(tex_width.to_le_bytes());
-    retval.extend(tex_height.to_le_bytes());
     retval.extend(tex_data);
     retval
 }
@@ -528,12 +563,13 @@ fn bytes_to_texture(data: &[u8]) -> (u16, String, Texture) {
     let mut index = 3;
     let name = String::from_utf8(data[index..index + str_len].to_vec()).unwrap();
     index += str_len;
-    let width = u32::from_le_bytes(data[index..index + 4].try_into().unwrap());
-    index += 4;
-    let height = u32::from_le_bytes(data[index..index + 4].try_into().unwrap());
-    index += 4;
-    let texture =
-        Texture::from_raw(width, height, data[index..].to_vec()).expect("Corrupted image");
+    let decoder = PngDecoder::new(&data[index..]).expect("Corrupted image");
+    let dimensions = decoder.dimensions();
+    let mut decoded = vec![0; decoder.total_bytes() as usize];
+    decoder
+        .read_image(&mut decoded)
+        .expect("Failed to decode image");
+    let texture = Texture::from_raw(dimensions.0, dimensions.1, decoded).expect("Corrupted image");
     (tex_index, name, texture)
 }
 
@@ -553,7 +589,9 @@ impl ParsedChunk for MaterialChunk {
             data.extend(encoded_len.to_le_bytes().iter());
             data.extend(encoded);
         }
-        MaterialChunk { data }
+        MaterialChunk {
+            data: compress(&data),
+        }
     }
 
     fn decode(data: Vec<u8>) -> Self {
@@ -565,14 +603,15 @@ impl ParsedChunk for MaterialChunk {
     }
 
     fn elements(self) -> Vec<Self::Item> {
-        let len = u16::from_le_bytes(self.data[0..2].try_into().unwrap());
+        let decompressed = decompress(&self.data);
+        let len = u16::from_le_bytes(decompressed[0..2].try_into().unwrap());
         let mut retval = Vec::with_capacity(len as usize);
         let mut index = std::mem::size_of::<u16>();
-        while index < self.size_bytes() {
+        while index < decompressed.len() {
             let encoded_len =
-                u32::from_le_bytes(self.data[index..index + 4].try_into().unwrap()) as usize;
+                u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap()) as usize;
             index += std::mem::size_of::<u32>();
-            let material = bytes_to_material(&self.data[index..index + encoded_len]);
+            let material = bytes_to_material(&decompressed[index..index + encoded_len]);
             index += encoded_len;
             retval.push(material);
         }
@@ -627,13 +666,13 @@ fn bytes_to_material(data: &[u8]) -> (u16, String, Material) {
 mod tests {
     use super::{
         bytes_to_camera, bytes_to_mesh, bytes_to_texture, bytes_to_vertex, camera_to_bytes,
-        mesh_to_bytes, texture_to_bytes, vertex_to_bytes,
+        compress, decompress, mesh_to_bytes, texture_to_bytes, vertex_to_bytes,
     };
     use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Scene, Vertex};
     use crate::materials::{Library, Texture};
     use crate::parser::v1::{bytes_to_material, material_to_bytes};
     use crate::parser::{parse, serialize, ParserVersion};
-    use crate::{materials, Material, ShaderMat};
+    use crate::{Material, ShaderMat};
     use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
     use rand::distributions::Alphanumeric;
     use rand::prelude::*;
@@ -812,7 +851,7 @@ mod tests {
 
     #[test]
     fn encode_decode_textures() {
-        let textures = gen_textures(16, 0xE59CCF79D9AD3162);
+        let textures = gen_textures(4, 0xE59CCF79D9AD3162);
         for texture in textures {
             let data = texture_to_bytes(&texture);
             let decoded = bytes_to_texture(&data);
@@ -917,7 +956,7 @@ mod tests {
 
     #[test]
     fn write_and_read_only_textures() -> Result<(), std::io::Error> {
-        let textures = gen_textures(4, 0x50DFC0EA9BF6E9BE);
+        let textures = gen_textures(2, 0x50DFC0EA9BF6E9BE);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_textures.bin");
         let mut scene = Scene::default();
@@ -953,5 +992,15 @@ mod tests {
             assert_eq!(val, expected);
         }
         Ok(())
+    }
+
+    #[test]
+    fn compress_decompress() {
+        let data = "The quick brown fox jumps over the lazy dog";
+        let compressed = compress(data.as_bytes());
+        let decompressed = decompress(&compressed);
+        assert_ne!(&compressed, &decompressed);
+        let result = String::from_utf8(decompressed).unwrap();
+        assert_eq!(result, data);
     }
 }
