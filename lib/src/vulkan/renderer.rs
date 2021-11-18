@@ -54,6 +54,7 @@ pub struct RealtimeRenderer {
     sync: PresentSync<FRAMES_IN_FLIGHT>,
     scene: Option<VulkanScene>,
     frame_data: [FrameDataBuf; FRAMES_IN_FLIGHT],
+    clear_color: [f32; 4],
     start_time: Instant,
     render_scale: f32,
     frame_no: usize,
@@ -123,13 +124,15 @@ impl RealtimeRenderer {
         }
         let sync = PresentSync::create(instance.device());
         let copy_sampler = create_copy_sampler(instance.device().logical());
-        let forward_pass = RenderPass::forward(
+        let clear_color = [0.15, 0.15, 0.15, 1.0];
+        let mut forward_pass = RenderPass::forward(
             instance.device().logical(),
             copy_sampler,
             &mut mm,
             &mut descriptor_creator,
             render_size,
         );
+        forward_pass.clear_color[0].color.float32 = clear_color;
         let imgui_renderer = ImguiDrawer::new(
             imgui,
             instance.device(),
@@ -157,6 +160,7 @@ impl RealtimeRenderer {
             sync,
             scene: None,
             frame_data: frame_data.try_into().unwrap(),
+            clear_color,
             start_time: Instant::now(),
             render_scale,
             frame_no: 0,
@@ -181,6 +185,19 @@ impl RealtimeRenderer {
 
     pub fn render_scale(&self) -> f32 {
         self.render_scale
+    }
+
+    pub fn get_clear_color(&self) -> [f32; 3] {
+        [
+            self.clear_color[0],
+            self.clear_color[1],
+            self.clear_color[2],
+        ]
+    }
+
+    pub fn set_clear_color(&mut self, color: [f32; 3]) {
+        self.clear_color = [color[0], color[1], color[2], 1.0];
+        self.forward_pass.clear_color[0].color.float32 = self.clear_color;
     }
 
     pub fn stats(&self) -> Stats {
@@ -219,6 +236,7 @@ impl RealtimeRenderer {
             &mut self.descriptor_creator,
             render_size,
         );
+        forward_pass.clear_color[0].color.float32 = self.clear_color;
         std::mem::swap(&mut self.forward_pass, &mut forward_pass);
         forward_pass.destroy(&self.instance.device().logical(), &mut self.mm);
         let mut copy_pipeline = create_copy_pipeline(

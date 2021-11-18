@@ -1,5 +1,4 @@
-use cgmath::num_traits::real::Real;
-use cgmath::{Point3, Vector3 as Vec3};
+use cgmath::Vector3 as Vec3;
 use glaze::RealtimeRenderer;
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use std::error::Error;
@@ -18,6 +17,7 @@ pub struct InteractiveView {
     imgui: imgui::Context,
     mouse_pos: (f32, f32),
     lmb_down: bool,
+    mmb_down: bool,
     state: UiState,
 }
 
@@ -49,6 +49,7 @@ impl InteractiveView {
                 imgui,
                 mouse_pos: (0.0, 0.0),
                 lmb_down: false,
+                mmb_down: false,
                 state,
             })
         } else {
@@ -81,6 +82,12 @@ impl InteractiveView {
                                 self.lmb_down = true;
                             } else {
                                 self.lmb_down = false;
+                            }
+                        } else if button == MouseButton::Middle {
+                            if state == ElementState::Pressed {
+                                self.mmb_down = true;
+                            } else {
+                                self.mmb_down = false;
                             }
                         }
                     }
@@ -155,6 +162,12 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
         if let Some((_, target)) = pos {
             // TODO: move this '-' into some sort of control settings
             *target += Vec3::<f32>::new(delta.0, -delta.1, 0.0);
+        }
+    }
+    if view.mmb_down {
+        let pos = view.renderer.camera_position();
+        if let Some((pos, _)) = pos {
+            *pos += Vec3::<f32>::new(0.0, delta.1, 0.0);
         }
     }
 }

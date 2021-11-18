@@ -1,5 +1,5 @@
 use glaze::{parse, RealtimeRenderer};
-use imgui::{CollapsingHeader, Condition, MenuItem, Slider, Ui};
+use imgui::{CollapsingHeader, ColorEditFlags, ColorPicker, Condition, MenuItem, Slider, Ui};
 use nfd2::Response;
 use winit::window::Window;
 
@@ -78,6 +78,14 @@ fn window_render(
                     );
                     state.render_scale_cur = state.render_scale_sel;
                     renderer.resume();
+                }
+                ui.separator();
+                let mut color = renderer.get_clear_color();
+                if ColorPicker::new("Background color", &mut color)
+                    .flags(ColorEditFlags::NO_ALPHA)
+                    .build(ui)
+                {
+                    renderer.set_clear_color(color);
                 }
             }
         });

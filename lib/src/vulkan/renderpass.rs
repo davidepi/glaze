@@ -11,7 +11,7 @@ pub struct RenderPass {
     color: AllocatedImage,
     depth: Option<AllocatedImage>,
     pub copy_descriptor: Descriptor,
-    clear_color: Vec<vk::ClearValue>,
+    pub clear_color: Vec<vk::ClearValue>,
 }
 
 impl RenderPass {
