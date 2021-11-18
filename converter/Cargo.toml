@@ -13,10 +13,11 @@ path = "src/main.rs"
 glaze = {path = "../lib"}
 clap = "2.33"
 cgmath = "0.18"
-russimp = "0.2"
+russimp = "1.0"
 indicatif = "0.16"
-console = "0.14"
+console = "0.15"
 image = "0.23"
+rayon = "1.5"
 
 [dev-dependencies]
 tempfile = "3.2"

@@ -3,10 +3,10 @@ use clap::{App, Arg};
 use console::style;
 use glaze::{
     serialize, Camera, Library, Material, Mesh, ParserVersion, PerspectiveCam, Scene, ShaderMat,
-    Vertex,
+    Texture, Vertex,
 };
 use image::io::Reader as ImageReader;
-use indicatif::ProgressBar;
+use indicatif::{MultiProgress, ProgressBar};
 use russimp::scene::{PostProcess, Scene as RussimpScene};
 use std::collections::HashMap;
 use std::error::Error;
@@ -93,18 +93,111 @@ fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
 }
 
 fn convert_input(scene: RussimpScene, original_path: &str) -> Result<Scene, Box<dyn Error>> {
-    let effort = scene.meshes.iter().fold(0, |acc, m| acc + m.faces.len()) + scene.cameras.len();
-    let pb = ProgressBar::new(effort as u64);
-    let mut retval_meshes = Vec::new();
+    let mpb = MultiProgress::new();
+    let cameras = convert_cameras(&scene, &mpb);
+    let (materials, textures) = convert_materials(&scene.materials, &mpb, original_path)?;
+    let (vertices, meshes) = convert_meshes(&scene.meshes, &mpb)?;
+    Ok(Scene {
+        vertices,
+        meshes,
+        cameras,
+        textures,
+        materials,
+    })
+}
+
+fn convert_meshes(
+    meshes: &Vec<russimp::mesh::Mesh>,
+    mpb: &MultiProgress,
+) -> Result<(Vec<Vertex>, Vec<Mesh>), std::io::Error> {
     let mut retval_vertices = Vec::new();
+    let mut retval_meshes = Vec::new();
     let mut used_vert = HashMap::new();
-    let mut retval_cameras = Vec::new();
+    let effort = meshes.iter().fold(0, |acc, m| acc + m.faces.len());
+    let pb = mpb.add(ProgressBar::new(effort as u64).with_message("Converting Mesh faces"));
+    for mesh in meshes {
+        let mut indices = Vec::with_capacity(mesh.faces.len() * 3);
+        if mesh.uv_components[0] < 2 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Unsupported UV components in mesh",
+            ));
+        }
+        for face in &mesh.faces {
+            if face.0.len() != 3 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Only triangles are supported",
+                ));
+            }
+            for index in &face.0 {
+                let vv = mesh.vertices[*index as usize];
+                let vn = mesh.normals[*index as usize];
+                let vt = mesh.texture_coords[0].as_ref().unwrap()[*index as usize];
+                let vertex = Vertex {
+                    vv: Vec3::new(vv.x, vv.y, vv.z),
+                    vn: Vec3::new(vn.x, vn.y, vn.z),
+                    vt: Vec2::new(vt.x, vt.y),
+                };
+                let vertex_index = *used_vert
+                    .entry(vertex_to_bytes(&vertex))
+                    .or_insert(retval_vertices.len() as u32);
+                indices.push(vertex_index);
+                retval_vertices.push(vertex);
+            }
+            pb.inc(1);
+        }
+        let mesh = Mesh {
+            indices,
+            material: mesh.material_index as u16,
+            instances: Vec::new(),
+        };
+        retval_meshes.push(mesh);
+    }
+    pb.finish();
+    Ok((retval_vertices, retval_meshes))
+}
+
+fn convert_cameras(scene: &RussimpScene, mpb: &MultiProgress) -> Vec<Camera> {
+    let effort = std::cmp::min(scene.cameras.len(), 1);
+    let pb = mpb.add(ProgressBar::new(effort as u64).with_message("Converting cameras"));
+    let mut retval_cameras = Vec::with_capacity(effort);
+    for camera in &scene.cameras {
+        retval_cameras.push(Camera::Perspective(PerspectiveCam {
+            position: Point3::new(camera.position.x, camera.position.y, camera.position.z),
+            target: Point3::new(camera.look_at.x, camera.look_at.y, camera.look_at.z),
+            up: Vec3::new(camera.up.x, camera.up.y, camera.up.z),
+            fovx: camera.horizontal_fov,
+        }));
+        pb.inc(1);
+    }
+    if retval_cameras.is_empty() {
+        retval_cameras.push(Camera::Perspective(PerspectiveCam {
+            position: Point3::new(0.0, 0.0, 0.0),
+            target: Point3::new(0.0, 0.0, 100.0),
+            up: Vec3::new(0.0, 1.0, 0.0),
+            fovx: f32::to_radians(90.0),
+        }));
+        pb.inc(1);
+    }
+    pb.finish();
+    retval_cameras
+}
+
+fn convert_materials(
+    materials: &Vec<russimp::material::Material>,
+    mpb: &MultiProgress,
+    original_path: &str,
+) -> Result<(Library<Material>, Library<Texture>), std::io::Error> {
+    let effort = materials.len();
+    let pb =
+        mpb.add(ProgressBar::new(effort as u64).with_message("Converting materials and textures"));
+    let mut used_textures = HashMap::new();
     let mut retval_textures = Library::new();
     let mut retval_materials = Library::new();
-    let mut used_textures = HashMap::new();
-    for material in scene.materials {
+    for material in materials {
         let mut diffuse = None;
-        for (texture_type, textures) in material.textures {
+        for (texture_type, textures) in &material.textures {
             match texture_type {
                 russimp::texture::TextureType::Diffuse => {
                     let texture = textures.first().unwrap(); // support single textures only
@@ -117,6 +210,7 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<Scene, Box<
                     }
                     let id = *used_textures
                         .entry(texture_name)
+                        //TODO: better error handling
                         .or_insert_with_key(|name| {
                             retval_textures.insert(
                                 name,
@@ -140,70 +234,10 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<Scene, Box<
             &format!("Material#{}", retval_materials.len()),
             glaze_material,
         );
+        pb.inc(1);
     }
-    for mesh in scene.meshes {
-        let mut indices = Vec::with_capacity(mesh.faces.len() * 3);
-        if mesh.uv_components[0] < 2 {
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Unsupported UV components in mesh",
-            )));
-        }
-        for face in mesh.faces {
-            if face.0.len() != 3 {
-                return Err(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "Only triangles are supported",
-                )));
-            }
-            for index in face.0 {
-                let vv = mesh.vertices[index as usize];
-                let vn = mesh.normals[index as usize];
-                let vt = mesh.texture_coords[0].as_ref().unwrap()[index as usize];
-                let vertex = Vertex {
-                    vv: Vec3::new(vv.x, vv.y, vv.z),
-                    vn: Vec3::new(vn.x, vn.y, vn.z),
-                    vt: Vec2::new(vt.x, vt.y),
-                };
-                let vertex_index = *used_vert
-                    .entry(vertex_to_bytes(&vertex))
-                    .or_insert(retval_vertices.len() as u32);
-                indices.push(vertex_index);
-                retval_vertices.push(vertex);
-            }
-            pb.inc(1);
-        }
-        let mesh = Mesh {
-            indices,
-            material: mesh.material_index as u16,
-            instances: Vec::new(),
-        };
-        retval_meshes.push(mesh);
-    }
-    for camera in scene.cameras {
-        retval_cameras.push(Camera::Perspective(PerspectiveCam {
-            position: Point3::new(camera.position.x, camera.position.y, camera.position.z),
-            target: Point3::new(camera.look_at.x, camera.look_at.y, camera.look_at.z),
-            up: Vec3::new(camera.up.x, camera.up.y, camera.up.z),
-            fovx: camera.horizontal_fov,
-        }));
-    }
-    if retval_cameras.is_empty() {
-        retval_cameras.push(Camera::Perspective(PerspectiveCam {
-            position: Point3::new(0.0, 0.0, 0.0),
-            target: Point3::new(0.0, 0.0, 100.0),
-            up: Vec3::new(0.0, 1.0, 0.0),
-            fovx: f32::to_radians(90.0),
-        }));
-    }
-    pb.finish_and_clear();
-    Ok(Scene {
-        vertices: retval_vertices.into_iter().collect(),
-        meshes: retval_meshes,
-        cameras: retval_cameras,
-        textures: retval_textures,
-        materials: retval_materials,
-    })
+    pb.finish();
+    Ok((retval_materials, retval_textures))
 }
 
 fn write_output(scene: &Scene, version: ParserVersion, output: &str) -> Result<(), Box<dyn Error>> {
