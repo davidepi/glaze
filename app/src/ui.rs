@@ -1,7 +1,7 @@
-use glaze::{parse, RealtimeRenderer};
+use glaze::{parse, Camera, OrthographicCam, PerspectiveCam, RealtimeRenderer};
 use imgui::{
     CollapsingHeader, ColorEditFlags, ColorPicker, ComboBox, Condition, MenuItem, Selectable,
-    Slider, Ui,
+    SelectableFlags, Slider, Ui,
 };
 use nfd2::Response;
 use winit::window::Window;
@@ -89,6 +89,61 @@ fn window_render(
                     .build(ui)
                 {
                     renderer.set_clear_color(color);
+                }
+                ui.separator();
+                let (camera_name, disabled) = {
+                    let camera = renderer.camera_mut();
+                    let name = match camera {
+                        Some(Camera::Perspective(_)) => "Perspective",
+                        Some(Camera::Orthographic(_)) => "Orthographic",
+                        None => "None",
+                    };
+                    let disabled = if camera.is_some() {
+                        SelectableFlags::empty()
+                    } else {
+                        SelectableFlags::DISABLED
+                    };
+                    (name, disabled)
+                };
+                ui.text(format!("Current camera type: {}", camera_name));
+                ComboBox::new("Camera type")
+                    .preview_value(camera_name)
+                    .build(ui, || {
+                        if Selectable::new("Perspective").flags(disabled).build(ui) {
+                            let camera = renderer.camera_mut().unwrap();
+                            if let Camera::Perspective(_) = camera {
+                            } else {
+                                *camera = Camera::Perspective(PerspectiveCam {
+                                    position: camera.position(),
+                                    target: camera.target(),
+                                    up: camera.up(),
+                                    fovx: 90.0_f32.to_radians(),
+                                });
+                            }
+                        }
+                        if Selectable::new("Orthographic").flags(disabled).build(ui) {
+                            let camera = renderer.camera_mut().unwrap();
+                            if let Camera::Orthographic(_) = camera {
+                            } else {
+                                *camera = Camera::Orthographic(OrthographicCam {
+                                    position: camera.position(),
+                                    target: camera.target(),
+                                    up: camera.up(),
+                                    scale: 5.0,
+                                });
+                            }
+                        }
+                    });
+                match renderer.camera_mut() {
+                    Some(Camera::Perspective(cam)) => {
+                        let mut fovx = cam.fovx.to_degrees();
+                        Slider::new("Field of View", 1.0, 150.0).build(ui, &mut fovx);
+                        cam.fovx = fovx.to_radians();
+                    }
+                    Some(Camera::Orthographic(cam)) => {
+                        Slider::new("Scale", 1.0, 10.0).build(ui, &mut cam.scale);
+                    }
+                    _ => {}
                 }
             }
         });

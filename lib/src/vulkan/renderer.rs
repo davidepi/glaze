@@ -13,7 +13,7 @@ use super::sync::PresentSync;
 use crate::materials::{Pipeline, PipelineBuilder};
 use crate::{include_shader, Camera, Scene};
 use ash::vk;
-use cgmath::{Matrix4, Point3, SquareMatrix};
+use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
 use std::time::{Duration, Instant};
 use winit::window::Window;

@@ -29,6 +29,25 @@ pub enum Camera {
 }
 
 impl Camera {
+    pub fn position(&self) -> Point3<f32> {
+        match self {
+            Camera::Perspective(cam) => cam.position,
+            Camera::Orthographic(cam) => cam.position,
+        }
+    }
+    pub fn target(&self) -> Point3<f32> {
+        match self {
+            Camera::Perspective(cam) => cam.target,
+            Camera::Orthographic(cam) => cam.target,
+        }
+    }
+    pub fn up(&self) -> Vec3<f32> {
+        match self {
+            Camera::Perspective(cam) => cam.up,
+            Camera::Orthographic(cam) => cam.up,
+        }
+    }
+
     pub fn look_at_rh(&self) -> Matrix4<f32> {
         match self {
             Camera::Perspective(cam) => Matrix4::look_at_rh(cam.position, cam.target, cam.up),
