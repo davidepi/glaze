@@ -219,6 +219,8 @@ impl ImguiDrawer {
         }
         let mut vert_offset = 0;
         let mut idx_offset = 0;
+        let clip_offset = draw_data.display_pos;
+        let clip_scale = draw_data.framebuffer_scale;
         for draw_list in draw_data.draw_lists() {
             unsafe {
                 device.cmd_bind_vertex_buffers(
@@ -262,7 +264,23 @@ impl ImguiDrawer {
             for command in draw_list.commands() {
                 match command {
                     imgui::DrawCmd::Elements { count, cmd_params } => {
+                        let clip_rect = cmd_params.clip_rect;
+                        let clip_x = (clip_rect[0] - clip_offset[0]) * clip_scale[0];
+                        let clip_y = (clip_rect[1] - clip_offset[1]) * clip_scale[1];
+                        let clip_w = (clip_rect[2] - clip_offset[0]) * clip_scale[0] - clip_x;
+                        let clip_h = (clip_rect[3] - clip_offset[1]) * clip_scale[1] - clip_y;
+                        let scissors = [vk::Rect2D {
+                            offset: vk::Offset2D {
+                                x: clip_x as _,
+                                y: clip_y as _,
+                            },
+                            extent: vk::Extent2D {
+                                width: clip_w as _,
+                                height: clip_h as _,
+                            },
+                        }];
                         unsafe {
+                            device.cmd_set_scissor(cmd, 0, &scissors);
                             device.cmd_draw_indexed(
                                 cmd,
                                 count as u32,
@@ -326,6 +344,7 @@ fn build_imgui_pipeline(
         "main",
         vk::ShaderStageFlags::FRAGMENT,
     );
+    builder.dynamic_states = vec![vk::DynamicState::SCISSOR];
     builder.push_constants(std::mem::size_of::<ImguiPC>(), vk::ShaderStageFlags::VERTEX);
     builder.blending_settings = vec![vk::PipelineColorBlendAttachmentState {
         blend_enable: vk::TRUE,
