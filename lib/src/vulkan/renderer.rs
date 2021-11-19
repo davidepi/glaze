@@ -11,7 +11,7 @@ use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
 use crate::materials::{Pipeline, PipelineBuilder};
-use crate::{include_shader, Scene};
+use crate::{include_shader, Camera, Scene};
 use ash::vk;
 use cgmath::{Matrix4, Point3, SquareMatrix};
 use std::ptr;
@@ -204,12 +204,9 @@ impl RealtimeRenderer {
         self.stats.last_val
     }
 
-    pub fn camera_position(&mut self) -> Option<(&mut Point3<f32>, &mut Point3<f32>)> {
+    pub fn camera_mut(&mut self) -> Option<&mut Camera> {
         if let Some(scene) = &mut self.scene {
-            match &mut scene.current_cam {
-                crate::Camera::Perspective(cam) => Some((&mut cam.position, &mut cam.target)),
-                crate::Camera::Orthographic(cam) => Some((&mut cam.position, &mut cam.target)),
-            }
+            Some(&mut scene.current_cam)
         } else {
             None
         }

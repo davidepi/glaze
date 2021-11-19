@@ -1,4 +1,4 @@
-use cgmath::Vector3 as Vec3;
+use cgmath::{InnerSpace, Vector2 as Vec2};
 use glaze::RealtimeRenderer;
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use std::error::Error;
@@ -16,7 +16,7 @@ pub struct InteractiveView {
     platform: WinitPlatform,
     imgui: imgui::Context,
     mouse_pos: (f32, f32),
-    lmb_down: bool,
+    rmb_down: bool,
     mmb_down: bool,
     state: UiState,
 }
@@ -48,7 +48,7 @@ impl InteractiveView {
                 platform,
                 imgui,
                 mouse_pos: (0.0, 0.0),
-                lmb_down: false,
+                rmb_down: false,
                 mmb_down: false,
                 state,
             })
@@ -77,11 +77,11 @@ impl InteractiveView {
                     WindowEvent::KeyboardInput { input, .. } => handle_keyboard(input, self),
                     WindowEvent::CursorMoved { position, .. } => mouse_moved(position, self),
                     WindowEvent::MouseInput { state, button, .. } => {
-                        if button == MouseButton::Left {
+                        if button == MouseButton::Right {
                             if state == ElementState::Pressed {
-                                self.lmb_down = true;
+                                self.rmb_down = true;
                             } else {
-                                self.lmb_down = false;
+                                self.rmb_down = false;
                             }
                         } else if button == MouseButton::Middle {
                             if state == ElementState::Pressed {
@@ -137,17 +137,14 @@ fn handle_keyboard(input: KeyboardInput, view: &mut InteractiveView) {
 }
 
 fn camera_pos_strafe(view: &mut InteractiveView, magnitude: f32) {
-    if let Some((pos, target)) = view.renderer.camera_position() {
-        *pos += magnitude * Vec3::unit_x();
-        *target += magnitude * Vec3::unit_x();
+    if let Some(cam) = view.renderer.camera_mut() {
+        cam.strafe(magnitude);
     }
 }
 
 fn camera_pos_advance(view: &mut InteractiveView, magnitude: f32) {
-    if let Some((pos, target)) = view.renderer.camera_position() {
-        let delta = magnitude * Vec3::new(target.x, target.y, 1.0);
-        *pos += delta;
-        *target += delta;
+    if let Some(cam) = view.renderer.camera_mut() {
+        cam.advance(magnitude);
     }
 }
 
@@ -157,17 +154,14 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
     let delta = (x - old_x, y - old_y);
     view.mouse_pos = (x, y);
     // if lmb pressed, move camera
-    if view.lmb_down {
-        let pos = view.renderer.camera_position();
-        if let Some((_, target)) = pos {
-            // TODO: move this '-' into some sort of control settings
-            *target += Vec3::<f32>::new(delta.0, -delta.1, 0.0);
+    if view.rmb_down {
+        if let Some(cam) = view.renderer.camera_mut() {
+            cam.look_around(f32::to_radians(delta.0), f32::to_radians(delta.1));
         }
     }
     if view.mmb_down {
-        let pos = view.renderer.camera_position();
-        if let Some((pos, _)) = pos {
-            *pos += Vec3::<f32>::new(0.0, delta.1, 0.0);
+        if let Some(cam) = view.renderer.camera_mut() {
+            cam.elevate(-0.1 * delta.1);
         }
     }
 }

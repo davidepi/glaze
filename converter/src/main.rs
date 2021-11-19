@@ -67,7 +67,7 @@ fn preprocess_input(input: &str) -> Result<RussimpScene, Box<dyn Error>> {
         PostProcess::Triangulate,
         PostProcess::ValidateDataStructure,
         PostProcess::JoinIdenticalVertices,
-        PostProcess::GenenerateUVCoords,
+        PostProcess::GenerateUVCoords,
         PostProcess::GenerateNormals,
         PostProcess::OptimizeMeshes,
         PostProcess::OptimizeGraph,
