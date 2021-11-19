@@ -1,6 +1,6 @@
+#[cfg(feature = "vulkan")]
 use ash::vk;
 use cgmath::{Vector2 as Vec2, Vector3 as Vec3};
-use memoffset::offset_of;
 
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -11,6 +11,7 @@ pub struct Vertex {
 }
 
 impl Vertex {
+    #[cfg(feature = "vulkan")]
     pub const fn binding_descriptions() -> [vk::VertexInputBindingDescription; 1] {
         [vk::VertexInputBindingDescription {
             binding: 0,
@@ -19,7 +20,9 @@ impl Vertex {
         }]
     }
 
+    #[cfg(feature = "vulkan")]
     pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+        use memoffset::offset_of;
         [
             vk::VertexInputAttributeDescription {
                 location: 0,

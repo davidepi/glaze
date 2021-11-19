@@ -4,7 +4,7 @@ use super::cmd::CommandManager;
 use super::descriptor::{Descriptor, DescriptorSetCreator};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
-use crate::materials::Pipeline;
+use super::pipeline::Pipeline;
 use crate::{Camera, Material, Mesh, Scene, ShaderMat, Texture, Vertex};
 use ash::vk;
 use fnv::FnvHashMap;

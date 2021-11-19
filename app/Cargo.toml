@@ -7,7 +7,7 @@ publish = false
 license = "MIT"
 
 [dependencies]
-glaze = {path="../lib"}
+glaze = {path="../lib", features=["vulkan"]}
 winit = "0.25"
 env_logger = "0.9"
 log = "0.4"

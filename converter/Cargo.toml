@@ -10,7 +10,7 @@ name = "glaze-converter"
 path = "src/main.rs"
 
 [dependencies]
-glaze = {path = "../lib"}
+glaze = {path = "../lib", default-features=false}
 clap = "2.33"
 cgmath = "0.18"
 russimp = "1.0.1"
