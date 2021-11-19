@@ -4,15 +4,19 @@ use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderer::InternalStats;
+use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use crate::include_shader;
 use ash::vk;
 use cgmath::Vector2 as Vec2;
+use fnv::FnvHashMap;
 use gpu_allocator::MemoryLocation;
+use imgui::{DrawCmdParams, TextureId};
 use std::ptr;
 
 const DEFAULT_VERTEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawVert>() as u64;
 const DEFAULT_INDEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawIdx>() as u64;
+const FONT_ATLAS_TEXTURE_ID: TextureId = TextureId::new(usize::MAX);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -29,7 +33,8 @@ pub struct ImguiDrawer {
     font: AllocatedImage,
     pipeline: Pipeline,
     sampler: vk::Sampler,
-    descriptor: Descriptor,
+    font_descriptor: Descriptor,
+    tex_descs: FnvHashMap<u16, Descriptor>,
 }
 
 impl ImguiDrawer {
@@ -46,6 +51,8 @@ impl ImguiDrawer {
         let fonts_gpu_buf;
         {
             let mut fonts_ref = context.fonts();
+            // Outside the range of engine-assignable texture ids. So if it is not in the map,
+            // it is definetly the texture atlas.
             let fonts = fonts_ref.build_rgba32_texture();
             let fonts_size = (fonts.width * fonts.height * 4) as u64;
             let fonts_extent = vk::Extent2D {
@@ -116,7 +123,7 @@ impl ImguiDrawer {
             image_view: fonts_gpu_buf.image_view,
             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         };
-        let descriptor = descriptor_creator
+        let font_descriptor = descriptor_creator
             .new_set()
             .bind_image(
                 texture_binding,
@@ -124,7 +131,10 @@ impl ImguiDrawer {
                 vk::ShaderStageFlags::FRAGMENT,
             )
             .build();
-        let pipeline = build_imgui_pipeline(device.logical(), &swapchain, &descriptor);
+        // assign tex_id AFTER building the font atlas or it gets reset
+        let mut fonts = context.fonts();
+        fonts.tex_id = FONT_ATLAS_TEXTURE_ID;
+        let pipeline = build_imgui_pipeline(device.logical(), &swapchain, &font_descriptor);
         Self {
             vertex_size,
             vertex_buf,
@@ -133,12 +143,13 @@ impl ImguiDrawer {
             font: fonts_gpu_buf,
             pipeline,
             sampler,
-            descriptor,
+            font_descriptor,
+            tex_descs: FnvHashMap::default(),
         }
     }
 
     pub fn update(&mut self, device: &ash::Device, swapchain: &Swapchain) {
-        let mut pipeline = build_imgui_pipeline(device, swapchain, &self.descriptor);
+        let mut pipeline = build_imgui_pipeline(device, swapchain, &self.font_descriptor);
         std::mem::swap(&mut self.pipeline, &mut pipeline);
         pipeline.destroy(device);
     }
@@ -157,6 +168,8 @@ impl ImguiDrawer {
         cmd: vk::CommandBuffer,
         draw_data: &imgui::DrawData,
         mm: &mut MemoryManager,
+        dm: &mut DescriptorSetCreator,
+        scene: Option<&VulkanScene>,
         stats: &mut InternalStats,
     ) {
         // reallocate vertex buffer if not enough
@@ -213,10 +226,11 @@ impl ImguiDrawer {
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.layout,
                 0,
-                &[self.descriptor.set],
+                &[self.font_descriptor.set],
                 &[],
             );
         }
+        let mut bound_texture = FONT_ATLAS_TEXTURE_ID;
         let mut vert_offset = 0;
         let mut idx_offset = 0;
         let clip_offset = draw_data.display_pos;
@@ -263,8 +277,16 @@ impl ImguiDrawer {
             // then draw everything in that list
             for command in draw_list.commands() {
                 match command {
-                    imgui::DrawCmd::Elements { count, cmd_params } => {
-                        let clip_rect = cmd_params.clip_rect;
+                    imgui::DrawCmd::Elements {
+                        count,
+                        cmd_params:
+                            DrawCmdParams {
+                                clip_rect,
+                                texture_id,
+                                idx_offset,
+                                vtx_offset,
+                            },
+                    } => {
                         let clip_x = (clip_rect[0] - clip_offset[0]) * clip_scale[0];
                         let clip_y = (clip_rect[1] - clip_offset[1]) * clip_scale[1];
                         let clip_w = (clip_rect[2] - clip_offset[0]) * clip_scale[0] - clip_x;
@@ -279,14 +301,62 @@ impl ImguiDrawer {
                                 height: clip_h as _,
                             },
                         }];
+                        // change pipeline if needed + create descriptor for texture if needed
+                        if texture_id != bound_texture {
+                            if texture_id == FONT_ATLAS_TEXTURE_ID {
+                                unsafe {
+                                    device.cmd_bind_descriptor_sets(
+                                        cmd,
+                                        vk::PipelineBindPoint::GRAPHICS,
+                                        self.pipeline.layout,
+                                        0,
+                                        &[self.font_descriptor.set],
+                                        &[],
+                                    );
+                                }
+                            } else if let Some(scene) = scene {
+                                // texture_id != FONT_ATLAS_TEXTURE_ID implicitly assumed
+                                let tid_u16 = texture_id.id() as u16;
+                                let descriptor =
+                                    self.tex_descs.entry(tid_u16).or_insert_with(|| {
+                                        // this should never fail unless I render textures outside engine
+                                        let texture = scene.textures.get(&tid_u16).unwrap();
+                                        let info = vk::DescriptorImageInfo {
+                                            sampler: self.sampler,
+                                            image_view: texture.image_view,
+                                            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                                        };
+                                        dm.new_set()
+                                            .bind_image(
+                                                info,
+                                                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                                                vk::ShaderStageFlags::FRAGMENT,
+                                            )
+                                            .build()
+                                    });
+                                unsafe {
+                                    device.cmd_bind_descriptor_sets(
+                                        cmd,
+                                        vk::PipelineBindPoint::GRAPHICS,
+                                        self.pipeline.layout,
+                                        0,
+                                        &[descriptor.set],
+                                        &[],
+                                    );
+                                }
+                            } else {
+                                panic!("Requestest to bound non-font texture but no scene loaded");
+                            }
+                            bound_texture = texture_id;
+                        }
                         unsafe {
                             device.cmd_set_scissor(cmd, 0, &scissors);
                             device.cmd_draw_indexed(
                                 cmd,
                                 count as u32,
                                 1,
-                                cmd_params.idx_offset as u32,
-                                cmd_params.vtx_offset as i32,
+                                idx_offset as u32,
+                                vtx_offset as i32,
                                 0,
                             );
                             stats.done_draw_call();

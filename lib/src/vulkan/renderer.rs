@@ -204,6 +204,10 @@ impl RealtimeRenderer {
         self.stats.last_val
     }
 
+    pub fn scene(&self) -> Option<&VulkanScene> {
+        self.scene.as_ref()
+    }
+
     pub fn camera_mut(&mut self) -> Option<&mut Camera> {
         if let Some(scene) = &mut self.scene {
             Some(&mut scene.current_cam)
@@ -351,8 +355,15 @@ impl RealtimeRenderer {
                 // tried doing it on its own attachment but results in blending problems
                 if let Some(dd) = imgui_data {
                     if dd.total_vtx_count > 0 {
-                        self.imgui_renderer
-                            .draw(device, cmd, dd, &mut self.mm, &mut self.stats);
+                        self.imgui_renderer.draw(
+                            device,
+                            cmd,
+                            dd,
+                            &mut self.mm,
+                            &mut self.descriptor_creator,
+                            self.scene.as_ref(),
+                            &mut self.stats,
+                        );
                     }
                 }
                 acquired.renderpass.end(device, cmd);
