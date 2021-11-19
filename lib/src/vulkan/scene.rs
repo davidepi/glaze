@@ -5,6 +5,7 @@ use super::descriptor::{Descriptor, DescriptorSetCreator};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 use super::pipeline::Pipeline;
+use crate::materials::TextureInfo;
 use crate::{Camera, Material, Mesh, Scene, ShaderMat, Texture, Vertex};
 use ash::vk;
 use fnv::FnvHashMap;
@@ -19,6 +20,7 @@ pub struct VulkanScene {
     pub materials: FnvHashMap<u16, (Material, Descriptor)>,
     pub pipelines: FnvHashMap<u8, Pipeline>,
     pub textures: FnvHashMap<u16, AllocatedImage>,
+    pub texinfo: FnvHashMap<u16, TextureInfo>,
 }
 
 pub struct VulkanMesh {
@@ -38,11 +40,8 @@ impl VulkanScene {
         let vertex_buffer = load_vertices_to_gpu(device, mm, cmdm, &scene.vertices[..]);
         let (meshes, index_buffer) = load_indices_to_gpu(device, mm, cmdm, &scene.meshes[..]);
         let sampler = create_sampler(device);
-        let textures = scene
-            .textures
-            .iter()
-            .map(|(id, _, tex)| (*id, load_single_texture(device, mm, cmdm, tex)))
-            .collect();
+        let (textures, texinfo) =
+            load_all_textures(device, scene.textures.iter().as_slice(), mm, cmdm);
         let materials = load_materials_to_gpu(
             &textures,
             sampler,
@@ -60,6 +59,7 @@ impl VulkanScene {
             materials,
             pipelines,
             textures,
+            texinfo,
         }
     }
 
@@ -260,10 +260,11 @@ fn load_materials_to_gpu(
 
 fn load_single_texture<T: Device>(
     device: &T,
+    name: String,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
     texture: &Texture,
-) -> AllocatedImage {
+) -> (AllocatedImage, TextureInfo) {
     let size = (texture.width() * texture.height() * 4) as u64;
     let extent = vk::Extent2D {
         width: texture.width(),
@@ -372,5 +373,31 @@ fn load_single_texture<T: Device>(
     let cmd = cmdm.get_cmd_buffer();
     device.immediate_execute(cmd, command);
     mm.free_buffer(buffer);
-    image
+    // need to save this because I will trash the CPU buffer
+    let info = TextureInfo {
+        name,
+        width: texture.width(),
+        height: texture.height(),
+        channels: image::ColorType::Rgba8,
+    };
+    (image, info)
+}
+
+fn load_all_textures<T: Device>(
+    device: &T,
+    textures: &[(u16, String, Texture)],
+    mm: &mut MemoryManager,
+    cmdm: &mut CommandManager,
+) -> (
+    FnvHashMap<u16, AllocatedImage>,
+    FnvHashMap<u16, TextureInfo>,
+) {
+    let mut datamap = FnvHashMap::default();
+    let mut infomap = FnvHashMap::default();
+    for (id, name, texture) in textures {
+        let (image, info) = load_single_texture(device, name.clone(), mm, cmdm, texture);
+        datamap.insert(*id, image);
+        infomap.insert(*id, info);
+    }
+    (datamap, infomap)
 }

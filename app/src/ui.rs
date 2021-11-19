@@ -165,14 +165,18 @@ fn window_render(
 fn window_textures(
     ui: &mut Ui,
     state: &mut UiState,
-    window: &mut Window,
+    _: &mut Window,
     renderer: &mut RealtimeRenderer,
 ) {
     let mut closed = &mut state.textures_window;
     let selected = &mut state.textures_selected;
-    let preview = match selected {
-        Some(id) => format!("Texture {}", id),
-        None => format!(""),
+    let scene = renderer.scene();
+    let preview = match (&selected, scene) {
+        (Some(id), Some(scene)) => {
+            let info = scene.texinfo.get(id).unwrap();
+            &info.name
+        }
+        _ => "",
     };
     imgui::Window::new("Textures")
         .opened(&mut closed)
@@ -182,18 +186,32 @@ fn window_textures(
             ComboBox::new("Texture name")
                 .preview_value(preview)
                 .build(ui, || {
-                    if let Some(scene) = renderer.scene() {
+                    if let Some(scene) = scene {
                         for (id, _) in &scene.textures {
-                            if Selectable::new(format!("Texture {}", id)).build(ui) {
+                            let name = &scene.texinfo.get(id).unwrap().name;
+                            if Selectable::new(name).build(ui) {
                                 *selected = Some(*id);
                             }
                         }
                     }
                 });
             if let Some(selected) = selected {
+                ui.separator();
+                let info = scene.unwrap().texinfo.get(selected).unwrap();
+                ui.text(format!("Resolution {}x{}", info.width, info.height));
+                ui.text(format!("Format {}", channels_to_string(info.channels)));
                 Image::new(TextureId::new(*selected as usize), [256.0, 256.0]).build(ui);
             }
         });
+}
+
+fn channels_to_string(colortype: image::ColorType) -> &'static str {
+    match colortype {
+        image::ColorType::L8 => "L8",
+        image::ColorType::Rgb8 => "RGB8",
+        image::ColorType::Rgba8 => "RGBA8",
+        _ => "Unknown",
+    }
 }
 
 fn window_stats(
