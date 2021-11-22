@@ -1,4 +1,4 @@
-use glaze::{parse, Camera, OrthographicCam, PerspectiveCam, RealtimeRenderer};
+use glaze::{parse, Camera, OrthographicCam, PerspectiveCam, RealtimeRenderer, TextureFormat};
 use imgui::{
     CollapsingHeader, ColorEditFlags, ColorPicker, ComboBox, Condition, Image, MenuItem,
     Selectable, SelectableFlags, Slider, TextureId, Ui,
@@ -173,8 +173,8 @@ fn window_textures(
     let scene = renderer.scene();
     let preview = match (&selected, scene) {
         (Some(id), Some(scene)) => {
-            let info = scene.texinfo.get(id).unwrap();
-            &info.name
+            let texture = scene.textures.get(id).unwrap();
+            &texture.info.name
         }
         _ => "",
     };
@@ -188,7 +188,7 @@ fn window_textures(
                 .build(ui, || {
                     if let Some(scene) = scene {
                         for (id, _) in &scene.textures {
-                            let name = &scene.texinfo.get(id).unwrap().name;
+                            let name = &scene.textures.get(id).unwrap().info.name;
                             if Selectable::new(name).build(ui) {
                                 *selected = Some(*id);
                             }
@@ -197,20 +197,19 @@ fn window_textures(
                 });
             if let Some(selected) = selected {
                 ui.separator();
-                let info = scene.unwrap().texinfo.get(selected).unwrap();
+                let info = &scene.unwrap().textures.get(selected).unwrap().info;
                 ui.text(format!("Resolution {}x{}", info.width, info.height));
-                ui.text(format!("Format {}", channels_to_string(info.channels)));
+                ui.text(format!("Format {}", channels_to_string(info.format)));
                 Image::new(TextureId::new(*selected as usize), [256.0, 256.0]).build(ui);
             }
         });
 }
 
-fn channels_to_string(colortype: image::ColorType) -> &'static str {
+fn channels_to_string(colortype: TextureFormat) -> &'static str {
     match colortype {
-        image::ColorType::L8 => "L8",
-        image::ColorType::Rgb8 => "RGB8",
-        image::ColorType::Rgba8 => "RGBA8",
-        _ => "Unknown",
+        TextureFormat::Gray => "Grayscale",
+        TextureFormat::Rgb => "RGB",
+        TextureFormat::Rgba => "RGBA",
     }
 }
 
@@ -245,7 +244,7 @@ fn open_scene(renderer: &mut RealtimeRenderer, state: &mut UiState) {
     match dialog {
         Ok(Response::Okay(path)) => match parse(path) {
             Ok(parsed) => {
-                renderer.change_scene(parsed.scene());
+                renderer.change_scene(parsed);
                 state.change_scene();
             }
             Err(_) => log::error!("Failed to parse scene file"),

@@ -1,4 +1,3 @@
-use cgmath::{InnerSpace, Vector2 as Vec2};
 use glaze::RealtimeRenderer;
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use std::error::Error;

@@ -2,8 +2,8 @@ use cgmath::{Point3, Vector2 as Vec2, Vector3 as Vec3};
 use clap::{App, Arg};
 use console::style;
 use glaze::{
-    serialize, Camera, Library, Material, Mesh, ParserVersion, PerspectiveCam, Scene, ShaderMat,
-    Texture, Vertex,
+    serialize, Camera, Material, Mesh, ParserVersion, PerspectiveCam, ShaderMat, Texture,
+    TextureFormat, TextureInfo, Vertex,
 };
 use image::io::Reader as ImageReader;
 use indicatif::{MultiProgress, ProgressBar};
@@ -12,6 +12,14 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::path::PathBuf;
 use std::str::FromStr;
+
+struct TempScene {
+    vertices: Vec<Vertex>,
+    meshes: Vec<Mesh>,
+    cameras: Vec<Camera>,
+    textures: Vec<(u16, Texture)>,
+    materials: Vec<(u16, Material)>,
+}
 
 fn main() {
     let supported_versions = [ParserVersion::V1]
@@ -48,7 +56,7 @@ fn main() {
         println!("{} Converting scene...", style("[2/3]").bold().dim());
         if let Ok(scene) = convert_input(scene, input) {
             println!("{} Saving file...", style("[3/3]").bold().dim());
-            if write_output(&scene, version, output).is_ok() {
+            if write_output(scene, version, output).is_ok() {
                 println!("{}", style("Done!").bold().green());
             } else {
                 eprint!("Failed to save file");
@@ -92,12 +100,12 @@ fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
         .collect()
 }
 
-fn convert_input(scene: RussimpScene, original_path: &str) -> Result<Scene, Box<dyn Error>> {
+fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, Box<dyn Error>> {
     let mpb = MultiProgress::new();
     let cameras = convert_cameras(&scene, &mpb);
     let (materials, textures) = convert_materials(&scene.materials, &mpb, original_path)?;
     let (vertices, meshes) = convert_meshes(&scene.meshes, &mpb)?;
-    Ok(Scene {
+    Ok(TempScene {
         vertices,
         meshes,
         cameras,
@@ -188,13 +196,13 @@ fn convert_materials(
     materials: &Vec<russimp::material::Material>,
     mpb: &MultiProgress,
     original_path: &str,
-) -> Result<(Library<Material>, Library<Texture>), std::io::Error> {
+) -> Result<(Vec<(u16, Material)>, Vec<(u16, Texture)>), std::io::Error> {
     let effort = materials.len();
     let pb =
         mpb.add(ProgressBar::new(effort as u64).with_message("Converting materials and textures"));
     let mut used_textures = HashMap::new();
-    let mut retval_textures = Library::new();
-    let mut retval_materials = Library::new();
+    let mut retval_textures = Vec::new();
+    let mut retval_materials = Vec::new();
     for material in materials {
         let mut diffuse = None;
         for (texture_type, textures) in &material.textures {
@@ -202,46 +210,73 @@ fn convert_materials(
                 russimp::texture::TextureType::Diffuse => {
                     let texture = textures.first().unwrap(); // support single textures only
                                                              // replaces \ with / and hopes UNIX path do not use strange names
-                    let texture_name = texture.path.clone().replace("\\", "/");
+                    let tex_name = texture.path.clone().replace("\\", "/");
                     //TODO: add support for embedded textures
-                    let mut path = PathBuf::from(&texture_name);
+                    let mut path = PathBuf::from(&tex_name);
                     if path.is_relative() {
                         path = PathBuf::from(original_path).parent().unwrap().join(path);
                     }
-                    let id = *used_textures
-                        .entry(texture_name)
-                        //TODO: better error handling
-                        .or_insert_with_key(|name| {
-                            retval_textures.insert(
-                                name,
-                                ImageReader::open(path)
-                                    .expect(&format!("Failed to find image {}", name))
-                                    .decode()
-                                    .expect(&format!("Incompatible image {}", name))
-                                    .to_rgba8(),
-                            )
-                        });
+                    let id =
+                        convert_texture(&tex_name, path, &mut used_textures, &mut retval_textures);
                     diffuse = Some(id);
                 }
                 _ => {} //unsupported, do nothing
             }
         }
         let glaze_material = Material {
+            name: format!("Material#{}", retval_materials.len()),
             shader_id: ShaderMat::Test.id(),
             diffuse,
         };
-        retval_materials.insert(
-            &format!("Material#{}", retval_materials.len()),
-            glaze_material,
-        );
+        let mat_id = retval_materials.len() as u16;
+        retval_materials.push((mat_id, glaze_material));
         pb.inc(1);
     }
     pb.finish();
     Ok((retval_materials, retval_textures))
 }
 
-fn write_output(scene: &Scene, version: ParserVersion, output: &str) -> Result<(), Box<dyn Error>> {
-    Ok(serialize(output, version, scene)?)
+fn convert_texture(
+    name: &str,
+    path: PathBuf,
+    used: &mut HashMap<&str, u16>,
+    ret: &mut Vec<(u16, Texture)>,
+) -> u16 {
+    if let Some(id) = used.get(name) {
+        *id
+    } else {
+        let data = ImageReader::open(path)
+            .expect(&format!("Failed to find image {}", name))
+            .decode()
+            .expect(&format!("Incompatible image {}", name))
+            .to_rgba8();
+        let info = TextureInfo {
+            name: name.to_string(),
+            width: data.width() as u16,
+            height: data.height() as u16,
+            format: TextureFormat::Rgba,
+        };
+        let texture = Texture::new_rgba(info, data);
+        let id = ret.len() as u16;
+        ret.push((id, texture));
+        id
+    }
+}
+
+fn write_output(
+    scene: TempScene,
+    version: ParserVersion,
+    output: &str,
+) -> Result<(), Box<dyn Error>> {
+    Ok(serialize(
+        output,
+        version,
+        &scene.vertices,
+        &scene.meshes,
+        &scene.cameras,
+        &scene.textures,
+        &scene.materials,
+    )?)
 }
 
 #[cfg(test)]
@@ -262,15 +297,24 @@ mod tests {
         let scene = super::convert_input(scene, path.to_str().unwrap()).unwrap();
         let dir = tempdir()?;
         let file = dir.path().join("serializer.bin");
-        assert!(serialize(&file, glaze::ParserVersion::V1, &scene).is_ok());
+        assert!(serialize(
+            &file,
+            glaze::ParserVersion::V1,
+            &scene.vertices,
+            &scene.meshes,
+            &scene.cameras,
+            &scene.textures,
+            &scene.materials
+        )
+        .is_ok());
         let parsed = parse(&file);
         assert!(parsed.is_ok());
-        if let Ok(parsed) = parsed {
-            assert_eq!(parsed.meshes().len(), 1);
-            assert_eq!(parsed.cameras().len(), 1);
-            assert_eq!(parsed.materials().len(), 1);
-            assert_eq!(parsed.textures().len(), 1);
-            assert_eq!(parsed.vertices().len(), 36);
+        if let Ok(mut parsed) = parsed {
+            assert_eq!(parsed.meshes()?.len(), 1);
+            assert_eq!(parsed.cameras()?.len(), 1);
+            assert_eq!(parsed.materials()?.len(), 1);
+            assert_eq!(parsed.textures()?.len(), 1);
+            assert_eq!(parsed.vertices()?.len(), 36);
         } else {
             panic!("Failed to parse back scene")
         }

@@ -266,7 +266,7 @@ fn load_texture_to_gpu<T: Device>(
     texture: Texture,
 ) -> TextureLoaded {
     let (width, height) = texture.dimensions();
-    let size = (width * height * 4) as u64;
+    let size = (width as u32 * height as u32 * 4) as u64;
     let extent = vk::Extent2D {
         width: width as u32,
         height: height as u32,
