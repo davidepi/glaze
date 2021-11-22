@@ -134,7 +134,7 @@ impl ImguiDrawer {
         // assign tex_id AFTER building the font atlas or it gets reset
         let mut fonts = context.fonts();
         fonts.tex_id = FONT_ATLAS_TEXTURE_ID;
-        let pipeline = build_imgui_pipeline(device.logical(), &swapchain, &font_descriptor);
+        let pipeline = build_imgui_pipeline(device.logical(), swapchain, &font_descriptor);
         Self {
             vertex_size,
             vertex_buf,
@@ -323,7 +323,7 @@ impl ImguiDrawer {
                                         let texture = scene.textures.get(&tid_u16).unwrap();
                                         let info = vk::DescriptorImageInfo {
                                             sampler: self.sampler,
-                                            image_view: texture.image_view,
+                                            image_view: texture.image.image_view,
                                             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                                         };
                                         dm.new_set()

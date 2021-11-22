@@ -11,7 +11,7 @@ use super::renderpass::RenderPass;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
-use crate::{include_shader, Camera, Scene};
+use crate::{include_shader, Camera, ReadParsed};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
@@ -70,7 +70,7 @@ impl RealtimeRenderer {
         window_height: u32,
         render_scale: f32,
     ) -> Self {
-        let mut instance = PresentInstance::new(window);
+        let instance = PresentInstance::new(window);
         let descriptor_allocator =
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
         let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
@@ -86,7 +86,7 @@ impl RealtimeRenderer {
             instance.device().logical().clone(),
             instance.present_device().graphic_index(),
         );
-        let swapchain = Swapchain::create(&mut instance, window_width, window_height);
+        let swapchain = Swapchain::create(&instance, window_width, window_height);
         let render_size = vk::Extent2D {
             width: (window_width as f32 * render_scale) as u32,
             height: (window_height as f32 * render_scale) as u32,
@@ -225,7 +225,7 @@ impl RealtimeRenderer {
         self.swapchain
             .recreate(&self.instance, window_width, window_height);
         self.imgui_renderer
-            .update(&self.instance.device().logical(), &self.swapchain);
+            .update(self.instance.device().logical(), &self.swapchain);
         let render_size = vk::Extent2D {
             width: (window_width as f32 * scale) as u32,
             height: (window_height as f32 * scale) as u32,
@@ -239,7 +239,7 @@ impl RealtimeRenderer {
         );
         forward_pass.clear_color[0].color.float32 = self.clear_color;
         std::mem::swap(&mut self.forward_pass, &mut forward_pass);
-        forward_pass.destroy(&self.instance.device().logical(), &mut self.mm);
+        forward_pass.destroy(self.instance.device().logical(), &mut self.mm);
         let mut copy_pipeline = create_copy_pipeline(
             self.instance.device().logical(),
             self.swapchain.extent(),
@@ -247,7 +247,7 @@ impl RealtimeRenderer {
             &[self.forward_pass.copy_descriptor.layout],
         );
         std::mem::swap(&mut self.copy_pipeline, &mut copy_pipeline);
-        copy_pipeline.destroy(&self.instance.device().logical());
+        copy_pipeline.destroy(self.instance.device().logical());
         if let Some(scene) = &mut self.scene {
             scene.init_pipelines(
                 render_size,
@@ -258,31 +258,34 @@ impl RealtimeRenderer {
         }
     }
 
-    pub fn change_scene(&mut self, scene: Scene) {
+    pub fn change_scene(&mut self, parsed: Box<dyn ReadParsed>) {
         self.wait_idle();
         if let Some(mut scene) = self.scene.take() {
             scene.deinit_pipelines(self.instance.device().logical());
             scene.unload(self.instance.device(), &mut self.mm);
         }
-        let mut new = VulkanScene::load(
+        if let Ok(mut new) = VulkanScene::load(
             self.instance.device(),
             &mut self.mm,
             &mut self.cmdm,
-            scene,
+            parsed,
             &mut self.descriptor_creator,
-        );
-        let render_size = vk::Extent2D {
-            width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
-            height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
-        };
-        new.init_pipelines(
-            render_size,
-            self.instance.device().logical(),
-            self.forward_pass.renderpass,
-            self.frame_data[0].descriptor.layout,
-        );
-        self.scene = Some(new);
-        self.start_time = Instant::now();
+        ) {
+            let render_size = vk::Extent2D {
+                width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
+                height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
+            };
+            new.init_pipelines(
+                render_size,
+                self.instance.device().logical(),
+                self.forward_pass.renderpass,
+                self.frame_data[0].descriptor.layout,
+            );
+            self.scene = Some(new);
+            self.start_time = Instant::now();
+        } else {
+            log::error!("Failed to load scene");
+        }
     }
 
     pub fn destroy(mut self) {

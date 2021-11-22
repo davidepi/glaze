@@ -3,10 +3,10 @@ use std::ptr;
 use super::cmd::CommandManager;
 use super::descriptor::{Descriptor, DescriptorSetCreator};
 use super::device::Device;
-use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
+use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::Pipeline;
-use crate::materials::TextureInfo;
-use crate::{Camera, Material, Mesh, Scene, ShaderMat, Texture, Vertex};
+use crate::materials::{TextureFormat, TextureLoaded};
+use crate::{Camera, Material, Mesh, ReadParsed, ShaderMat, Texture, Vertex};
 use ash::vk;
 use fnv::FnvHashMap;
 use gpu_allocator::MemoryLocation;
@@ -19,8 +19,7 @@ pub struct VulkanScene {
     pub sampler: vk::Sampler,
     pub materials: FnvHashMap<u16, (Material, Descriptor)>,
     pub pipelines: FnvHashMap<u8, Pipeline>,
-    pub textures: FnvHashMap<u16, AllocatedImage>,
-    pub texinfo: FnvHashMap<u16, TextureInfo>,
+    pub textures: FnvHashMap<u16, TextureLoaded>,
 }
 
 pub struct VulkanMesh {
@@ -34,23 +33,26 @@ impl VulkanScene {
         device: &T,
         mm: &mut MemoryManager,
         cmdm: &mut CommandManager,
-        scene: Scene,
+        mut scene: Box<dyn ReadParsed>,
         descriptor_creator: &mut DescriptorSetCreator,
-    ) -> Self {
-        let vertex_buffer = load_vertices_to_gpu(device, mm, cmdm, &scene.vertices[..]);
-        let (meshes, index_buffer) = load_indices_to_gpu(device, mm, cmdm, &scene.meshes[..]);
+    ) -> Result<Self, std::io::Error> {
+        let vertex_buffer = load_vertices_to_gpu(device, mm, cmdm, &scene.vertices()?);
+        let (meshes, index_buffer) = load_indices_to_gpu(device, mm, cmdm, &scene.meshes()?);
         let sampler = create_sampler(device);
-        let (textures, texinfo) =
-            load_all_textures(device, scene.textures.iter().as_slice(), mm, cmdm);
+        let textures = scene
+            .textures()?
+            .into_iter()
+            .map(|(id, tex)| (id, load_texture_to_gpu(device, mm, cmdm, tex)))
+            .collect();
         let materials = load_materials_to_gpu(
             &textures,
             sampler,
-            scene.materials.iter().as_slice(),
+            scene.materials()?.into_iter().as_slice(),
             descriptor_creator,
         );
-        let current_cam = scene.cameras[0].clone(); // parser automatically adds a default cam
+        let current_cam = scene.cameras()?[0].clone(); // parser automatically adds a default cam
         let pipelines = FnvHashMap::default();
-        VulkanScene {
+        Ok(VulkanScene {
             current_cam,
             vertex_buffer,
             index_buffer,
@@ -59,8 +61,7 @@ impl VulkanScene {
             materials,
             pipelines,
             textures,
-            texinfo,
-        }
+        })
     }
 
     pub fn init_pipelines(
@@ -96,7 +97,7 @@ impl VulkanScene {
     pub fn unload<T: Device>(self, device: &T, mm: &mut MemoryManager) {
         self.textures
             .into_iter()
-            .for_each(|(_, tex)| mm.free_image(tex));
+            .for_each(|(_, tex)| mm.free_image(tex.image));
         unsafe { device.logical().destroy_sampler(self.sampler, None) };
         mm.free_buffer(self.vertex_buffer);
         mm.free_buffer(self.index_buffer);
@@ -231,18 +232,18 @@ fn load_indices_to_gpu<T: Device>(
 }
 
 fn load_materials_to_gpu(
-    textures: &FnvHashMap<u16, AllocatedImage>,
+    textures: &FnvHashMap<u16, TextureLoaded>,
     sampler: vk::Sampler,
-    materials: &[(u16, String, Material)],
+    materials: &[(u16, Material)],
     descriptor_creator: &mut DescriptorSetCreator,
 ) -> FnvHashMap<u16, (Material, Descriptor)> {
     let mut retval = FnvHashMap::with_capacity_and_hasher(materials.len(), Default::default());
-    for (id, _, mat) in materials {
+    for (id, mat) in materials {
         let diffuse_id = mat.diffuse.unwrap_or(0); // TODO: set default texture
         let diffuse = textures.get(&diffuse_id).expect("Failed to find texture"); //TODO: add default texture
         let diffuse_image_info = vk::DescriptorImageInfo {
             sampler,
-            image_view: diffuse.image_view,
+            image_view: diffuse.image.image_view,
             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         };
         let descriptor = descriptor_creator
@@ -258,17 +259,22 @@ fn load_materials_to_gpu(
     retval
 }
 
-fn load_single_texture<T: Device>(
+fn load_texture_to_gpu<T: Device>(
     device: &T,
-    name: String,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
-    texture: &Texture,
-) -> (AllocatedImage, TextureInfo) {
-    let size = (texture.width() * texture.height() * 4) as u64;
+    texture: Texture,
+) -> TextureLoaded {
+    let (width, height) = texture.dimensions();
+    let size = (width * height * 4) as u64;
     let extent = vk::Extent2D {
-        width: texture.width(),
-        height: texture.height(),
+        width: width as u32,
+        height: height as u32,
+    };
+    let vkformat = match texture.format() {
+        TextureFormat::Gray => vk::Format::R8_UNORM,
+        TextureFormat::Rgb => vk::Format::R8G8B8_SRGB,
+        TextureFormat::Rgba => vk::Format::R8G8B8A8_SRGB,
     };
     let buffer = mm.create_buffer(
         "TextureBuffer",
@@ -278,7 +284,7 @@ fn load_single_texture<T: Device>(
     );
     let image = mm.create_image_gpu(
         "Texture Image",
-        vk::Format::R8G8B8A8_SRGB,
+        vkformat,
         extent,
         vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
         vk::ImageAspectFlags::COLOR,
@@ -290,7 +296,7 @@ fn load_single_texture<T: Device>(
         .cast()
         .as_ptr();
     unsafe {
-        std::ptr::copy_nonoverlapping(texture.as_ptr(), mapped, size as usize);
+        std::ptr::copy_nonoverlapping(texture.ptr(), mapped, size as usize);
     }
     let subresource_range = vk::ImageSubresourceRange {
         aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -336,8 +342,8 @@ fn load_single_texture<T: Device>(
         image_subresource,
         image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
         image_extent: vk::Extent3D {
-            width: texture.width(),
-            height: texture.height(),
+            width: width as u32,
+            height: height as u32,
             depth: 1,
         },
     };
@@ -373,31 +379,8 @@ fn load_single_texture<T: Device>(
     let cmd = cmdm.get_cmd_buffer();
     device.immediate_execute(cmd, command);
     mm.free_buffer(buffer);
-    // need to save this because I will trash the CPU buffer
-    let info = TextureInfo {
-        name,
-        width: texture.width(),
-        height: texture.height(),
-        channels: image::ColorType::Rgba8,
-    };
-    (image, info)
-}
-
-fn load_all_textures<T: Device>(
-    device: &T,
-    textures: &[(u16, String, Texture)],
-    mm: &mut MemoryManager,
-    cmdm: &mut CommandManager,
-) -> (
-    FnvHashMap<u16, AllocatedImage>,
-    FnvHashMap<u16, TextureInfo>,
-) {
-    let mut datamap = FnvHashMap::default();
-    let mut infomap = FnvHashMap::default();
-    for (id, name, texture) in textures {
-        let (image, info) = load_single_texture(device, name.clone(), mm, cmdm, texture);
-        datamap.insert(*id, image);
-        infomap.insert(*id, info);
+    TextureLoaded {
+        info: texture.to_info(),
+        image,
     }
-    (datamap, infomap)
 }

@@ -14,5 +14,8 @@ mod surface;
 mod swapchain;
 mod sync;
 
-pub(crate) use self::pipeline::{Pipeline, PipelineBuilder};
+// used in the material module
+pub(crate) use self::pipeline::PipelineBuilder;
+// used in the texture module
+pub(crate) use self::memory::AllocatedImage;
 pub use self::renderer::RealtimeRenderer;

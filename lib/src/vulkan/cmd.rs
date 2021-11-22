@@ -45,7 +45,7 @@ impl PoolManager {
 
     fn get(&mut self) -> Option<vk::CommandBuffer> {
         if self.used == BUFFERS_PER_POOL {
-            return None;
+            None
         } else {
             let retval = self.buffers[self.used as usize];
             self.used += 1;
@@ -96,23 +96,21 @@ impl CommandManager {
         if let Some(buffer) = self.current_pool.get() {
             // buffer available, from the current pool
             buffer
+        } else if let Some(mut next_pool) = self.free_pools.pop() {
+            // current pool is full, but there are free pools
+            std::mem::swap(&mut self.current_pool, &mut next_pool);
+            self.used_pools.push(next_pool);
+            self.get_cmd_buffer()
         } else {
-            if let Some(mut next_pool) = self.free_pools.pop() {
-                // current pool is full, but there are free pools
-                std::mem::swap(&mut self.current_pool, &mut next_pool);
-                self.used_pools.push(next_pool);
-                self.get_cmd_buffer()
-            } else {
-                // no free pools available, pop HALF the used one and populate the free pools
-                // half -> so the most recent ones have time to complete
-                let half = self
-                    .used_pools
-                    .drain(..POOL_NO / 2)
-                    .map(|pool| pool.reset(&self.device))
-                    .collect::<Vec<_>>();
-                self.free_pools.extend(half);
-                self.get_cmd_buffer()
-            }
+            // no free pools available, pop HALF the used one and populate the free pools
+            // half -> so the most recent ones have time to complete
+            let half = self
+                .used_pools
+                .drain(..POOL_NO / 2)
+                .map(|pool| pool.reset(&self.device))
+                .collect::<Vec<_>>();
+            self.free_pools.extend(half);
+            self.get_cmd_buffer()
         }
     }
 
