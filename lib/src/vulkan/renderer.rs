@@ -208,6 +208,10 @@ impl RealtimeRenderer {
         self.scene.as_ref()
     }
 
+    pub fn scene_mut(&mut self) -> Option<&mut VulkanScene> {
+        self.scene.as_mut()
+    }
+
     pub fn camera_mut(&mut self) -> Option<&mut Camera> {
         if let Some(scene) = &mut self.scene {
             Some(&mut scene.current_cam)

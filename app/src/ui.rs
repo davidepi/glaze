@@ -1,4 +1,7 @@
-use glaze::{parse, Camera, OrthographicCam, PerspectiveCam, RealtimeRenderer, TextureFormat};
+use glaze::{
+    parse, Camera, OrthographicCam, PerspectiveCam, RealtimeRenderer, ShaderMat, TextureFormat,
+    VulkanScene,
+};
 use imgui::{
     CollapsingHeader, ColorEditFlags, ColorPicker, ComboBox, Condition, Image, MenuItem,
     Selectable, SelectableFlags, Slider, TextureId, Ui,
@@ -12,6 +15,8 @@ pub struct UiState {
     render_scale_sel: f32,
     textures_window: bool,
     textures_selected: Option<u16>,
+    materials_window: bool,
+    materials_selected: Option<u16>,
     stats_window: bool,
 }
 
@@ -23,6 +28,8 @@ impl UiState {
             render_scale_sel: 1.0,
             textures_window: false,
             textures_selected: None,
+            materials_window: false,
+            materials_selected: None,
             stats_window: true,
         }
     }
@@ -32,12 +39,8 @@ impl UiState {
     }
 }
 
-pub fn draw_ui(
-    ui: &mut Ui,
-    state: &mut UiState,
-    window: &mut Window,
-    renderer: &mut RealtimeRenderer,
-) {
+pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
+    ui.show_demo_window(&mut state.render_window);
     ui.main_menu_bar(|| {
         ui.menu("File", || {
             if MenuItem::new("Open").shortcut("Ctrl+O").build(ui) {
@@ -46,23 +49,27 @@ pub fn draw_ui(
         });
         ui.menu("Window", || {
             ui.checkbox("Render", &mut state.render_window);
-            ui.checkbox("Stats", &mut state.stats_window);
             ui.checkbox("Textures", &mut state.textures_window);
+            ui.checkbox("Materials", &mut state.materials_window);
+            ui.checkbox("Stats", &mut state.stats_window);
         });
     });
+    if state.stats_window {
+        window_stats(ui, state, window, renderer);
+    }
     if state.render_window {
         window_render(ui, state, window, renderer);
     }
     if state.textures_window {
         window_textures(ui, state, window, renderer);
     }
-    if state.stats_window {
-        window_stats(ui, state, window, renderer);
+    if state.materials_window {
+        window_materials(ui, state, window, renderer);
     }
 }
 
 fn window_render(
-    ui: &mut Ui,
+    ui: &Ui,
     state: &mut UiState,
     window: &mut Window,
     renderer: &mut RealtimeRenderer,
@@ -162,12 +169,7 @@ fn window_render(
     state.render_window = closed;
 }
 
-fn window_textures(
-    ui: &mut Ui,
-    state: &mut UiState,
-    _: &mut Window,
-    renderer: &mut RealtimeRenderer,
-) {
+fn window_textures(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut RealtimeRenderer) {
     let mut closed = &mut state.textures_window;
     let selected = &mut state.textures_selected;
     let scene = renderer.scene();
@@ -187,12 +189,13 @@ fn window_textures(
                 .preview_value(preview)
                 .build(ui, || {
                     if let Some(scene) = scene {
-                        for (id, _) in &scene.textures {
-                            let name = &scene.textures.get(id).unwrap().info.name;
-                            if Selectable::new(name).build(ui) {
+                        let mut all_textures = scene.textures.iter().collect::<Vec<_>>();
+                        all_textures.sort_by_key(|(&id, _)| id);
+                        all_textures.into_iter().for_each(|(id, texture)| {
+                            if Selectable::new(&texture.info.name).build(ui) {
                                 *selected = Some(*id);
                             }
-                        }
+                        });
                     }
                 });
             if let Some(selected) = selected {
@@ -213,12 +216,93 @@ fn channels_to_string(colortype: TextureFormat) -> &'static str {
     }
 }
 
-fn window_stats(
-    ui: &mut Ui,
-    _: &mut UiState,
+fn window_materials(
+    ui: &Ui,
+    state: &mut UiState,
     window: &mut Window,
     renderer: &mut RealtimeRenderer,
 ) {
+    let mut closed = &mut state.materials_window;
+    let selected = &mut state.materials_selected;
+    let scene = renderer.scene();
+    let preview = match (&selected, scene) {
+        (Some(id), Some(scene)) => {
+            let (material, _) = scene.materials.get(id).unwrap();
+            &material.name
+        }
+        _ => "",
+    };
+    if let Some(window) = imgui::Window::new("Materials")
+        .opened(&mut closed)
+        .save_settings(false)
+        .begin(ui)
+    {
+        if let Some(mat_combo) = ComboBox::new("Material name")
+            .preview_value(preview)
+            .begin(ui)
+        {
+            if let Some(scene) = scene {
+                let mut all_mats = scene.materials.iter().collect::<Vec<_>>();
+                all_mats.sort_by_key(|(&id, _)| id);
+                all_mats.into_iter().for_each(|(id, (mat, _))| {
+                    if Selectable::new(&mat.name).build(ui) {
+                        *selected = Some(*id);
+                    }
+                });
+            }
+            mat_combo.end();
+        }
+        if let (Some(selected), Some(scene)) = (selected, scene) {
+            ui.separator();
+            let current = &scene.materials.get(selected).unwrap().0;
+            if let Some(shader_combo) = ComboBox::new("Type")
+                .preview_value(current.shader.name())
+                .begin(ui)
+            {
+                for shader in ShaderMat::all_values() {
+                    if Selectable::new(shader.name()).build(ui) {
+                        // change material type
+                    }
+                }
+                shader_combo.end();
+            }
+            let diffuse = texture_selector(&ui, "Diffuse", current.diffuse, &scene);
+        }
+        window.end();
+        //TODO: editing a material requires rebuilding the descriptor
+    }
+}
+
+fn texture_selector(
+    ui: &Ui,
+    text: &str,
+    mut selected: Option<u16>,
+    scene: &VulkanScene,
+) -> Option<u16> {
+    let name = if let Some(id) = selected {
+        &scene.textures.get(&id).unwrap().info.name
+    } else {
+        ""
+    };
+    if let Some(cb) = ComboBox::new(text).preview_value(name).begin(ui) {
+        if Selectable::new("").build(ui) {
+            selected = None;
+        }
+        for (id, texture) in scene.textures.iter() {
+            if Selectable::new(&texture.info.name).build(ui) {
+                selected = Some(*id);
+            }
+        }
+        cb.end();
+    }
+    ui.same_line();
+    if let Some(selected) = selected {
+        Image::new(TextureId::new(selected as usize), [32.0, 32.0]).build(ui);
+    }
+    selected
+}
+
+fn window_stats(ui: &Ui, _: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
     let inner_sz = window.inner_size();
     imgui::Window::new("Stats")
         .size([400.0, 400.0], Condition::Appearing)

@@ -19,3 +19,4 @@ pub(crate) use self::pipeline::PipelineBuilder;
 // used in the texture module
 pub(crate) use self::memory::AllocatedImage;
 pub use self::renderer::RealtimeRenderer;
+pub use self::scene::VulkanScene;
