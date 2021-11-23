@@ -8,16 +8,18 @@ use std::ptr;
 pub trait Device {
     fn logical(&self) -> &ash::Device;
     fn physical(&self) -> &PhysicalDevice;
-    fn immediate_execute<F>(&self, cmd: vk::CommandBuffer, command: F)
+    #[must_use]
+    fn immediate_execute<F>(&mut self, cmd: vk::CommandBuffer, command: F) -> vk::Fence
     where
         F: Fn(&ash::Device, vk::CommandBuffer);
+    fn wait_completion(&mut self, tokens: &[vk::Fence]);
 }
 
 pub struct PresentDevice {
     logical: ash::Device,
     physical: PhysicalDevice,
     graphic_index: u32,
-    immediate_fence: vk::Fence,
+    immediate_fences: Vec<vk::Fence>,
     graphic_queue: vk::Queue,
 }
 
@@ -50,14 +52,15 @@ impl PresentDevice {
             p_next: ptr::null(),
             flags: vk::FenceCreateFlags::empty(),
         };
-        let immediate_fence =
-            unsafe { logical.create_fence(&ci, None) }.expect("Failed to create fence");
+        let immediate_fences = (0..10)
+            .map(|_| unsafe { logical.create_fence(&ci, None) }.expect("Failed to create fence"))
+            .collect();
         let graphic_queue = unsafe { logical.get_device_queue(graphic_index, 0) };
         PresentDevice {
             logical,
             physical,
             graphic_index,
-            immediate_fence,
+            immediate_fences,
             graphic_queue,
         }
     }
@@ -72,7 +75,9 @@ impl PresentDevice {
 
     pub fn destroy(self) {
         unsafe {
-            self.logical.destroy_fence(self.immediate_fence, None);
+            self.immediate_fences.into_iter().for_each(|fence| {
+                self.logical.destroy_fence(fence, None);
+            });
             self.logical.destroy_device(None);
         }
     }
@@ -87,10 +92,18 @@ impl Device for PresentDevice {
         &self.physical
     }
 
-    fn immediate_execute<F>(&self, cmd: vk::CommandBuffer, command: F)
+    fn immediate_execute<F>(&mut self, cmd: vk::CommandBuffer, command: F) -> vk::Fence
     where
         F: Fn(&ash::Device, vk::CommandBuffer),
     {
+        let fence = self.immediate_fences.pop().unwrap_or_else(|| {
+            let ci = vk::FenceCreateInfo {
+                s_type: vk::StructureType::FENCE_CREATE_INFO,
+                p_next: ptr::null(),
+                flags: vk::FenceCreateFlags::empty(),
+            };
+            unsafe { self.logical.create_fence(&ci, None) }.expect("Failed to create fence")
+        });
         let cmd_begin = vk::CommandBufferBeginInfo {
             s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
             p_next: ptr::null(),
@@ -117,14 +130,21 @@ impl Device for PresentDevice {
                 .end_command_buffer(cmd)
                 .expect("Failed to end command buffer");
             self.logical
-                .queue_submit(self.graphic_queue, &[submit_ci], self.immediate_fence)
+                .queue_submit(self.graphic_queue, &[submit_ci], fence)
                 .expect("Failed to submit to queue");
+        }
+        fence
+    }
+
+    fn wait_completion(&mut self, tokens: &[vk::Fence]) {
+        unsafe {
             self.logical
-                .wait_for_fences(&[self.immediate_fence], true, u64::MAX)
+                .wait_for_fences(tokens, true, u64::MAX)
                 .expect("Failed to wait on fences");
             self.logical
-                .reset_fences(&[self.immediate_fence])
+                .reset_fences(tokens)
                 .expect("Failed to reset fence");
+            self.immediate_fences.extend(tokens);
         }
     }
 }

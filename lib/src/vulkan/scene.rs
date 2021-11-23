@@ -28,22 +28,34 @@ pub struct VulkanMesh {
     pub material: u16,
 }
 
+struct UnfinishedExecutions {
+    fences: Vec<vk::Fence>,
+    buffers_to_free: Vec<AllocatedBuffer>,
+}
+
 impl VulkanScene {
     pub fn load<T: Device>(
-        device: &T,
+        device: &mut T,
         mm: &mut MemoryManager,
         cmdm: &mut CommandManager,
         mut scene: Box<dyn ReadParsed>,
         descriptor_creator: &mut DescriptorSetCreator,
     ) -> Result<Self, std::io::Error> {
-        let vertex_buffer = load_vertices_to_gpu(device, mm, cmdm, &scene.vertices()?);
-        let (meshes, index_buffer) = load_indices_to_gpu(device, mm, cmdm, &scene.meshes()?);
+        let mut unf = UnfinishedExecutions {
+            fences: Vec::new(),
+            buffers_to_free: Vec::new(),
+        };
+        let vertex_buffer = load_vertices_to_gpu(device, mm, cmdm, &mut unf, &scene.vertices()?);
+        let (meshes, index_buffer) =
+            load_indices_to_gpu(device, mm, cmdm, &mut unf, &scene.meshes()?);
         let sampler = create_sampler(device);
         let textures = scene
             .textures()?
             .into_iter()
-            .map(|(id, tex)| (id, load_texture_to_gpu(device, mm, cmdm, tex)))
+            .map(|(id, tex)| (id, load_texture_to_gpu(device, mm, cmdm, &mut unf, tex)))
             .collect();
+        device.wait_completion(&unf.fences);
+        unf.buffers_to_free.into_iter().for_each(|b| mm.free_buffer(b));
         let materials = load_materials_to_gpu(
             &textures,
             sampler,
@@ -132,9 +144,10 @@ fn create_sampler<T: Device>(device: &T) -> vk::Sampler {
 }
 
 fn load_vertices_to_gpu<T: Device>(
-    device: &T,
+    device: &mut T,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
+    unfinished: &mut UnfinishedExecutions,
     vertices: &[Vertex],
 ) -> AllocatedBuffer {
     let size = (std::mem::size_of::<Vertex>() * vertices.len()) as u64;
@@ -169,15 +182,17 @@ fn load_vertices_to_gpu<T: Device>(
         }
     };
     let cmd = cmdm.get_cmd_buffer();
-    device.immediate_execute(cmd, command);
-    mm.free_buffer(cpu_buffer);
+    let fence = device.immediate_execute(cmd, command);
+    unfinished.fences.push(fence);
+    unfinished.buffers_to_free.push(cpu_buffer);
     gpu_buffer
 }
 
 fn load_indices_to_gpu<T: Device>(
-    device: &T,
+    device: &mut T,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
+    unfinished: &mut UnfinishedExecutions,
     meshes: &[Mesh],
 ) -> (Vec<VulkanMesh>, AllocatedBuffer) {
     let size =
@@ -223,8 +238,9 @@ fn load_indices_to_gpu<T: Device>(
         }
     };
     let cmd = cmdm.get_cmd_buffer();
-    device.immediate_execute(cmd, command);
-    mm.free_buffer(cpu_buffer);
+    let fence = device.immediate_execute(cmd, command);
+    unfinished.fences.push(fence);
+    unfinished.buffers_to_free.push(cpu_buffer);
     (converted_meshes, gpu_buffer)
 }
 
@@ -257,9 +273,10 @@ fn load_materials_to_gpu(
 }
 
 fn load_texture_to_gpu<T: Device>(
-    device: &T,
+    device: &mut T,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
+    unfinished: &mut UnfinishedExecutions,
     texture: Texture,
 ) -> TextureLoaded {
     let (width, height) = texture.dimensions();
@@ -374,8 +391,9 @@ fn load_texture_to_gpu<T: Device>(
         }
     };
     let cmd = cmdm.get_cmd_buffer();
-    device.immediate_execute(cmd, command);
-    mm.free_buffer(buffer);
+    let fence = device.immediate_execute(cmd, command);
+    unfinished.fences.push(fence);
+    unfinished.buffers_to_free.push(buffer);
     TextureLoaded {
         info: texture.to_info(),
         image,

@@ -70,7 +70,7 @@ impl RealtimeRenderer {
         window_height: u32,
         render_scale: f32,
     ) -> Self {
-        let instance = PresentInstance::new(window);
+        let mut instance = PresentInstance::new(window);
         let descriptor_allocator =
             DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
         let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
@@ -135,7 +135,7 @@ impl RealtimeRenderer {
         forward_pass.clear_color[0].color.float32 = clear_color;
         let imgui_renderer = ImguiDrawer::new(
             imgui,
-            instance.device(),
+            instance.device_mut(),
             &mut mm,
             &mut cmdm,
             &mut descriptor_creator,
@@ -269,7 +269,7 @@ impl RealtimeRenderer {
             scene.unload(self.instance.device(), &mut self.mm);
         }
         if let Ok(mut new) = VulkanScene::load(
-            self.instance.device(),
+            self.instance.device_mut(),
             &mut self.mm,
             &mut self.cmdm,
             parsed,

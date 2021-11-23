@@ -40,7 +40,7 @@ pub struct ImguiDrawer {
 impl ImguiDrawer {
     pub fn new<T: Device>(
         context: &mut imgui::Context,
-        device: &T,
+        device: &mut T,
         mm: &mut MemoryManager,
         cmdm: &mut CommandManager,
         descriptor_creator: &mut DescriptorSetCreator,
@@ -435,7 +435,7 @@ fn build_imgui_pipeline(
 }
 
 fn upload_image<T: Device>(
-    device: &T,
+    device: &mut T,
     cmdm: &mut CommandManager,
     cpu_buf: &AllocatedBuffer,
     gpu_buf: &AllocatedImage,
@@ -520,7 +520,8 @@ fn upload_image<T: Device>(
         }
     };
     let cmd = cmdm.get_cmd_buffer();
-    device.immediate_execute(cmd, command);
+    let fence = device.immediate_execute(cmd, command);
+    device.wait_completion(&[fence]);
 }
 
 unsafe fn as_u8_slice<T: Sized>(p: &T) -> &[u8] {
