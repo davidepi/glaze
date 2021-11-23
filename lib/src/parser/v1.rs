@@ -858,7 +858,7 @@ fn material_to_bytes((index, material): &(u16, Material)) -> Vec<u8> {
     retval.extend(index.to_le_bytes());
     retval.push(str_len as u8);
     retval.extend(material.name.bytes());
-    retval.push(material.shader_id);
+    retval.push(material.shader.into());
     if let Some(diffuse) = material.diffuse {
         retval.extend(diffuse.to_le_bytes());
     } else {
@@ -883,7 +883,7 @@ fn bytes_to_material(data: &[u8]) -> (u16, Material) {
     };
     let material = Material {
         name,
-        shader_id,
+        shader: shader_id.into(),
         diffuse,
     };
     (mat_index, material)
@@ -1049,7 +1049,8 @@ mod tests {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
         let mut data = Vec::with_capacity(count as usize);
         for i in 0..count {
-            let shader_id = rng.gen_range(ShaderMat::ids_range());
+            let shaders = ShaderMat::all_values();
+            let shader = shaders[rng.gen_range(0..shaders.len())];
             let diffuse = if rng.gen_bool(0.1) {
                 Some(rng.gen_range(0..u16::MAX - 1))
             } else {
@@ -1062,7 +1063,7 @@ mod tests {
                 .collect::<String>();
             let material = Material {
                 name,
-                shader_id,
+                shader,
                 diffuse,
             };
             data.push((i, material));

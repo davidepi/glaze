@@ -225,7 +225,7 @@ fn convert_materials(
         }
         let glaze_material = Material {
             name: format!("Material#{}", retval_materials.len()),
-            shader_id: ShaderMat::Test.id(),
+            shader: ShaderMat::Test,
             diffuse,
         };
         let mat_id = retval_materials.len() as u16;

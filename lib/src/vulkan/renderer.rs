@@ -427,7 +427,7 @@ unsafe fn draw_objects(
     proj[1][1] *= -1.0;
     let view = cam.look_at_rh();
     frame_data.data.projview = proj * view;
-    let mut current_shader_id = u8::MAX;
+    let mut current_shader = None;
     //write frame_data to the buffer
     let buf_ptr = frame_data
         .buffer
@@ -442,9 +442,9 @@ unsafe fn draw_objects(
     device.cmd_bind_index_buffer(cmd, scene.index_buffer.buffer, 0, vk::IndexType::UINT32); //bind once, use firts_index as offset
     for obj in &scene.meshes {
         let (material, mat_descriptor) = scene.materials.get(&obj.material).unwrap(); //TODO: unwrap or default material
-        if material.shader_id != current_shader_id {
-            current_shader_id = material.shader_id;
-            let pipeline = scene.pipelines.get(&material.shader_id).unwrap(); //TODO: unwrap or load at runtime
+        if current_shader.is_none() || material.shader != current_shader.unwrap() {
+            current_shader = Some(material.shader);
+            let pipeline = scene.pipelines.get(&material.shader).unwrap(); //TODO: unwrap or load at runtime
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
             device.cmd_bind_descriptor_sets(
                 cmd,

@@ -18,7 +18,7 @@ pub struct VulkanScene {
     pub meshes: Vec<VulkanMesh>,
     pub sampler: vk::Sampler,
     pub materials: FnvHashMap<u16, (Material, Descriptor)>,
-    pub pipelines: FnvHashMap<u8, Pipeline>,
+    pub pipelines: FnvHashMap<ShaderMat, Pipeline>,
     pub textures: FnvHashMap<u16, TextureLoaded>,
 }
 
@@ -73,17 +73,14 @@ impl VulkanScene {
     ) {
         self.pipelines = FnvHashMap::default();
         for (mat, desc) in self.materials.values() {
-            let shader_id = mat.shader_id;
-            self.pipelines.entry(shader_id).or_insert_with(|| {
-                ShaderMat::from_id(shader_id)
-                    .expect("Unexpected shader ID")
-                    .build_pipeline()
-                    .build(
-                        device,
-                        renderpass,
-                        render_size,
-                        &[frame_desc_layout, desc.layout],
-                    )
+            let shader = mat.shader;
+            self.pipelines.entry(shader).or_insert_with(|| {
+                shader.build_pipeline().build(
+                    device,
+                    renderpass,
+                    render_size,
+                    &[frame_desc_layout, desc.layout],
+                )
             });
         }
     }
