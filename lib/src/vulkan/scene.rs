@@ -379,7 +379,7 @@ fn load_materials_parameters<T: Device>(
         let params = MaterialParams::from(mat);
         unsafe {
             std::ptr::copy_nonoverlapping(&params, mapped, 1);
-            mapped = mapped.offset(std::mem::size_of::<MaterialParams>() as isize);
+            mapped = mapped.offset(1);
         }
     }
     let copy_region = vk::BufferCopy {

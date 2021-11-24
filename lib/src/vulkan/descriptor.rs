@@ -44,7 +44,7 @@ impl DescriptorAllocator {
     }
 
     pub fn alloc(&mut self, layout: vk::DescriptorSetLayout) -> vk::DescriptorSet {
-        let alloc_ci = vk::DescriptorSetAllocateInfo {
+        let mut alloc_ci = vk::DescriptorSetAllocateInfo {
             s_type: vk::StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
             p_next: ptr::null(),
             descriptor_pool: self.current_pool,
@@ -61,6 +61,7 @@ impl DescriptorAllocator {
                     .unwrap_or_else(|| create_descriptor_pool(&self.device, &self.pool_sizes));
                 self.used_pools.push(self.current_pool);
                 self.current_pool = new_pool;
+                alloc_ci.descriptor_pool = new_pool;
                 unsafe { self.device.allocate_descriptor_sets(&alloc_ci) }
                     .expect("Failed to allocate descriptor set")
                     .pop()
