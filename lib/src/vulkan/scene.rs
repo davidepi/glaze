@@ -77,7 +77,7 @@ impl VulkanScene {
         let update_buffer = mm.create_buffer(
             "Material update transfer buffer",
             std::mem::size_of::<MaterialParams>() as u64,
-            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
             MemoryLocation::CpuToGpu,
         );
         Ok(VulkanScene {
