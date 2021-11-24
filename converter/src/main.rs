@@ -2,7 +2,7 @@ use cgmath::{Point3, Vector2 as Vec2, Vector3 as Vec3};
 use clap::{App, Arg};
 use console::style;
 use glaze::{
-    serialize, Camera, Material, Mesh, ParserVersion, PerspectiveCam, ShaderMat, Texture,
+    parse, serialize, Camera, Material, Mesh, ParserVersion, PerspectiveCam, ShaderMat, Texture,
     TextureFormat, TextureInfo, Vertex,
 };
 use image::io::Reader as ImageReader;
@@ -10,8 +10,10 @@ use indicatif::{MultiProgress, ProgressBar};
 use russimp::scene::{PostProcess, Scene as RussimpScene};
 use std::collections::HashMap;
 use std::error::Error;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::Instant;
+use tempfile::tempdir;
 
 struct TempScene {
     vertices: Vec<Vertex>,
@@ -37,8 +39,13 @@ fn main() {
         )
         .arg(
             Arg::with_name("output")
-                .required(true)
+                .required_unless("benchmark")
                 .help("The output file"),
+        )
+        .arg(
+            Arg::with_name("benchmark")
+                .long("bench")
+                .help("Run a benchmark for load and save times of a particular scene"),
         )
         .arg(
             Arg::with_name("file version")
@@ -49,27 +56,33 @@ fn main() {
         )
         .get_matches();
     let input = matches.value_of("input").unwrap();
-    let output = matches.value_of("output").unwrap();
     let version = ParserVersion::from_str(matches.value_of("file version").unwrap()).unwrap();
-    println!("{} Preprocessing input...", style("[1/3]").bold().dim());
-    if let Ok(scene) = preprocess_input(input) {
-        println!("{} Converting scene...", style("[2/3]").bold().dim());
-        if let Ok(scene) = convert_input(scene, input) {
-            println!("{} Saving file...", style("[3/3]").bold().dim());
-            if write_output(scene, version, output).is_ok() {
-                println!("{}", style("Done!").bold().green());
+    if !matches.is_present("benchmark") {
+        let output = matches.value_of("output").unwrap();
+        println!("{} Preprocessing input...", style("[1/3]").bold().dim());
+        if let Ok(scene) = preprocess_input(input) {
+            println!("{} Converting scene...", style("[2/3]").bold().dim());
+            if let Ok(scene) = convert_input(scene, input) {
+                println!("{} Saving file...", style("[3/3]").bold().dim());
+                if write_output(scene, version, output).is_ok() {
+                    println!("{}", style("Done!").bold().green());
+                } else {
+                    eprint!("Failed to save file");
+                }
             } else {
-                eprint!("Failed to save file");
+                eprintln!("Failed to convert scene");
             }
         } else {
-            eprintln!("Failed to convert scene");
+            eprintln!("Failed to preprocess input file");
         }
     } else {
-        eprintln!("Failed to preprocess input file");
+        if benchmark(input, version).is_err() {
+            eprintln!("Failed to benchmark scene");
+        }
     }
 }
 
-fn preprocess_input(input: &str) -> Result<RussimpScene, Box<dyn Error>> {
+fn preprocess_input<S: AsRef<str>>(input: S) -> Result<RussimpScene, Box<dyn Error>> {
     let pb = ProgressBar::new_spinner();
     let postprocess = vec![
         PostProcess::Triangulate,
@@ -83,7 +96,7 @@ fn preprocess_input(input: &str) -> Result<RussimpScene, Box<dyn Error>> {
         PostProcess::FixInfacingNormals,
         PostProcess::RemoveRedundantMaterials,
     ];
-    let scene = RussimpScene::from_file(input, postprocess)?;
+    let scene = RussimpScene::from_file(input.as_ref(), postprocess)?;
     pb.finish_and_clear();
     Ok(scene)
 }
@@ -100,10 +113,13 @@ fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
         .collect()
 }
 
-fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, Box<dyn Error>> {
+fn convert_input<S: AsRef<str>>(
+    scene: RussimpScene,
+    original_path: S,
+) -> Result<TempScene, Box<dyn Error>> {
     let mpb = MultiProgress::new();
     let cameras = convert_cameras(&scene, &mpb);
-    let (materials, textures) = convert_materials(&scene.materials, &mpb, original_path)?;
+    let (materials, textures) = convert_materials(&scene.materials, &mpb, original_path.as_ref())?;
     let (vertices, meshes) = convert_meshes(&scene.meshes, &mpb)?;
     Ok(TempScene {
         vertices,
@@ -192,10 +208,10 @@ fn convert_cameras(scene: &RussimpScene, mpb: &MultiProgress) -> Vec<Camera> {
     retval_cameras
 }
 
-fn convert_materials(
+fn convert_materials<S: AsRef<str>>(
     materials: &Vec<russimp::material::Material>,
     mpb: &MultiProgress,
-    original_path: &str,
+    original_path: S,
 ) -> Result<(Vec<(u16, Material)>, Vec<(u16, Texture)>), std::io::Error> {
     let effort = materials.len();
     let pb =
@@ -214,7 +230,10 @@ fn convert_materials(
                     //TODO: add support for embedded textures
                     let mut path = PathBuf::from(&tex_name);
                     if path.is_relative() {
-                        path = PathBuf::from(original_path).parent().unwrap().join(path);
+                        path = PathBuf::from(original_path.as_ref())
+                            .parent()
+                            .unwrap()
+                            .join(path);
                     }
                     let id =
                         convert_texture(&tex_name, path, &mut used_textures, &mut retval_textures);
@@ -265,10 +284,10 @@ fn convert_texture(
     }
 }
 
-fn write_output(
+fn write_output<P: AsRef<Path>>(
     scene: TempScene,
     version: ParserVersion,
-    output: &str,
+    output: P,
 ) -> Result<(), Box<dyn Error>> {
     Ok(serialize(
         output,
@@ -279,6 +298,54 @@ fn write_output(
         &scene.textures,
         &scene.materials,
     )?)
+}
+
+pub fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std::error::Error>> {
+    // the benchmark is simple on purpose. This method will take seconds if not minutes to run.
+    let dir = tempdir()?;
+    let file = dir.path().join("benchmark.bin");
+    let preprocess_start = Instant::now();
+    let preprocessed = preprocess_input(input)?;
+    let preprocess_end = Instant::now();
+    let conversion = convert_input(preprocessed, input)?;
+    let conversion_end = Instant::now();
+    let _ = write_output(conversion, version, file)?;
+    let compression_end = Instant::now();
+    let file = dir.path().join("benchmark.bin");
+    let mut parsed = parse(file)?;
+    let vert_start = Instant::now();
+    let vertices = parsed.vertices()?;
+    let vert_end = Instant::now();
+    let _ = parsed.meshes()?;
+    let mesh_end = Instant::now();
+    let textures = parsed.textures()?;
+    let texture_end = Instant::now();
+    let _ = parsed.materials()?;
+    let material_end = Instant::now();
+    //  Results //
+    println!("Reading and writing results for {}", input);
+    println!("Total vertices: {}", vertices.len());
+    println!("Total textures: {}", textures.len());
+    println!("--- Writing ---");
+    println!(
+        "Preprocessing: {}s",
+        (preprocess_end - preprocess_start).as_secs_f32()
+    );
+    println!(
+        "Conversion: {}s",
+        (conversion_end - preprocess_end).as_secs_f32()
+    );
+    println!(
+        "Compressing + Writing: {}s",
+        (compression_end - conversion_end).as_secs_f32()
+    );
+    println!("--- Reading ---");
+    println!("Vertices: {}s", (vert_end - vert_start).as_secs_f32());
+    println!("Meshes: {}s", (mesh_end - vert_end).as_secs_f32());
+    println!("Textures: {}s", (texture_end - mesh_end).as_secs_f32());
+    println!("Materials: {}s", (material_end - texture_end).as_secs_f32());
+    // would be nice to add also the compression factor...
+    Ok(())
 }
 
 #[cfg(test)]
