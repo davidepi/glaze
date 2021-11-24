@@ -3,7 +3,7 @@ use glaze::{
     VulkanScene,
 };
 use imgui::{
-    CollapsingHeader, ColorEditFlags, ColorPicker, ComboBox, Condition, Image, MenuItem,
+    CollapsingHeader, ColorEdit, ColorEditFlags, ColorPicker, ComboBox, Condition, Image, MenuItem,
     Selectable, SelectableFlags, Slider, TextureId, Ui,
 };
 use nfd2::Response;
@@ -253,6 +253,10 @@ fn window_materials(
             mat_combo.end();
         }
         if let (Some(selected), Some(scene)) = (selected, scene) {
+            let mut changed = false;
+            let mut new_shader = None;
+            let mut new_diffuse = None;
+            let mut new_diff_mul = None;
             ui.separator();
             let current = &scene.materials.get(selected).unwrap().0;
             if let Some(shader_combo) = ComboBox::new("Type")
@@ -261,15 +265,46 @@ fn window_materials(
             {
                 for shader in ShaderMat::all_values() {
                     if Selectable::new(shader.name()).build(ui) {
-                        // change material type
+                        changed = true;
+                        new_shader = Some(shader);
                     }
                 }
                 shader_combo.end();
             }
             let diffuse = texture_selector(&ui, "Diffuse", current.diffuse, &scene);
+            if diffuse != current.diffuse {
+                changed = true;
+                new_diffuse = Some(diffuse);
+            }
+            let mut color = [
+                current.diffuse_mul[0] as f32 / 255.0,
+                current.diffuse_mul[1] as f32 / 255.0,
+                current.diffuse_mul[2] as f32 / 255.0,
+            ];
+            if ColorPicker::new("Diffuse multiplier", &mut color)
+                .small_preview(true)
+                .build(ui)
+            {
+                changed = true;
+                new_diff_mul = Some([
+                    (color[0] * 255.0) as u8,
+                    (color[1] * 255.0) as u8,
+                    (color[2] * 255.0) as u8,
+                ]);
+            }
+            if changed {
+                let mut new_mat = current.clone();
+                if let Some(shader) = new_shader {
+                    new_mat.shader = shader;
+                } else if let Some(new_diffuse) = new_diffuse {
+                    new_mat.diffuse = new_diffuse;
+                } else if let Some(new_diff_mul) = new_diff_mul {
+                    new_mat.diffuse_mul = new_diff_mul;
+                }
+                renderer.change_material(*selected, new_mat);
+            }
         }
         window.end();
-        //TODO: editing a material requires rebuilding the descriptor
     }
 }
 

@@ -11,7 +11,7 @@ use super::renderpass::RenderPass;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
-use crate::{include_shader, Camera, ReadParsed};
+use crate::{include_shader, Camera, Material, ReadParsed};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
@@ -270,9 +270,9 @@ impl RealtimeRenderer {
         }
         if let Ok(mut new) = VulkanScene::load(
             self.instance.device_mut(),
+            parsed,
             &mut self.mm,
             &mut self.cmdm,
-            parsed,
             &mut self.descriptor_creator,
         ) {
             let render_size = vk::Extent2D {
@@ -289,6 +289,18 @@ impl RealtimeRenderer {
             self.start_time = Instant::now();
         } else {
             log::error!("Failed to load scene");
+        }
+    }
+
+    pub fn change_material(&mut self, old: u16, new: Material) {
+        if let Some(scene) = &mut self.scene {
+            scene.update_material(
+                self.instance.device_mut(),
+                old,
+                new,
+                &mut self.cmdm,
+                &mut self.descriptor_creator,
+            );
         }
     }
 

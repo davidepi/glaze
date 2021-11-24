@@ -40,10 +40,10 @@ struct UnfinishedExecutions {
 impl VulkanScene {
     pub fn load<T: Device>(
         device: &mut T,
+        mut scene: Box<dyn ReadParsed>,
         mm: &mut MemoryManager,
         cmdm: &mut CommandManager,
-        mut scene: Box<dyn ReadParsed>,
-        descriptor_creator: &mut DescriptorSetCreator,
+        dm: &mut DescriptorSetCreator,
     ) -> Result<Self, std::io::Error> {
         let mut unf = UnfinishedExecutions {
             fences: Vec::new(),
@@ -64,13 +64,14 @@ impl VulkanScene {
         unf.buffers_to_free
             .into_iter()
             .for_each(|b| mm.free_buffer(b));
-        let materials = load_materials_to_gpu(
-            &textures,
-            &params_buffer,
-            sampler,
-            &parsed_mats,
-            descriptor_creator,
-        );
+        let materials = parsed_mats
+            .into_iter()
+            .map(|(id, mat)| {
+                let descriptor =
+                    build_mat_desc_set(&textures, &params_buffer, sampler, id, &mat, dm);
+                (id, (mat, descriptor))
+            })
+            .collect();
         let current_cam = scene.cameras()?[0].clone(); // parser automatically adds a default cam
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
@@ -91,6 +92,55 @@ impl VulkanScene {
             pipelines,
             textures,
         })
+    }
+
+    pub(crate) fn update_material<T: Device>(
+        &mut self,
+        device: &mut T,
+        old: u16,
+        new: Material,
+        cmdm: &mut CommandManager,
+        dm: &mut DescriptorSetCreator,
+    ) {
+        let (mat, desc) = self.materials.get_mut(&old).unwrap();
+        *mat = new;
+        let params = MaterialParams::from(&*mat);
+        let mapped = self
+            .update_buffer
+            .allocation
+            .mapped_ptr()
+            .expect("Faield to map memory")
+            .cast()
+            .as_ptr();
+        unsafe {
+            std::ptr::copy_nonoverlapping(&params, mapped, 1);
+        }
+        let copy_region = vk::BufferCopy {
+            src_offset: PARAMS_SIZE * old as u64,
+            dst_offset: PARAMS_SIZE * old as u64,
+            size: PARAMS_SIZE,
+        };
+        let command = unsafe {
+            |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_copy_buffer(
+                    cmd,
+                    self.update_buffer.buffer,
+                    self.params_buffer.buffer,
+                    &[copy_region],
+                );
+            }
+        };
+        let cmd = cmdm.get_cmd_buffer();
+        let fence = device.immediate_execute(cmd, command);
+        *desc = build_mat_desc_set(
+            &self.textures,
+            &self.update_buffer,
+            self.sampler,
+            old,
+            mat,
+            dm,
+        );
+        device.wait_completion(&[fence]);
     }
 
     pub fn init_pipelines(
@@ -263,44 +313,40 @@ fn load_indices_to_gpu<T: Device>(
     (converted_meshes, gpu_buffer)
 }
 
-fn load_materials_to_gpu(
+fn build_mat_desc_set(
     textures: &FnvHashMap<u16, TextureLoaded>,
     params: &AllocatedBuffer,
     sampler: vk::Sampler,
-    materials: &[(u16, Material)],
-    descriptor_creator: &mut DescriptorSetCreator,
-) -> FnvHashMap<u16, (Material, Descriptor)> {
-    const PARAMS_SIZE: u64 = std::mem::size_of::<MaterialParams>() as u64;
-    let mut retval = FnvHashMap::with_capacity_and_hasher(materials.len(), Default::default());
-    for (id, mat) in materials {
-        let buf_info = vk::DescriptorBufferInfo {
-            buffer: params.buffer,
-            offset: PARAMS_SIZE * *id as u64,
-            range: PARAMS_SIZE,
-        };
-        let diffuse_id = mat.diffuse.unwrap_or(0); // TODO: set default texture
-        let diffuse = textures.get(&diffuse_id).expect("Failed to find texture"); //TODO: add default texture
-        let diffuse_image_info = vk::DescriptorImageInfo {
-            sampler,
-            image_view: diffuse.image.image_view,
-            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        };
-        let descriptor = descriptor_creator
-            .new_set()
-            .bind_buffer(
-                buf_info,
-                vk::DescriptorType::UNIFORM_BUFFER,
-                vk::ShaderStageFlags::FRAGMENT,
-            )
-            .bind_image(
-                diffuse_image_info,
-                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                vk::ShaderStageFlags::FRAGMENT,
-            )
-            .build();
-        retval.insert(*id, (mat.clone(), descriptor));
-    }
-    retval
+    id: u16,
+    material: &Material,
+    dm: &mut DescriptorSetCreator,
+) -> Descriptor {
+    let diffuse_id = material.diffuse.unwrap_or(0); // TODO: set default texture
+    let diffuse = textures.get(&diffuse_id).expect("Failed to find texture"); //TODO: add default texture
+    let diffuse_image_info = vk::DescriptorImageInfo {
+        sampler,
+        image_view: diffuse.image.image_view,
+        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+    };
+    let buf_info = vk::DescriptorBufferInfo {
+        buffer: params.buffer,
+        offset: PARAMS_SIZE * id as u64,
+        range: PARAMS_SIZE,
+    };
+    let descriptor = dm
+        .new_set()
+        .bind_buffer(
+            buf_info,
+            vk::DescriptorType::UNIFORM_BUFFER,
+            vk::ShaderStageFlags::FRAGMENT,
+        )
+        .bind_image(
+            diffuse_image_info,
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            vk::ShaderStageFlags::FRAGMENT,
+        )
+        .build();
+    descriptor
 }
 
 fn load_materials_parameters<T: Device>(
@@ -485,6 +531,8 @@ fn load_texture_to_gpu<T: Device>(
 struct MaterialParams {
     diffuse_mul: Vec3<f32>,
 }
+
+const PARAMS_SIZE: u64 = std::mem::size_of::<MaterialParams>() as u64;
 
 impl From<&Material> for MaterialParams {
     fn from(material: &Material) -> Self {
