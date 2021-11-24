@@ -23,7 +23,6 @@ pub enum ParserVersion {
     /// - Textures compression with `libpng` preset `FAST` and filter `UP`.
     /// - Each chunk of vertices/meshes/materials/camera/textures can be accessed independently.
     /// - The scene is not stored in memory but read at runtime.
-    ///
     V1,
 }
 
@@ -133,7 +132,15 @@ pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ReadParsed>, Error> {
 /// # Examples
 /// ```no_run
 /// let vertices = Vec::new();
-/// glaze::serialize("test.bin", glaze::ParserVersion::V1, &vertices, &[], &[], &[], &[])
+/// glaze::serialize(
+///     "test.bin",
+///     glaze::ParserVersion::V1,
+///     &vertices,
+///     &[],
+///     &[],
+///     &[],
+///     &[],
+/// )
 /// .expect("Failed to save file");
 /// ```
 pub fn serialize<P: AsRef<Path>>(

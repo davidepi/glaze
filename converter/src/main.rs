@@ -223,10 +223,12 @@ fn convert_materials(
                 _ => {} //unsupported, do nothing
             }
         }
+        let properties = &material.properties[..];
         let glaze_material = Material {
             name: format!("Material#{}", retval_materials.len()),
             shader: ShaderMat::Test,
             diffuse,
+            diffuse_mul: [255, 255, 255],
         };
         let mat_id = retval_materials.len() as u16;
         retval_materials.push((mat_id, glaze_material));

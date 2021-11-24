@@ -8,6 +8,7 @@ use super::pipeline::Pipeline;
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{Camera, Material, Mesh, ReadParsed, ShaderMat, Texture, Vertex};
 use ash::vk;
+use cgmath::Vector3 as Vec3;
 use fnv::FnvHashMap;
 use gpu_allocator::MemoryLocation;
 
@@ -15,8 +16,11 @@ pub struct VulkanScene {
     pub current_cam: Camera,
     pub vertex_buffer: AllocatedBuffer,
     pub index_buffer: AllocatedBuffer,
+    // buffer used during a material update, as a transfer buffer to the GPU
+    update_buffer: AllocatedBuffer,
+    pub params_buffer: AllocatedBuffer,
     pub meshes: Vec<VulkanMesh>,
-    pub sampler: vk::Sampler,
+    sampler: vk::Sampler,
     pub materials: FnvHashMap<u16, (Material, Descriptor)>,
     pub pipelines: FnvHashMap<ShaderMat, Pipeline>,
     pub textures: FnvHashMap<u16, TextureLoaded>,
@@ -54,20 +58,33 @@ impl VulkanScene {
             .into_iter()
             .map(|(id, tex)| (id, load_texture_to_gpu(device, mm, cmdm, &mut unf, tex)))
             .collect();
+        let parsed_mats = scene.materials()?;
+        let params_buffer = load_materials_parameters(device, &parsed_mats, mm, cmdm, &mut unf);
         device.wait_completion(&unf.fences);
-        unf.buffers_to_free.into_iter().for_each(|b| mm.free_buffer(b));
+        unf.buffers_to_free
+            .into_iter()
+            .for_each(|b| mm.free_buffer(b));
         let materials = load_materials_to_gpu(
             &textures,
+            &params_buffer,
             sampler,
-            scene.materials()?.into_iter().as_slice(),
+            &parsed_mats,
             descriptor_creator,
         );
         let current_cam = scene.cameras()?[0].clone(); // parser automatically adds a default cam
         let pipelines = FnvHashMap::default();
+        let update_buffer = mm.create_buffer(
+            "Material update transfer buffer",
+            std::mem::size_of::<MaterialParams>() as u64,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            MemoryLocation::CpuToGpu,
+        );
         Ok(VulkanScene {
             current_cam,
             vertex_buffer,
             index_buffer,
+            update_buffer,
+            params_buffer,
             meshes,
             sampler,
             materials,
@@ -110,6 +127,8 @@ impl VulkanScene {
         unsafe { device.logical().destroy_sampler(self.sampler, None) };
         mm.free_buffer(self.vertex_buffer);
         mm.free_buffer(self.index_buffer);
+        mm.free_buffer(self.params_buffer);
+        mm.free_buffer(self.update_buffer);
     }
 }
 
@@ -246,12 +265,19 @@ fn load_indices_to_gpu<T: Device>(
 
 fn load_materials_to_gpu(
     textures: &FnvHashMap<u16, TextureLoaded>,
+    params: &AllocatedBuffer,
     sampler: vk::Sampler,
     materials: &[(u16, Material)],
     descriptor_creator: &mut DescriptorSetCreator,
 ) -> FnvHashMap<u16, (Material, Descriptor)> {
+    const PARAMS_SIZE: u64 = std::mem::size_of::<MaterialParams>() as u64;
     let mut retval = FnvHashMap::with_capacity_and_hasher(materials.len(), Default::default());
     for (id, mat) in materials {
+        let buf_info = vk::DescriptorBufferInfo {
+            buffer: params.buffer,
+            offset: PARAMS_SIZE * *id as u64,
+            range: PARAMS_SIZE,
+        };
         let diffuse_id = mat.diffuse.unwrap_or(0); // TODO: set default texture
         let diffuse = textures.get(&diffuse_id).expect("Failed to find texture"); //TODO: add default texture
         let diffuse_image_info = vk::DescriptorImageInfo {
@@ -261,6 +287,11 @@ fn load_materials_to_gpu(
         };
         let descriptor = descriptor_creator
             .new_set()
+            .bind_buffer(
+                buf_info,
+                vk::DescriptorType::UNIFORM_BUFFER,
+                vk::ShaderStageFlags::FRAGMENT,
+            )
             .bind_image(
                 diffuse_image_info,
                 vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
@@ -270,6 +301,56 @@ fn load_materials_to_gpu(
         retval.insert(*id, (mat.clone(), descriptor));
     }
     retval
+}
+
+fn load_materials_parameters<T: Device>(
+    device: &mut T,
+    materials: &[(u16, Material)],
+    mm: &mut MemoryManager,
+    cmdm: &mut CommandManager,
+    unfinished: &mut UnfinishedExecutions,
+) -> AllocatedBuffer {
+    let size = (std::mem::size_of::<MaterialParams>() * materials.len()) as u64;
+    let cpu_buffer = mm.create_buffer(
+        "Materials Parameters CPU",
+        size,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+        MemoryLocation::CpuToGpu,
+    );
+    let gpu_buffer = mm.create_buffer(
+        "Materials Parameters GPU",
+        size,
+        vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+        MemoryLocation::GpuOnly,
+    );
+    let mut mapped = cpu_buffer
+        .allocation
+        .mapped_ptr()
+        .expect("Faield to map memory")
+        .cast()
+        .as_ptr();
+    for (_, mat) in materials {
+        let params = MaterialParams::from(mat);
+        unsafe {
+            std::ptr::copy_nonoverlapping(&params, mapped, 1);
+            mapped = mapped.offset(std::mem::size_of::<MaterialParams>() as isize);
+        }
+    }
+    let copy_region = vk::BufferCopy {
+        src_offset: 0,
+        dst_offset: 0,
+        size,
+    };
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+        }
+    };
+    let cmd = cmdm.get_cmd_buffer();
+    let fence = device.immediate_execute(cmd, command);
+    unfinished.fences.push(fence);
+    unfinished.buffers_to_free.push(cpu_buffer);
+    gpu_buffer
 }
 
 fn load_texture_to_gpu<T: Device>(
@@ -291,7 +372,7 @@ fn load_texture_to_gpu<T: Device>(
         TextureFormat::Rgba => vk::Format::R8G8B8A8_SRGB,
     };
     let buffer = mm.create_buffer(
-        "TextureBuffer",
+        "Texture Buffer",
         size,
         vk::BufferUsageFlags::TRANSFER_SRC,
         MemoryLocation::CpuToGpu,
@@ -397,5 +478,22 @@ fn load_texture_to_gpu<T: Device>(
     TextureLoaded {
         info: texture.to_info(),
         image,
+    }
+}
+
+#[repr(C)]
+struct MaterialParams {
+    diffuse_mul: Vec3<f32>,
+}
+
+impl From<&Material> for MaterialParams {
+    fn from(material: &Material) -> Self {
+        MaterialParams {
+            diffuse_mul: Vec3::new(
+                material.diffuse_mul[0] as f32 / 255.0,
+                material.diffuse_mul[1] as f32 / 255.0,
+                material.diffuse_mul[2] as f32 / 255.0,
+            ),
+        }
     }
 }

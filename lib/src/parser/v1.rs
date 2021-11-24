@@ -38,7 +38,6 @@ fn decompress(data: &[u8]) -> Vec<u8> {
     decompressed
 }
 
-#[repr(packed)]
 struct Offsets {
     // in bytes from the very beginning of the file (including the common header)
     vert_off: u64,
@@ -853,7 +852,8 @@ fn material_to_bytes((index, material): &(u16, Material)) -> Vec<u8> {
         + std::mem::size_of::<u8>() // str_len
         + str_len //actual string
         + std::mem::size_of::<u8>() // shader id
-        + std::mem::size_of::<u16>(); // diffuse texture id
+        + std::mem::size_of::<u16>() // diffuse texture id
+        + 3 * std::mem::size_of::<u8>(); // diffuse multiplier
     let mut retval = Vec::with_capacity(total_len);
     retval.extend(index.to_le_bytes());
     retval.push(str_len as u8);
@@ -864,6 +864,7 @@ fn material_to_bytes((index, material): &(u16, Material)) -> Vec<u8> {
     } else {
         retval.extend(u16::MAX.to_le_bytes());
     }
+    retval.extend(&material.diffuse_mul[0..3]);
     retval
 }
 
@@ -876,15 +877,18 @@ fn bytes_to_material(data: &[u8]) -> (u16, Material) {
     let shader_id = data[index];
     index += 1;
     let diffuse_id = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+    index += 2;
     let diffuse = if diffuse_id != u16::MAX {
         Some(diffuse_id)
     } else {
         None
     };
+    let diffuse_mul = [data[index + 0], data[index + 1], data[index + 2]];
     let material = Material {
         name,
         shader: shader_id.into(),
         diffuse,
+        diffuse_mul,
     };
     (mat_index, material)
 }
@@ -1038,7 +1042,6 @@ mod tests {
                 TextureFormat::Gray => Texture::new_gray(info, cur_img.into_luma8()),
                 TextureFormat::Rgb => Texture::new_rgb(info, cur_img.into_rgb8()),
                 TextureFormat::Rgba => Texture::new_rgba(info, cur_img.into_rgba8()),
-                _ => panic!(),
             };
             data.push((i, texture));
         }
@@ -1061,10 +1064,16 @@ mod tests {
                 .take(rng.gen_range(0..255))
                 .map(char::from)
                 .collect::<String>();
+            let diffuse_mul = [
+                rng.gen_range(0..255),
+                rng.gen_range(0..255),
+                rng.gen_range(0..255),
+            ];
             let material = Material {
                 name,
                 shader,
                 diffuse,
+                diffuse_mul,
             };
             data.push((i, material));
         }
