@@ -23,7 +23,6 @@ pub struct VulkanScene {
     sampler: vk::Sampler,
     //
     pub dflt_tex: TextureLoaded,
-    pub dflt_mat: (Material, Descriptor),
     pub materials: FnvHashMap<u16, (Material, Descriptor)>,
     pub pipelines: FnvHashMap<ShaderMat, Pipeline>,
     pub textures: FnvHashMap<u16, TextureLoaded>,
@@ -76,16 +75,6 @@ impl VulkanScene {
                 (id, (mat, descriptor))
             })
             .collect();
-        let dflt_mat = Material::default();
-        let dflt_mat_desc = build_mat_desc_set(
-            &textures,
-            &dflt_tex,
-            &params_buffer,
-            sampler,
-            u16::MAX,
-            &dflt_mat,
-            dm,
-        );
         let current_cam = scene.cameras()?[0].clone(); // parser automatically adds a default cam
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
@@ -103,7 +92,6 @@ impl VulkanScene {
             meshes,
             sampler,
             dflt_tex,
-            dflt_mat: (dflt_mat, dflt_mat_desc),
             materials,
             pipelines,
             textures,
