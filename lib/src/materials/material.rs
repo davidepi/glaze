@@ -7,3 +7,14 @@ pub struct Material {
     pub diffuse: Option<u16>,
     pub diffuse_mul: [u8; 3],
 }
+
+impl Default for Material {
+    fn default() -> Self {
+        Self {
+            name: "default".to_string(),
+            shader: ShaderMat::DEFAULT_SHADER,
+            diffuse: None,
+            diffuse_mul: [255, 255, 255],
+        }
+    }
+}

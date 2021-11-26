@@ -121,3 +121,19 @@ impl Texture {
         }
     }
 }
+
+impl Default for Texture {
+    fn default() -> Self {
+        const WIDTH: usize = 2;
+        const HEIGHT: usize = 2;
+        let buf = vec![255; WIDTH * HEIGHT * 4];
+        let data = image::RgbaImage::from_raw(WIDTH as u32, HEIGHT as u32, buf).unwrap();
+        let info = TextureInfo {
+            name: "default".to_string(),
+            width: WIDTH as u16,
+            height: HEIGHT as u16,
+            format: TextureFormat::Rgba,
+        };
+        Texture::Rgba(TextureRGBA { info, data })
+    }
+}

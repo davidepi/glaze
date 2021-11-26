@@ -21,6 +21,9 @@ pub struct VulkanScene {
     pub params_buffer: AllocatedBuffer,
     pub meshes: Vec<VulkanMesh>,
     sampler: vk::Sampler,
+    //
+    pub dflt_tex: TextureLoaded,
+    pub dflt_mat: (Material, Descriptor),
     pub materials: FnvHashMap<u16, (Material, Descriptor)>,
     pub pipelines: FnvHashMap<ShaderMat, Pipeline>,
     pub textures: FnvHashMap<u16, TextureLoaded>,
@@ -58,6 +61,7 @@ impl VulkanScene {
             .into_iter()
             .map(|(id, tex)| (id, load_texture_to_gpu(device, mm, cmdm, &mut unf, tex)))
             .collect();
+        let dflt_tex = load_texture_to_gpu(device, mm, cmdm, &mut unf, Texture::default());
         let parsed_mats = scene.materials()?;
         let params_buffer = load_materials_parameters(device, &parsed_mats, mm, cmdm, &mut unf);
         device.wait_completion(&unf.fences);
@@ -68,10 +72,20 @@ impl VulkanScene {
             .into_iter()
             .map(|(id, mat)| {
                 let descriptor =
-                    build_mat_desc_set(&textures, &params_buffer, sampler, id, &mat, dm);
+                    build_mat_desc_set(&textures, &dflt_tex, &params_buffer, sampler, id, &mat, dm);
                 (id, (mat, descriptor))
             })
             .collect();
+        let dflt_mat = Material::default();
+        let dflt_mat_desc = build_mat_desc_set(
+            &textures,
+            &dflt_tex,
+            &params_buffer,
+            sampler,
+            u16::MAX,
+            &dflt_mat,
+            dm,
+        );
         let current_cam = scene.cameras()?[0].clone(); // parser automatically adds a default cam
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
@@ -88,6 +102,8 @@ impl VulkanScene {
             params_buffer,
             meshes,
             sampler,
+            dflt_tex,
+            dflt_mat: (dflt_mat, dflt_mat_desc),
             materials,
             pipelines,
             textures,
@@ -134,6 +150,7 @@ impl VulkanScene {
         let fence = device.immediate_execute(cmd, command);
         *desc = build_mat_desc_set(
             &self.textures,
+            &self.dflt_tex,
             &self.update_buffer,
             self.sampler,
             old,
@@ -173,6 +190,7 @@ impl VulkanScene {
     pub fn unload<T: Device>(self, device: &T, mm: &mut MemoryManager) {
         self.textures
             .into_iter()
+            .chain([(u16::MAX, self.dflt_tex)])
             .for_each(|(_, tex)| mm.free_image(tex.image));
         unsafe { device.logical().destroy_sampler(self.sampler, None) };
         mm.free_buffer(self.vertex_buffer);
@@ -315,14 +333,19 @@ fn load_indices_to_gpu<T: Device>(
 
 fn build_mat_desc_set(
     textures: &FnvHashMap<u16, TextureLoaded>,
+    dflt_tex: &TextureLoaded,
     params: &AllocatedBuffer,
     sampler: vk::Sampler,
     id: u16,
     material: &Material,
     dm: &mut DescriptorSetCreator,
 ) -> Descriptor {
-    let diffuse_id = material.diffuse.unwrap_or(0); // TODO: set default texture
-    let diffuse = textures.get(&diffuse_id).expect("Failed to find texture"); //TODO: add default texture
+    let diffuse;
+    if let Some(diff_id) = material.diffuse {
+        diffuse = textures.get(&diff_id).unwrap_or(dflt_tex);
+    } else {
+        diffuse = dflt_tex;
+    }
     let diffuse_image_info = vk::DescriptorImageInfo {
         sampler,
         image_view: diffuse.image.image_view,

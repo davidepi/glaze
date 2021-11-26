@@ -49,11 +49,17 @@ impl ShaderMat {
     }
 }
 
+impl Default for ShaderMat {
+    fn default() -> Self {
+        ShaderMat::DEFAULT_SHADER
+    }
+}
+
 impl From<u8> for ShaderMat {
     fn from(num: u8) -> Self {
         match num {
             0 => ShaderMat::Test,
-            _ => Self::DEFAULT_SHADER, // use default
+            _ => Self::DEFAULT_SHADER, // use default shader
         }
     }
 }

@@ -457,10 +457,13 @@ unsafe fn draw_objects(
     device.cmd_bind_vertex_buffers(cmd, 0, &[scene.vertex_buffer.buffer], &[0]);
     device.cmd_bind_index_buffer(cmd, scene.index_buffer.buffer, 0, vk::IndexType::UINT32); //bind once, use firts_index as offset
     for obj in &scene.meshes {
-        let (material, mat_descriptor) = scene.materials.get(&obj.material).unwrap(); //TODO: unwrap or default material
+        let (material, mat_descriptor) = scene
+            .materials
+            .get(&obj.material)
+            .unwrap_or(&scene.dflt_mat);
         if current_shader.is_none() || material.shader != current_shader.unwrap() {
             current_shader = Some(material.shader);
-            let pipeline = scene.pipelines.get(&material.shader).unwrap(); //TODO: unwrap or load at runtime
+            let pipeline = scene.pipelines.get(&material.shader).unwrap(); // this definitely exists
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
             device.cmd_bind_descriptor_sets(
                 cmd,
