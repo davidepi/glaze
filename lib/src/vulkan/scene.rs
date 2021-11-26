@@ -1,3 +1,5 @@
+use std::ffi::c_void;
+use std::num::Wrapping;
 use std::ptr;
 
 use super::cmd::CommandManager;
@@ -71,7 +73,7 @@ impl VulkanScene {
             .into_iter()
             .map(|(id, mat)| {
                 let descriptor =
-                    build_mat_desc_set(&textures, &dflt_tex, &params_buffer, sampler, id, &mat, dm);
+                    build_mat_desc_set(device,(&textures, &dflt_tex), &params_buffer, sampler, id, &mat, dm);
                 (id, (mat, descriptor))
             })
             .collect();
@@ -119,9 +121,15 @@ impl VulkanScene {
         unsafe {
             std::ptr::copy_nonoverlapping(&params, mapped, 1);
         }
+        let align = device
+            .physical()
+            .properties
+            .limits
+            .min_uniform_buffer_offset_alignment;
+        let padding = padding(PARAMS_SIZE, align);
         let copy_region = vk::BufferCopy {
-            src_offset: PARAMS_SIZE * old as u64,
-            dst_offset: PARAMS_SIZE * old as u64,
+            src_offset: (PARAMS_SIZE + padding) * old as u64,
+            dst_offset: (PARAMS_SIZE + padding) * old as u64,
             size: PARAMS_SIZE,
         };
         let command = unsafe {
@@ -137,8 +145,8 @@ impl VulkanScene {
         let cmd = cmdm.get_cmd_buffer();
         let fence = device.immediate_execute(cmd, command);
         *desc = build_mat_desc_set(
-            &self.textures,
-            &self.dflt_tex,
+            device,
+            (&self.textures,&self.dflt_tex),
             &self.update_buffer,
             self.sampler,
             old,
@@ -319,9 +327,9 @@ fn load_indices_to_gpu<T: Device>(
     (converted_meshes, gpu_buffer)
 }
 
-fn build_mat_desc_set(
-    textures: &FnvHashMap<u16, TextureLoaded>,
-    dflt_tex: &TextureLoaded,
+fn build_mat_desc_set<T:Device>(
+    device: &T,
+    (textures, dflt_tex): (&FnvHashMap<u16, TextureLoaded>, &TextureLoaded),
     params: &AllocatedBuffer,
     sampler: vk::Sampler,
     id: u16,
@@ -339,9 +347,11 @@ fn build_mat_desc_set(
         image_view: diffuse.image.image_view,
         image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     };
+    let align = device.physical().properties.limits.min_uniform_buffer_offset_alignment;
+    let padding = padding(PARAMS_SIZE, align);
     let buf_info = vk::DescriptorBufferInfo {
         buffer: params.buffer,
-        offset: PARAMS_SIZE * id as u64,
+        offset: (PARAMS_SIZE+padding) * id as u64,
         range: PARAMS_SIZE,
     };
     let descriptor = dm
@@ -367,7 +377,13 @@ fn load_materials_parameters<T: Device>(
     cmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
 ) -> AllocatedBuffer {
-    let size = (std::mem::size_of::<MaterialParams>() * materials.len()) as u64;
+    let align = device
+        .physical()
+        .properties
+        .limits
+        .min_uniform_buffer_offset_alignment;
+    let padding = padding(PARAMS_SIZE, align);
+    let size = (PARAMS_SIZE + padding) * materials.len() as u64;
     let cpu_buffer = mm.create_buffer(
         "Materials Parameters CPU",
         size,
@@ -383,14 +399,15 @@ fn load_materials_parameters<T: Device>(
     let mut mapped = cpu_buffer
         .allocation
         .mapped_ptr()
-        .expect("Faield to map memory")
+        .expect("Failed to map memory")
         .cast()
         .as_ptr();
     for (_, mat) in materials {
         let params = MaterialParams::from(mat);
         unsafe {
             std::ptr::copy_nonoverlapping(&params, mapped, 1);
-            mapped = mapped.offset(1);
+            let mapped_void = mapped as *mut c_void;
+            mapped = mapped_void.add((PARAMS_SIZE + padding) as usize).cast();
         }
     }
     let copy_region = vk::BufferCopy {
@@ -555,4 +572,9 @@ impl From<&Material> for MaterialParams {
             ),
         }
     }
+}
+
+// how many bytes are required for `n` to be aligned to `align` boundary
+fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
+    ((!n.into()).wrapping_add(1)) & (align.into().wrapping_sub(1))
 }
