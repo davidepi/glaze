@@ -216,12 +216,7 @@ fn channels_to_string(colortype: TextureFormat) -> &'static str {
     }
 }
 
-fn window_materials(
-    ui: &Ui,
-    state: &mut UiState,
-    window: &mut Window,
-    renderer: &mut RealtimeRenderer,
-) {
+fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut RealtimeRenderer) {
     let mut closed = &mut state.materials_window;
     let selected = &mut state.materials_selected;
     let scene = renderer.scene();
@@ -271,7 +266,7 @@ fn window_materials(
                 }
                 shader_combo.end();
             }
-            let diffuse = texture_selector(&ui, "Diffuse", current.diffuse, &scene);
+            let diffuse = texture_selector(ui, "Diffuse", current.diffuse, scene);
             if diffuse != current.diffuse {
                 changed = true;
                 new_diffuse = Some(diffuse);
@@ -281,8 +276,8 @@ fn window_materials(
                 current.diffuse_mul[1] as f32 / 255.0,
                 current.diffuse_mul[2] as f32 / 255.0,
             ];
-            if ColorPicker::new("Diffuse multiplier", &mut color)
-                .small_preview(true)
+            if ColorEdit::new("Diffuse multiplier", &mut color)
+                .inputs(false)
                 .build(ui)
             {
                 changed = true;
@@ -330,8 +325,8 @@ fn texture_selector(
         }
         cb.end();
     }
-    ui.same_line();
     if let Some(selected) = selected {
+        ui.same_line();
         Image::new(TextureId::new(selected as usize), [32.0, 32.0]).build(ui);
     }
     selected

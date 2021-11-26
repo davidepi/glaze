@@ -9,17 +9,17 @@ license = "MIT"
 shaderc = "0.7"
 
 [dependencies]
-ash = { version="0.33", optional=true}
-winit = {version ="0.25", optional=true}
 log = "0.4"
 cgmath = "0.18"
 image = "0.23"
 twox-hash = "1.6"
-memoffset = {version="0.6", optional=true}
-gpu-allocator = {version="0.10", optional=true}
 fnv = "1.0"
-imgui = "0.8"
 xz2 ="0.1"
+ash = {version="0.33", optional=true}
+winit = {version="0.25", optional=true}
+gpu-allocator = {version="0.10", optional=true}
+memoffset = {version="0.6", optional=true}
+imgui = {version="0.8", optional=true}
 
 [target.'cfg(all(target_os = "macos",features="vulkan"))'.dependencies]
 metal = "0.20.0"
@@ -36,4 +36,4 @@ float-cmp = "0.9"
 
 [features]
 default = ["vulkan"]
-vulkan = ["ash", "winit", "gpu-allocator", "memoffset"]
+vulkan = ["ash", "winit", "gpu-allocator", "memoffset", "imgui"]

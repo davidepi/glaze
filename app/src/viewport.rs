@@ -28,7 +28,7 @@ impl InteractiveView {
             let window = WindowBuilder::new()
                 .with_title(env!("CARGO_PKG_NAME"))
                 .with_inner_size(default_size)
-                .build(&event_loop)
+                .build(event_loop)
                 .unwrap();
             let mut imgui = imgui::Context::create();
             let mut platform = WinitPlatform::init(&mut imgui);
@@ -52,7 +52,7 @@ impl InteractiveView {
                 state,
             })
         } else {
-            return Err("No monitor found".into());
+            Err("No monitor found".into())
         }
     }
 
@@ -102,13 +102,8 @@ impl InteractiveView {
                     self.platform
                         .prepare_frame(self.imgui.io_mut(), &self.window)
                         .expect("Failed to prepare frame");
-                    let mut ui = self.imgui.frame();
-                    draw_ui(
-                        &mut ui,
-                        &mut self.state,
-                        &mut self.window,
-                        &mut self.renderer,
-                    );
+                    let ui = self.imgui.frame();
+                    draw_ui(&ui, &mut self.state, &mut self.window, &mut self.renderer);
                     self.platform.prepare_render(&ui, &self.window);
                     let draw_data = ui.render();
                     self.renderer.draw_frame(Some(draw_data));

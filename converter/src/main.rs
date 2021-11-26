@@ -2,14 +2,15 @@ use cgmath::{Point3, Vector2 as Vec2, Vector3 as Vec3};
 use clap::{App, Arg};
 use console::style;
 use glaze::{
-    parse, serialize, Camera, Material, Mesh, ParserVersion, PerspectiveCam, ShaderMat, Texture,
-    TextureFormat, TextureInfo, Vertex,
+    converted_file, parse, serialize, Camera, Material, Mesh, ParserVersion, PerspectiveCam,
+    ShaderMat, Texture, TextureFormat, TextureInfo, Vertex,
 };
 use image::io::Reader as ImageReader;
 use indicatif::{MultiProgress, ProgressBar};
 use russimp::scene::{PostProcess, Scene as RussimpScene};
 use std::collections::HashMap;
 use std::error::Error;
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Instant;
@@ -75,11 +76,9 @@ fn main() {
         } else {
             eprintln!("Failed to preprocess input file");
         }
-    } else {
-        if benchmark(input, version).is_err() {
+    } else if benchmark(input, version).is_err() {
             eprintln!("Failed to benchmark scene");
         }
-    }
 }
 
 fn preprocess_input<S: AsRef<str>>(input: S) -> Result<RussimpScene, Box<dyn Error>> {
@@ -303,16 +302,40 @@ fn write_output<P: AsRef<Path>>(
 pub fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std::error::Error>> {
     // the benchmark is simple on purpose. This method will take seconds if not minutes to run.
     let dir = tempdir()?;
-    let file = dir.path().join("benchmark.bin");
-    let preprocess_start = Instant::now();
-    let preprocessed = preprocess_input(input)?;
-    let preprocess_end = Instant::now();
-    let conversion = convert_input(preprocessed, input)?;
-    let conversion_end = Instant::now();
-    let _ = write_output(conversion, version, file)?;
-    let compression_end = Instant::now();
-    let file = dir.path().join("benchmark.bin");
-    let mut parsed = parse(file)?;
+    let file;
+    let conversion_time;
+    if !converted_file(input) {
+        let mut conv_results = String::new();
+        file = dir.path().join("benchmark.bin");
+        let preprocess_start = Instant::now();
+        let preprocessed = preprocess_input(input)?;
+        let preprocess_end = Instant::now();
+        let conversion = convert_input(preprocessed, input)?;
+        let conversion_end = Instant::now();
+        let _ = write_output(conversion, version, &file)?;
+        let compression_end = Instant::now();
+        writeln!(&mut conv_results, "--- Writing ---")?;
+        writeln!(
+            &mut conv_results,
+            "Preprocessing: {}s",
+            (preprocess_end - preprocess_start).as_secs_f32()
+        )?;
+        writeln!(
+            &mut conv_results,
+            "Conversion: {}s",
+            (conversion_end - preprocess_end).as_secs_f32()
+        )?;
+        writeln!(
+            &mut conv_results,
+            "Compressing + Writing: {}s",
+            (compression_end - conversion_end).as_secs_f32()
+        )?;
+        conversion_time = Some(conv_results);
+    } else {
+        conversion_time = None;
+        file = PathBuf::from(input);
+    }
+    let mut parsed = parse(&file)?;
     let vert_start = Instant::now();
     let vertices = parsed.vertices()?;
     let vert_end = Instant::now();
@@ -326,19 +349,9 @@ pub fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std:
     println!("Reading and writing results for {}", input);
     println!("Total vertices: {}", vertices.len());
     println!("Total textures: {}", textures.len());
-    println!("--- Writing ---");
-    println!(
-        "Preprocessing: {}s",
-        (preprocess_end - preprocess_start).as_secs_f32()
-    );
-    println!(
-        "Conversion: {}s",
-        (conversion_end - preprocess_end).as_secs_f32()
-    );
-    println!(
-        "Compressing + Writing: {}s",
-        (compression_end - conversion_end).as_secs_f32()
-    );
+    if let Some(results) = conversion_time {
+        println!("{}", results);
+    }
     println!("--- Reading ---");
     println!("Vertices: {}s", (vert_end - vert_start).as_secs_f32());
     println!("Meshes: {}s", (mesh_end - vert_end).as_secs_f32());

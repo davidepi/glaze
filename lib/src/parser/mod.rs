@@ -164,6 +164,24 @@ pub fn serialize<P: AsRef<Path>>(
     };
     Ok(())
 }
+/// Returns true if the file has already been converted to a format supported by this crate.
+///
+/// This crate requires file to be in a specific version. This function checks whether the file
+/// is supported or not.
+///
+/// In case the file does not exist or can not be read, false is returned.
+pub fn converted_file<P: AsRef<Path>>(file: P) -> bool {
+    let mut header = [0; HEADER_LEN];
+    if let Ok(mut file) = File::open(file) {
+        if let Ok(()) = file.read_exact(&mut header) {
+            header[0..5] == MAGIC_NUMBER
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
 
 /// Trait used for accessing the content of the parsed file.
 ///
