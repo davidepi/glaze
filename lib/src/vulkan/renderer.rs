@@ -460,19 +460,19 @@ unsafe fn draw_objects(
             .materials
             .get(&obj.material)
             .expect("Failed to find material"); // hard error, material should be created by the converter
+        let pipeline = scene.pipelines.get(&material.shader).unwrap(); // this definitely exists
         if current_shader.is_none() || material.shader != current_shader.unwrap() {
             current_shader = Some(material.shader);
-            let pipeline = scene.pipelines.get(&material.shader).unwrap(); // this definitely exists
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.layout,
-                0,
-                &[frame_data.descriptor.set, mat_descriptor.set],
-                &[],
-            );
         }
+        device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::GRAPHICS,
+            pipeline.layout,
+            0,
+            &[frame_data.descriptor.set, mat_descriptor.set],
+            &[],
+        );
         device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
         stats.done_draw_call();
     }
