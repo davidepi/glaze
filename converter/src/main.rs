@@ -3,10 +3,11 @@ use clap::{App, Arg};
 use console::style;
 use glaze::{
     converted_file, parse, serialize, Camera, Material, Mesh, ParserVersion, PerspectiveCam,
-    ShaderMat, Texture, TextureFormat, TextureInfo, Vertex,
+    Texture, TextureFormat, TextureInfo, Vertex,
 };
 use image::io::Reader as ImageReader;
 use indicatif::{MultiProgress, ProgressBar};
+use russimp::material::{MaterialProperty, PropertyTypeInfo};
 use russimp::scene::{PostProcess, Scene as RussimpScene};
 use std::collections::HashMap;
 use std::error::Error;
@@ -77,8 +78,8 @@ fn main() {
             eprintln!("Failed to preprocess input file");
         }
     } else if benchmark(input, version).is_err() {
-            eprintln!("Failed to benchmark scene");
-        }
+        eprintln!("Failed to benchmark scene");
+    }
 }
 
 fn preprocess_input<S: AsRef<str>>(input: S) -> Result<RussimpScene, Box<dyn Error>> {
@@ -160,7 +161,7 @@ fn convert_meshes(
                 let vertex = Vertex {
                     vv: Vec3::new(vv.x, vv.y, vv.z),
                     vn: Vec3::new(vn.x, vn.y, vn.z),
-                    vt: Vec2::new(vt.x, vt.y),
+                    vt: Vec2::new(vt.x, 1.0 - vt.y), // flip y for vulkan
                 };
                 let vertex_index = *used_vert
                     .entry(vertex_to_bytes(&vertex))
@@ -208,10 +209,10 @@ fn convert_cameras(scene: &RussimpScene, mpb: &MultiProgress) -> Vec<Camera> {
 }
 
 fn convert_materials<S: AsRef<str>>(
-    materials: &Vec<russimp::material::Material>,
+    materials: &[russimp::material::Material],
     mpb: &MultiProgress,
     original_path: S,
-) -> Result<(Vec<(u16, Material)>, Vec<(u16, Texture)>), std::io::Error> {
+) -> Result<(Vec<(u16, Material)>, Vec<(u16, Texture)>), Box<dyn Error>> {
     let effort = materials.len();
     let pb =
         mpb.add(ProgressBar::new(effort as u64).with_message("Converting materials and textures"));
@@ -219,7 +220,6 @@ fn convert_materials<S: AsRef<str>>(
     let mut retval_textures = Vec::new();
     let mut retval_materials = Vec::new();
     for material in materials {
-        let mut diffuse = None;
         for (texture_type, textures) in &material.textures {
             match texture_type {
                 russimp::texture::TextureType::Diffuse => {
@@ -234,22 +234,15 @@ fn convert_materials<S: AsRef<str>>(
                             .unwrap()
                             .join(path);
                     }
-                    let id =
-                        convert_texture(&tex_name, path, &mut used_textures, &mut retval_textures);
-                    diffuse = Some(id);
+                    convert_texture(&tex_name, path, &mut used_textures, &mut retval_textures)?;
                 }
                 _ => {} //unsupported, do nothing
             }
         }
-        let properties = &material.properties[..];
-        let glaze_material = Material {
-            name: format!("Material#{}", retval_materials.len()),
-            shader: ShaderMat::Test,
-            diffuse,
-            diffuse_mul: [255, 255, 255],
-        };
+        // build material
+        let material = convert_material(&material.properties, &used_textures);
         let mat_id = retval_materials.len() as u16;
-        retval_materials.push((mat_id, glaze_material));
+        retval_materials.push((mat_id, material));
         pb.inc(1);
     }
     pb.finish();
@@ -259,17 +252,12 @@ fn convert_materials<S: AsRef<str>>(
 fn convert_texture(
     name: &str,
     path: PathBuf,
-    used: &mut HashMap<&str, u16>,
+    used: &mut HashMap<String, u16>,
     ret: &mut Vec<(u16, Texture)>,
-) -> u16 {
-    if let Some(id) = used.get(name) {
-        *id
-    } else {
-        let data = ImageReader::open(path)
-            .expect(&format!("Failed to find image {}", name))
-            .decode()
-            .expect(&format!("Incompatible image {}", name))
-            .to_rgba8();
+) -> Result<(), Box<dyn Error>> {
+    if !used.contains_key(name) {
+        // TODO: try to use RGB as well
+        let data = ImageReader::open(path)?.decode()?.to_rgba8();
         let info = TextureInfo {
             name: name.to_string(),
             width: data.width() as u16,
@@ -279,7 +267,55 @@ fn convert_texture(
         let texture = Texture::new_rgba(info, data);
         let id = ret.len() as u16;
         ret.push((id, texture));
-        id
+        used.insert(name.to_string(), id);
+    }
+    Ok(())
+}
+
+fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, u16>) -> Material {
+    let mut retval = Material::default();
+    for property in props {
+        match property.key.as_str() {
+            "?mat.name" => retval.name = matprop_to_str(property),
+            "$clr.diffuse" => retval.diffuse_mul = fcol_to_ucol(matprop_to_fvec(property)),
+            "$tex.file" => match property.semantic {
+                russimp::texture::TextureType::Diffuse => {
+                    retval.diffuse = used_textures.get(&matprop_to_str(property)).cloned();
+                }
+                _ => {}
+            },
+            _ => {} // super ugly...
+        }
+    }
+    retval
+}
+
+fn fcol_to_ucol(col: [f32; 3]) -> [u8; 3] {
+    [
+        (col[0] * 255.0) as u8,
+        (col[1] * 255.0) as u8,
+        (col[2] * 255.0) as u8,
+    ]
+}
+
+fn matprop_to_str(property: &MaterialProperty) -> String {
+    match &property.data {
+        PropertyTypeInfo::String(s) => s.clone(),
+        _ => "".to_string(),
+    }
+}
+
+fn matprop_to_ivec(property: &MaterialProperty) -> [i32; 3] {
+    match &property.data {
+        PropertyTypeInfo::IntegerArray(a) => [a[0], a[1], a[2]],
+        _ => [0, 0, 0],
+    }
+}
+
+fn matprop_to_fvec(property: &MaterialProperty) -> [f32; 3] {
+    match &property.data {
+        PropertyTypeInfo::FloatArray(a) => [a[0], a[1], a[2]],
+        _ => [0.0, 0.0, 0.0],
     }
 }
 
