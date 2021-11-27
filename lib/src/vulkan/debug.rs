@@ -4,6 +4,7 @@ use std::os::raw::c_char;
 use std::ptr;
 
 pub const DEFAULT_VALIDATIONS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
+pub const FORCE_VALIDATIONS: bool = false;
 
 pub struct ValidationLayers {
     names: Vec<CString>,
@@ -12,7 +13,7 @@ pub struct ValidationLayers {
 
 impl ValidationLayers {
     pub fn new(names: &[&str]) -> ValidationLayers {
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) || FORCE_VALIDATIONS {
             let names = names
                 .iter()
                 .map(|x| CString::new(*x).unwrap())
@@ -32,7 +33,7 @@ impl ValidationLayers {
     }
 
     pub fn as_ptr(&self) -> *const *const i8 {
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) || FORCE_VALIDATIONS {
             self.pointers.as_ptr()
         } else {
             ptr::null()
@@ -44,7 +45,7 @@ impl ValidationLayers {
     }
 
     pub fn check_support(&self, entry: &ash::Entry) -> bool {
-        if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) || FORCE_VALIDATIONS {
             let layer_properties = entry
                 .enumerate_instance_layer_properties()
                 .expect("Failed to enumerate layer properties");
@@ -77,7 +78,7 @@ pub fn cchars_to_string(cchars: &[c_char]) -> String {
         .to_owned()
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, FORCE_VALIDATIONS))]
 pub mod logger {
     use ash::vk;
     use std::ffi::{c_void, CStr};

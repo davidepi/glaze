@@ -110,6 +110,7 @@ impl Device for PresentDevice {
             flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
             p_inheritance_info: ptr::null(),
         };
+        let cmds = [cmd];
         let submit_ci = vk::SubmitInfo {
             s_type: vk::StructureType::SUBMIT_INFO,
             p_next: ptr::null(),
@@ -117,7 +118,7 @@ impl Device for PresentDevice {
             p_wait_semaphores: ptr::null(),
             p_wait_dst_stage_mask: ptr::null(),
             command_buffer_count: 1,
-            p_command_buffers: [cmd].as_ptr(),
+            p_command_buffers: cmds.as_ptr(),
             signal_semaphore_count: 0,
             p_signal_semaphores: ptr::null(),
         };

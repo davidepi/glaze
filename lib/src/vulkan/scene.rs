@@ -1,5 +1,4 @@
 use std::ffi::c_void;
-use std::num::Wrapping;
 use std::ptr;
 
 use super::cmd::CommandManager;
@@ -72,8 +71,15 @@ impl VulkanScene {
         let materials = parsed_mats
             .into_iter()
             .map(|(id, mat)| {
-                let descriptor =
-                    build_mat_desc_set(device,(&textures, &dflt_tex), &params_buffer, sampler, id, &mat, dm);
+                let descriptor = build_mat_desc_set(
+                    device,
+                    (&textures, &dflt_tex),
+                    &params_buffer,
+                    sampler,
+                    id,
+                    &mat,
+                    dm,
+                );
                 (id, (mat, descriptor))
             })
             .collect();
@@ -146,7 +152,7 @@ impl VulkanScene {
         let fence = device.immediate_execute(cmd, command);
         *desc = build_mat_desc_set(
             device,
-            (&self.textures,&self.dflt_tex),
+            (&self.textures, &self.dflt_tex),
             &self.update_buffer,
             self.sampler,
             old,
@@ -327,7 +333,7 @@ fn load_indices_to_gpu<T: Device>(
     (converted_meshes, gpu_buffer)
 }
 
-fn build_mat_desc_set<T:Device>(
+fn build_mat_desc_set<T: Device>(
     device: &T,
     (textures, dflt_tex): (&FnvHashMap<u16, TextureLoaded>, &TextureLoaded),
     params: &AllocatedBuffer,
@@ -347,11 +353,15 @@ fn build_mat_desc_set<T:Device>(
         image_view: diffuse.image.image_view,
         image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     };
-    let align = device.physical().properties.limits.min_uniform_buffer_offset_alignment;
+    let align = device
+        .physical()
+        .properties
+        .limits
+        .min_uniform_buffer_offset_alignment;
     let padding = padding(PARAMS_SIZE, align);
     let buf_info = vk::DescriptorBufferInfo {
         buffer: params.buffer,
-        offset: (PARAMS_SIZE+padding) * id as u64,
+        offset: (PARAMS_SIZE + padding) * id as u64,
         range: PARAMS_SIZE,
     };
     let descriptor = dm

@@ -44,12 +44,13 @@ impl DescriptorAllocator {
     }
 
     pub fn alloc(&mut self, layout: vk::DescriptorSetLayout) -> vk::DescriptorSet {
+        let layouts = [layout];
         let mut alloc_ci = vk::DescriptorSetAllocateInfo {
             s_type: vk::StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
             p_next: ptr::null(),
             descriptor_pool: self.current_pool,
             descriptor_set_count: 1,
-            p_set_layouts: [layout].as_ptr(),
+            p_set_layouts: layouts.as_ptr(),
         };
         let res = unsafe { self.device.allocate_descriptor_sets(&alloc_ci) };
         match res {
@@ -156,6 +157,16 @@ impl Hash for DescriptorSetLayoutBindingWrapper {
     }
 }
 
+// DescriptorSetLayout uses pointers and, in my code, is created in a different function than the
+// build one. Of course, in the optimized build, the target of this pointers is deallocated so I'm
+// forced to store it in this wrapper and build the DescriptorSetLayoutWrite function in the
+// DescriptorSetBuilder::build()
+#[derive(Debug, Copy, Clone)]
+enum BufOrImgInfo {
+    Buf(vk::DescriptorBufferInfo),
+    Img(vk::DescriptorImageInfo),
+}
+
 pub struct DescriptorSetLayoutCache {
     cache: HashMap<Vec<DescriptorSetLayoutBindingWrapper>, vk::DescriptorSetLayout>,
     device: ash::Device,
@@ -170,12 +181,12 @@ impl DescriptorSetLayoutCache {
     }
 
     pub fn get(&mut self, desc: &[vk::DescriptorSetLayoutBinding]) -> vk::DescriptorSetLayout {
-        let mut wrapping = desc
+        let wrapping = desc
             .iter()
             .cloned()
             .map(|x| DescriptorSetLayoutBindingWrapper { val: x })
             .collect::<Vec<_>>();
-        wrapping.sort_by_key(|d| d.val.binding);
+        // wrapping.sort_by_key(|d| d.val.binding); // should be sorted already
         match self.cache.entry(wrapping) {
             std::collections::hash_map::Entry::Occupied(val) => *val.get(),
             std::collections::hash_map::Entry::Vacant(entry) => {
@@ -218,8 +229,8 @@ impl DescriptorSetCreator {
         DescriptorSetBuilder {
             alloc: &mut self.alloc,
             cache: &mut self.cache,
-            writes: Vec::new(),
             bindings: Vec::new(),
+            info: Vec::new(),
         }
     }
 
@@ -232,8 +243,8 @@ impl DescriptorSetCreator {
 pub struct DescriptorSetBuilder<'a> {
     cache: &'a mut DescriptorSetLayoutCache,
     alloc: &'a mut DescriptorAllocator,
-    writes: Vec<vk::WriteDescriptorSet>,
     bindings: Vec<vk::DescriptorSetLayoutBinding>,
+    info: Vec<BufOrImgInfo>,
 }
 
 impl<'a> DescriptorSetBuilder<'a> {
@@ -252,20 +263,8 @@ impl<'a> DescriptorSetBuilder<'a> {
             stage_flags,
             p_immutable_samplers: ptr::null(),
         };
-        let write = vk::WriteDescriptorSet {
-            s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
-            p_next: ptr::null(),
-            dst_set: vk::DescriptorSet::null(), //tmp value
-            dst_binding: binding,
-            dst_array_element: 0,
-            descriptor_count: 1,
-            descriptor_type,
-            p_image_info: ptr::null(),
-            p_buffer_info: &buf_info,
-            p_texel_buffer_view: ptr::null(),
-        };
         self.bindings.push(layout_binding);
-        self.writes.push(write);
+        self.info.push(BufOrImgInfo::Buf(buf_info));
         self
     }
     #[must_use]
@@ -283,29 +282,41 @@ impl<'a> DescriptorSetBuilder<'a> {
             stage_flags,
             p_immutable_samplers: ptr::null(),
         };
-        let write = vk::WriteDescriptorSet {
-            s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
-            p_next: ptr::null(),
-            dst_set: vk::DescriptorSet::null(), //tmp value
-            dst_binding: binding,
-            dst_array_element: 0,
-            descriptor_count: 1,
-            descriptor_type,
-            p_image_info: &image_info,
-            p_buffer_info: ptr::null(),
-            p_texel_buffer_view: ptr::null(),
-        };
         self.bindings.push(layout_binding);
-        self.writes.push(write);
+        self.info.push(BufOrImgInfo::Img(image_info));
         self
     }
 
-    pub fn build(mut self) -> Descriptor {
+    pub fn build(self) -> Descriptor {
         let layout = self.cache.get(&self.bindings);
         let set = self.alloc.alloc(layout);
-        self.writes.iter_mut().for_each(|w| w.dst_set = set);
+        let mut writes = Vec::new();
+        for i in 0..self.bindings.len() {
+            let binding = self.bindings[i];
+            let mut write = vk::WriteDescriptorSet {
+                s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
+                p_next: ptr::null(),
+                dst_set: set,
+                dst_binding: binding.binding,
+                dst_array_element: 0,
+                descriptor_count: 1,
+                descriptor_type: binding.descriptor_type,
+                p_image_info: ptr::null(),
+                p_buffer_info: ptr::null(),
+                p_texel_buffer_view: ptr::null(),
+            };
+            match &self.info[i] {
+                BufOrImgInfo::Buf(buf) => {
+                    write.p_buffer_info = buf;
+                }
+                BufOrImgInfo::Img(img) => {
+                    write.p_image_info = img;
+                }
+            }
+            writes.push(write);
+        }
         unsafe {
-            self.alloc.device.update_descriptor_sets(&self.writes, &[]);
+            self.alloc.device.update_descriptor_sets(&writes, &[]);
         }
         Descriptor { set, layout }
     }
