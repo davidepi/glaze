@@ -6,7 +6,7 @@ use glaze::{
     Texture, TextureFormat, TextureInfo, Vertex,
 };
 use image::io::Reader as ImageReader;
-use indicatif::{MultiProgress, ProgressBar};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use russimp::material::{MaterialProperty, PropertyTypeInfo};
 use russimp::scene::{PostProcess, Scene as RussimpScene};
 use std::collections::HashMap;
@@ -14,6 +14,7 @@ use std::error::Error;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::thread;
 use std::time::Instant;
 use tempfile::tempdir;
 
@@ -24,6 +25,12 @@ struct TempScene {
     textures: Vec<(u16, Texture)>,
     materials: Vec<(u16, Material)>,
 }
+
+macro_rules! error(
+    ($msg: expr, $cause: expr) => {
+        eprintln!("{}: {}. {}", style("Error").bold().red(), $msg, $cause)
+    }
+);
 
 fn main() {
     let supported_versions = [ParserVersion::V1]
@@ -62,28 +69,28 @@ fn main() {
     if !matches.is_present("benchmark") {
         let output = matches.value_of("output").unwrap();
         println!("{} Preprocessing input...", style("[1/3]").bold().dim());
-        if let Ok(scene) = preprocess_input(input) {
-            println!("{} Converting scene...", style("[2/3]").bold().dim());
-            if let Ok(scene) = convert_input(scene, input) {
-                println!("{} Saving file...", style("[3/3]").bold().dim());
-                if write_output(scene, version, output).is_ok() {
-                    println!("{}", style("Done!").bold().green());
-                } else {
-                    eprint!("Failed to save file");
+        match preprocess_input(input) {
+            Ok(scene) => {
+                println!("{} Converting scene...", style("[2/3]").bold().dim());
+                match convert_input(scene, input) {
+                    Ok(scene) => {
+                        println!("{} Compressing file...", style("[3/3]").bold().dim());
+                        match write_output(scene, version, output) {
+                            Ok(_) => println!("{} Done!", style("Done!").bold().green()),
+                            Err(e) => error!("Failed to compress file", e),
+                        }
+                    }
+                    Err(e) => error!("Failed to convert scene", e),
                 }
-            } else {
-                eprintln!("Failed to convert scene");
             }
-        } else {
-            eprintln!("Failed to preprocess input file");
+            Err(e) => error!("Failed to preprocess input", e),
         }
-    } else if benchmark(input, version).is_err() {
-        eprintln!("Failed to benchmark scene");
     }
 }
 
 fn preprocess_input<S: AsRef<str>>(input: S) -> Result<RussimpScene, Box<dyn Error>> {
     let pb = ProgressBar::new_spinner();
+    pb.enable_steady_tick(120);
     let postprocess = vec![
         PostProcess::Triangulate,
         PostProcess::ValidateDataStructure,
@@ -113,14 +120,28 @@ fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
         .collect()
 }
 
-fn convert_input<S: AsRef<str>>(
-    scene: RussimpScene,
-    original_path: S,
-) -> Result<TempScene, Box<dyn Error>> {
+fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, std::io::Error> {
     let mpb = MultiProgress::new();
-    let cameras = convert_cameras(&scene, &mpb);
-    let (materials, textures) = convert_materials(&scene.materials, &mpb, original_path.as_ref())?;
-    let (vertices, meshes) = convert_meshes(&scene.meshes, &mpb)?;
+    let style = ProgressStyle::default_bar()
+        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
+        .progress_chars("#>-");
+    let camera_data = scene.cameras;
+    let camera_pb = mpb.add(ProgressBar::new(1));
+    camera_pb.set_style(style.clone());
+    let mesh_data = scene.meshes;
+    let mesh_pb = mpb.add(ProgressBar::new(1));
+    mesh_pb.set_style(style.clone());
+    let material_data = scene.materials;
+    let mat_pb = mpb.add(ProgressBar::new(1));
+    mat_pb.set_style(style.clone());
+    let path = original_path.to_string();
+    let camera_thread = thread::spawn(move || convert_cameras(&camera_data, camera_pb));
+    let material_thread = thread::spawn(move || convert_materials(&material_data, mat_pb, &path));
+    let mesh_thread = thread::spawn(move || convert_meshes(&mesh_data, mesh_pb));
+    let cameras = camera_thread.join().unwrap();
+    let (materials, textures) = material_thread.join().unwrap()?;
+    let (vertices, meshes) = mesh_thread.join().unwrap()?;
+    mpb.clear().ok();
     Ok(TempScene {
         vertices,
         meshes,
@@ -131,14 +152,15 @@ fn convert_input<S: AsRef<str>>(
 }
 
 fn convert_meshes(
-    meshes: &Vec<russimp::mesh::Mesh>,
-    mpb: &MultiProgress,
+    meshes: &[russimp::mesh::Mesh],
+    pb: ProgressBar,
 ) -> Result<(Vec<Vertex>, Vec<Mesh>), std::io::Error> {
     let mut retval_vertices = Vec::new();
     let mut retval_meshes = Vec::new();
     let mut used_vert = HashMap::new();
-    let effort = meshes.iter().fold(0, |acc, m| acc + m.faces.len());
-    let pb = mpb.add(ProgressBar::new(effort as u64).with_message("Converting Mesh faces"));
+    let effort = meshes.iter().fold(0, |acc, m| acc + m.faces.len()) as u64;
+    pb.set_length(effort);
+    pb.set_message("Converting meshes");
     for mesh in meshes {
         let mut indices = Vec::with_capacity(mesh.faces.len() * 3);
         if mesh.uv_components[0] < 2 {
@@ -182,11 +204,12 @@ fn convert_meshes(
     Ok((retval_vertices, retval_meshes))
 }
 
-fn convert_cameras(scene: &RussimpScene, mpb: &MultiProgress) -> Vec<Camera> {
-    let effort = std::cmp::min(scene.cameras.len(), 1);
-    let pb = mpb.add(ProgressBar::new(effort as u64).with_message("Converting cameras"));
+fn convert_cameras(cameras: &[russimp::camera::Camera], pb: ProgressBar) -> Vec<Camera> {
+    let effort = std::cmp::max(cameras.len(), 1);
+    pb.set_length(effort as u64);
+    pb.set_message("Converting cameras");
     let mut retval_cameras = Vec::with_capacity(effort);
-    for camera in &scene.cameras {
+    for camera in cameras {
         retval_cameras.push(Camera::Perspective(PerspectiveCam {
             position: Point3::new(camera.position.x, camera.position.y, camera.position.z),
             target: Point3::new(camera.look_at.x, camera.look_at.y, camera.look_at.z),
@@ -208,14 +231,14 @@ fn convert_cameras(scene: &RussimpScene, mpb: &MultiProgress) -> Vec<Camera> {
     retval_cameras
 }
 
-fn convert_materials<S: AsRef<str>>(
+fn convert_materials(
     materials: &[russimp::material::Material],
-    mpb: &MultiProgress,
-    original_path: S,
-) -> Result<(Vec<(u16, Material)>, Vec<(u16, Texture)>), Box<dyn Error>> {
+    pb: ProgressBar,
+    original_path: &str,
+) -> Result<(Vec<(u16, Material)>, Vec<(u16, Texture)>), std::io::Error> {
     let effort = materials.len();
-    let pb =
-        mpb.add(ProgressBar::new(effort as u64).with_message("Converting materials and textures"));
+    pb.set_length(effort as u64);
+    pb.set_message("Converting materials and textures");
     let mut used_textures = HashMap::new();
     let mut retval_textures = Vec::new();
     let mut retval_materials = Vec::new();
@@ -229,10 +252,7 @@ fn convert_materials<S: AsRef<str>>(
                     //TODO: add support for embedded textures
                     let mut path = PathBuf::from(&tex_name);
                     if path.is_relative() {
-                        path = PathBuf::from(original_path.as_ref())
-                            .parent()
-                            .unwrap()
-                            .join(path);
+                        path = PathBuf::from(original_path).parent().unwrap().join(path);
                     }
                     convert_texture(&tex_name, path, &mut used_textures, &mut retval_textures)?;
                 }
@@ -254,22 +274,32 @@ fn convert_texture(
     path: PathBuf,
     used: &mut HashMap<String, u16>,
     ret: &mut Vec<(u16, Texture)>,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), std::io::Error> {
     if !used.contains_key(name) {
         // TODO: try to use RGB as well
-        let data = ImageReader::open(path)?.decode()?.to_rgba8();
-        let info = TextureInfo {
-            name: name.to_string(),
-            width: data.width() as u16,
-            height: data.height() as u16,
-            format: TextureFormat::Rgba,
-        };
-        let texture = Texture::new_rgba(info, data);
-        let id = ret.len() as u16;
-        ret.push((id, texture));
-        used.insert(name.to_string(), id);
+        let data = ImageReader::open(path)?.decode();
+        if let Ok(data) = data {
+            let img_raw = data.to_rgba8();
+            let info = TextureInfo {
+                name: name.to_string(),
+                width: img_raw.width() as u16,
+                height: img_raw.height() as u16,
+                format: TextureFormat::Rgba,
+            };
+            let texture = Texture::new_rgba(info, img_raw);
+            let id = ret.len() as u16;
+            ret.push((id, texture));
+            used.insert(name.to_string(), id);
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Could not read texture format",
+            ))
+        }
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, u16>) -> Material {
