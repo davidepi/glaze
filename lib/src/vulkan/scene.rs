@@ -299,15 +299,18 @@ fn load_indices_to_gpu<T: Device>(
         MemoryLocation::GpuOnly,
     );
     let mut converted_meshes = Vec::with_capacity(meshes.len());
-    let mapped = cpu_buffer
+    let mut mapped = cpu_buffer
         .allocation
         .mapped_ptr()
-        .expect("Faield to map memory")
+        .expect("Failed to map memory")
         .cast()
         .as_ptr();
     let mut offset = 0;
     for mesh in meshes {
-        unsafe { std::ptr::copy_nonoverlapping(mesh.indices.as_ptr(), mapped, mesh.indices.len()) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(mesh.indices.as_ptr(), mapped, mesh.indices.len());
+            mapped = mapped.add(mesh.indices.len());
+        };
         converted_meshes.push(VulkanMesh {
             index_offset: offset,
             index_count: mesh.indices.len() as u32,
