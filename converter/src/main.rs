@@ -76,7 +76,7 @@ fn main() {
                     Ok(scene) => {
                         println!("{} Compressing file...", style("[3/3]").bold().dim());
                         match write_output(scene, version, output) {
-                            Ok(_) => println!("{} Done!", style("Done!").bold().green()),
+                            Ok(_) => println!("{}", style("Done!").bold().green()),
                             Err(e) => error!("Failed to compress file", e),
                         }
                     }
@@ -95,13 +95,11 @@ fn preprocess_input<S: AsRef<str>>(input: S) -> Result<RussimpScene, Box<dyn Err
         PostProcess::Triangulate,
         PostProcess::ValidateDataStructure,
         PostProcess::JoinIdenticalVertices,
-        PostProcess::GenerateUVCoords,
         PostProcess::GenerateNormals,
         PostProcess::OptimizeMeshes,
         PostProcess::OptimizeGraph,
         PostProcess::FindInstances,
         PostProcess::FixInfacingNormals,
-        PostProcess::RemoveRedundantMaterials,
     ];
     let scene = RussimpScene::from_file(input.as_ref(), postprocess)?;
     pb.finish_and_clear();
@@ -185,11 +183,17 @@ fn convert_meshes(
                     vn: Vec3::new(vn.x, vn.y, vn.z),
                     vt: Vec2::new(vt.x, 1.0 - vt.y), // flip y for vulkan
                 };
-                let vertex_index = *used_vert
-                    .entry(vertex_to_bytes(&vertex))
-                    .or_insert(retval_vertices.len() as u32);
+                let vertex_bytes = vertex_to_bytes(&vertex);
+                let vertex_index = if let Some(v) = used_vert.get(&vertex_bytes) {
+                    *v
+                } else {
+                    let index = retval_vertices.len() as u32;
+                    used_vert.insert(vertex_bytes, index);
+                    retval_vertices.push(vertex);
+                    index
+
+                };
                 indices.push(vertex_index);
-                retval_vertices.push(vertex);
             }
             pb.inc(1);
         }
