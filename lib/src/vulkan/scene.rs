@@ -448,14 +448,13 @@ fn load_texture_to_gpu<T: Device>(
     texture: Texture,
 ) -> TextureLoaded {
     let (width, height) = texture.dimensions();
-    let size = (width as u32 * height as u32 * 4) as u64;
+    let size = texture.len() as u64;
     let extent = vk::Extent2D {
         width: width as u32,
         height: height as u32,
     };
     let vkformat = match texture.format() {
         TextureFormat::Gray => vk::Format::R8_UNORM,
-        TextureFormat::Rgb => vk::Format::R8G8B8_SRGB,
         TextureFormat::Rgba => vk::Format::R8G8B8A8_SRGB,
     };
     let buffer = mm.create_buffer(

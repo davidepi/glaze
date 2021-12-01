@@ -191,7 +191,6 @@ fn convert_meshes(
                     used_vert.insert(vertex_bytes, index);
                     retval_vertices.push(vertex);
                     index
-
                 };
                 indices.push(vertex_index);
             }
@@ -248,17 +247,32 @@ fn convert_materials(
     let mut retval_materials = Vec::new();
     for material in materials {
         for (texture_type, textures) in &material.textures {
+            let texture = textures.first().unwrap(); // support single textures only
+                                                     // replaces \ with / and hopes UNIX path do not use strange names
+            let tex_name = texture.path.clone().replace("\\", "/");
+            //TODO: add support for embedded textures
+            let mut path = PathBuf::from(&tex_name);
+            if path.is_relative() {
+                path = PathBuf::from(original_path).parent().unwrap().join(path);
+            }
             match texture_type {
                 russimp::texture::TextureType::Diffuse => {
-                    let texture = textures.first().unwrap(); // support single textures only
-                                                             // replaces \ with / and hopes UNIX path do not use strange names
-                    let tex_name = texture.path.clone().replace("\\", "/");
-                    //TODO: add support for embedded textures
-                    let mut path = PathBuf::from(&tex_name);
-                    if path.is_relative() {
-                        path = PathBuf::from(original_path).parent().unwrap().join(path);
-                    }
-                    convert_texture(&tex_name, path, &mut used_textures, &mut retval_textures)?;
+                    convert_texture(
+                        &tex_name,
+                        path,
+                        &mut used_textures,
+                        TextureFormat::Rgba,
+                        &mut retval_textures,
+                    )?;
+                }
+                russimp::texture::TextureType::Opacity => {
+                    convert_texture(
+                        &tex_name,
+                        path,
+                        &mut used_textures,
+                        TextureFormat::Gray,
+                        &mut retval_textures,
+                    )?;
                 }
                 _ => {} //unsupported, do nothing
             }
@@ -277,23 +291,40 @@ fn convert_texture(
     name: &str,
     path: PathBuf,
     used: &mut HashMap<String, u16>,
+    format: TextureFormat,
     ret: &mut Vec<(u16, Texture)>,
 ) -> Result<(), std::io::Error> {
-    if !used.contains_key(name) {
-        // TODO: try to use RGB as well
+    let used_name = used_name(name, format);
+    if !used.contains_key(&used_name) {
         let data = ImageReader::open(path)?.decode();
         if let Ok(data) = data {
-            let img_raw = data.to_rgba8();
-            let info = TextureInfo {
-                name: name.to_string(),
-                width: img_raw.width() as u16,
-                height: img_raw.height() as u16,
-                format: TextureFormat::Rgba,
+            let texture = match format {
+                TextureFormat::Gray => {
+                    let img_raw = data.to_luma8();
+                    let info = TextureInfo {
+                        // this is the displayed name, I want to retain this the same as the one on the file
+                        name: name.to_string(),
+                        width: img_raw.width() as u16,
+                        height: img_raw.height() as u16,
+                        format: TextureFormat::Gray,
+                    };
+                    Texture::new_gray(info, img_raw)
+                }
+                TextureFormat::Rgba => {
+                    let img_raw = data.to_rgba8();
+                    let info = TextureInfo {
+                        // this is the displayed name, I want to retain this the same as the one on the file
+                        name: name.to_string(),
+                        width: img_raw.width() as u16,
+                        height: img_raw.height() as u16,
+                        format: TextureFormat::Rgba,
+                    };
+                    Texture::new_rgba(info, img_raw)
+                }
             };
-            let texture = Texture::new_rgba(info, img_raw);
             let id = ret.len() as u16;
             ret.push((id, texture));
-            used.insert(name.to_string(), id);
+            used.insert(used_name.to_string(), id);
             Ok(())
         } else {
             Err(std::io::Error::new(
@@ -314,7 +345,14 @@ fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, 
             "$clr.diffuse" => retval.diffuse_mul = fcol_to_ucol(matprop_to_fvec(property)),
             "$tex.file" => match property.semantic {
                 russimp::texture::TextureType::Diffuse => {
-                    retval.diffuse = used_textures.get(&matprop_to_str(property)).cloned();
+                    retval.diffuse = used_textures
+                        .get(&used_name(&matprop_to_str(property), TextureFormat::Rgba))
+                        .cloned();
+                }
+                russimp::texture::TextureType::Opacity => {
+                    retval.opacity = used_textures
+                        .get(&used_name(&matprop_to_str(property), TextureFormat::Gray))
+                        .cloned();
                 }
                 _ => {}
             },
@@ -322,6 +360,16 @@ fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, 
         }
     }
     retval
+}
+
+fn used_name(name: &str, format: TextureFormat) -> String {
+    // assign the format as part of the name. The same texture will be forcibly duplicated when
+    // used with different formats
+    let format_str = match format {
+        TextureFormat::Gray => "(R)",
+        TextureFormat::Rgba => "(RGBA)",
+    };
+    format!("{}{}", name, format_str)
 }
 
 fn fcol_to_ucol(col: [f32; 3]) -> [u8; 3] {
@@ -464,9 +512,9 @@ mod tests {
         if let Ok(mut parsed) = parsed {
             assert_eq!(parsed.meshes()?.len(), 1);
             assert_eq!(parsed.cameras()?.len(), 1);
-            assert_eq!(parsed.materials()?.len(), 1);
+            assert_eq!(parsed.materials()?.len(), 2);
             assert_eq!(parsed.textures()?.len(), 1);
-            assert_eq!(parsed.vertices()?.len(), 36);
+            assert_eq!(parsed.vertices()?.len(), 24);
         } else {
             panic!("Failed to parse back scene")
         }

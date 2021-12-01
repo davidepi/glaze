@@ -726,16 +726,14 @@ fn texture_to_bytes((index, texture): &(u16, Texture)) -> Vec<u8> {
 
 fn format_to_u8(format: TextureFormat) -> u8 {
     match format {
-        TextureFormat::Gray => 0,
-        TextureFormat::Rgb => 1,
+        TextureFormat::Gray => 1,
         TextureFormat::Rgba => 2,
     }
 }
 
 fn u8_to_format(format: u8) -> Result<TextureFormat, Error> {
     match format {
-        0 => Ok(TextureFormat::Gray),
-        1 => Ok(TextureFormat::Rgb),
+        1 => Ok(TextureFormat::Gray),
         2 => Ok(TextureFormat::Rgba),
         _ => panic!("Texture format unexpected"),
     }
@@ -769,16 +767,6 @@ fn bytes_to_texture(data: &[u8]) -> Result<(u16, Texture), Error> {
             Texture::new_gray(
                 info,
                 GrayImage::from_raw(dimensions.0, dimensions.1, decoded).ok_or(conversion_error)?,
-            )
-        }
-        TextureFormat::Rgb => {
-            let conversion_error = Error::new(
-                ErrorKind::InvalidData,
-                "Failed to parse data into rgb image",
-            );
-            Texture::new_rgb(
-                info,
-                RgbImage::from_raw(dimensions.0, dimensions.1, decoded).ok_or(conversion_error)?,
             )
         }
         TextureFormat::Rgba => {
@@ -853,7 +841,8 @@ fn material_to_bytes((index, material): &(u16, Material)) -> Vec<u8> {
         + str_len //actual string
         + std::mem::size_of::<u8>() // shader id
         + std::mem::size_of::<u16>() // diffuse texture id
-        + 3 * std::mem::size_of::<u8>(); // diffuse multiplier
+        + 3 * std::mem::size_of::<u8>() // diffuse multiplier
+        + std::mem::size_of::<u16>(); // opacity texture id
     let mut retval = Vec::with_capacity(total_len);
     retval.extend(index.to_le_bytes());
     retval.push(str_len as u8);
@@ -865,6 +854,11 @@ fn material_to_bytes((index, material): &(u16, Material)) -> Vec<u8> {
         retval.extend(u16::MAX.to_le_bytes());
     }
     retval.extend(&material.diffuse_mul[0..3]);
+    if let Some(opacity) = material.opacity {
+        retval.extend(opacity.to_le_bytes());
+    } else {
+        retval.extend(u16::MAX.to_le_bytes());
+    }
     retval
 }
 
@@ -884,11 +878,20 @@ fn bytes_to_material(data: &[u8]) -> (u16, Material) {
         None
     };
     let diffuse_mul = [data[index + 0], data[index + 1], data[index + 2]];
+    index += 3;
+    let opacity_id = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+    index += 2;
+    let opacity = if opacity_id != u16::MAX {
+        Some(opacity_id)
+    } else {
+        None
+    };
     let material = Material {
         name,
         shader: shader_id.into(),
         diffuse,
         diffuse_mul,
+        opacity,
     };
     (mat_index, material)
 }
@@ -1022,8 +1025,6 @@ mod tests {
             }
             let format = if rng.gen_bool(0.5) {
                 TextureFormat::Gray
-            } else if rng.gen_bool(0.5) {
-                TextureFormat::Rgb
             } else {
                 TextureFormat::Rgba
             };
@@ -1040,7 +1041,6 @@ mod tests {
             };
             let texture = match format {
                 TextureFormat::Gray => Texture::new_gray(info, cur_img.into_luma8()),
-                TextureFormat::Rgb => Texture::new_rgb(info, cur_img.into_rgb8()),
                 TextureFormat::Rgba => Texture::new_rgba(info, cur_img.into_rgba8()),
             };
             data.push((i, texture));
@@ -1069,11 +1069,17 @@ mod tests {
                 rng.gen_range(0..255),
                 rng.gen_range(0..255),
             ];
+            let opacity = if rng.gen_bool(0.01) {
+                Some(rng.gen_range(0..u16::MAX - 1))
+            } else {
+                None
+            };
             let material = Material {
                 name,
                 shader,
                 diffuse,
                 diffuse_mul,
+                opacity,
             };
             data.push((i, material));
         }

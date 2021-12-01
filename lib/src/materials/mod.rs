@@ -5,6 +5,4 @@ pub use self::shader::ShaderMat;
 mod texture;
 #[cfg(feature = "vulkan")]
 pub use self::texture::TextureLoaded;
-pub use self::texture::{
-    Texture, TextureFormat, TextureGray, TextureInfo, TextureRGB, TextureRGBA,
-};
+pub use self::texture::{Texture, TextureFormat, TextureGray, TextureInfo, TextureRGBA};

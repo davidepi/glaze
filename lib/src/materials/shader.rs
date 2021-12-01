@@ -11,40 +11,40 @@ macro_rules! include_shader {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum ShaderMat {
-    Test = 0,
+    Flat = 0,
 }
 
 impl ShaderMat {
-    pub const DEFAULT_SHADER: Self = ShaderMat::Test;
+    pub const DEFAULT_SHADER: Self = ShaderMat::Flat;
 
     pub fn name(&self) -> &'static str {
         match self {
-            ShaderMat::Test => "Test",
+            ShaderMat::Flat => "Flat",
         }
     }
 
     pub fn from_id(id: u8) -> Result<Self, Box<dyn Error>> {
         match id {
-            0 => Ok(ShaderMat::Test),
+            0 => Ok(ShaderMat::Flat),
             _ => Err(format!("Unknown shader id: {}", id).into()),
         }
     }
 
     pub fn id(&self) -> u8 {
         match self {
-            ShaderMat::Test => 0,
+            ShaderMat::Flat => 0,
         }
     }
 
     // used to iterate all the possible shaders
     pub fn all_values() -> [ShaderMat; 1] {
-        [ShaderMat::Test]
+        [ShaderMat::Flat]
     }
 
     #[cfg(feature = "vulkan")]
     pub fn build_pipeline(&self) -> PipelineBuilder {
         match self {
-            ShaderMat::Test => test_pipeline(),
+            ShaderMat::Flat => test_pipeline(),
         }
     }
 }
@@ -58,7 +58,7 @@ impl Default for ShaderMat {
 impl From<u8> for ShaderMat {
     fn from(num: u8) -> Self {
         match num {
-            0 => ShaderMat::Test,
+            0 => ShaderMat::Flat,
             _ => Self::DEFAULT_SHADER, // use default shader
         }
     }
@@ -67,7 +67,7 @@ impl From<u8> for ShaderMat {
 impl From<ShaderMat> for u8 {
     fn from(shader: ShaderMat) -> Self {
         match shader {
-            ShaderMat::Test => 0,
+            ShaderMat::Flat => 0,
         }
     }
 }
@@ -75,8 +75,8 @@ impl From<ShaderMat> for u8 {
 #[cfg(feature = "vulkan")]
 fn test_pipeline() -> PipelineBuilder {
     let mut pipeline = PipelineBuilder::default();
-    let vertex_shader = include_shader!("test.vert");
-    let fragment_shader = include_shader!("test.frag");
+    let vertex_shader = include_shader!("flat.vert");
+    let fragment_shader = include_shader!("flat.frag");
     pipeline.push_shader(vertex_shader, "main", ash::vk::ShaderStageFlags::VERTEX);
     pipeline.push_shader(fragment_shader, "main", ash::vk::ShaderStageFlags::FRAGMENT);
     pipeline

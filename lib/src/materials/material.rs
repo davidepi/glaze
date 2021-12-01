@@ -6,6 +6,7 @@ pub struct Material {
     pub shader: ShaderMat,
     pub diffuse: Option<u16>,
     pub diffuse_mul: [u8; 3],
+    pub opacity: Option<u16>,
 }
 
 impl Default for Material {
@@ -15,6 +16,7 @@ impl Default for Material {
             shader: ShaderMat::DEFAULT_SHADER,
             diffuse: None,
             diffuse_mul: [255, 255, 255],
+            opacity: None,
         }
     }
 }

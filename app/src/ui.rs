@@ -211,7 +211,6 @@ fn window_textures(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut 
 fn channels_to_string(colortype: TextureFormat) -> &'static str {
     match colortype {
         TextureFormat::Gray => "Grayscale",
-        TextureFormat::Rgb => "RGB",
         TextureFormat::Rgba => "RGBA",
     }
 }
