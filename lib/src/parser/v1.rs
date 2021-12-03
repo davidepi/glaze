@@ -4,7 +4,7 @@ use crate::materials::{TextureFormat, TextureInfo};
 use crate::{Material, Texture};
 use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
 use image::png::{PngDecoder, PngEncoder};
-use image::{GrayImage, ImageDecoder, RgbImage, RgbaImage};
+use image::{GrayImage, ImageDecoder, RgbaImage};
 use std::convert::TryInto;
 use std::hash::Hasher;
 use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};

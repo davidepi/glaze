@@ -53,7 +53,7 @@ impl VulkanScene {
             buffers_to_free: Vec::new(),
         };
         let vertex_buffer = load_vertices_to_gpu(device, mm, cmdm, &mut unf, &scene.vertices()?);
-        let (meshes, index_buffer) =
+        let (mut meshes, index_buffer) =
             load_indices_to_gpu(device, mm, cmdm, &mut unf, &scene.meshes()?);
         let sampler = create_sampler(device);
         let textures = scene
@@ -91,6 +91,7 @@ impl VulkanScene {
             vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
             MemoryLocation::CpuToGpu,
         );
+        sort_meshes(&mut meshes, &materials);
         Ok(VulkanScene {
             current_cam,
             vertex_buffer,
@@ -345,15 +346,24 @@ fn build_mat_desc_set<T: Device>(
     material: &Material,
     dm: &mut DescriptorSetCreator,
 ) -> Descriptor {
-    let diffuse;
-    if let Some(diff_id) = material.diffuse {
-        diffuse = textures.get(&diff_id).unwrap_or(dflt_tex);
+    let diffuse = if let Some(diff_id) = material.diffuse {
+        textures.get(&diff_id).unwrap_or(dflt_tex)
     } else {
-        diffuse = dflt_tex;
-    }
+        dflt_tex
+    };
+    let opacity = if let Some(op_id) = material.opacity {
+        textures.get(&op_id).unwrap_or(dflt_tex)
+    } else {
+        dflt_tex
+    };
     let diffuse_image_info = vk::DescriptorImageInfo {
         sampler,
         image_view: diffuse.image.image_view,
+        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+    };
+    let opacity_image_info = vk::DescriptorImageInfo {
+        sampler,
+        image_view: opacity.image.image_view,
         image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     };
     let align = device
@@ -376,6 +386,11 @@ fn build_mat_desc_set<T: Device>(
         )
         .bind_image(
             diffuse_image_info,
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            vk::ShaderStageFlags::FRAGMENT,
+        )
+        .bind_image(
+            opacity_image_info,
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             vk::ShaderStageFlags::FRAGMENT,
         )
@@ -565,6 +580,19 @@ fn load_texture_to_gpu<T: Device>(
         info: texture.to_info(),
         image,
     }
+}
+
+// sort mehses by shader id (first) and then material id (second) to minimize binding changes
+fn sort_meshes(meshes: &mut Vec<VulkanMesh>, materials: &FnvHashMap<u16, (Material, Descriptor)>) {
+    meshes.sort_unstable_by(|a, b| match a.material.cmp(&b.material) {
+        std::cmp::Ordering::Less => std::cmp::Ordering::Less,
+        std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+        std::cmp::Ordering::Equal => {
+            let (mat_a, _) = materials.get(&a.material).unwrap();
+            let (mat_b, _) = materials.get(&b.material).unwrap();
+            mat_a.shader.cmp(&mat_b.shader)
+        }
+    });
 }
 
 #[repr(C)]

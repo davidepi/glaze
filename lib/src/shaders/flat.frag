@@ -13,8 +13,17 @@ layout(set = 1, binding=0) uniform mp {
     vec3 diffuse_color;
 } MaterialParams;
 layout(set = 1, binding=1) uniform sampler2D diffuse;
+layout(set = 1, binding=2) uniform sampler2D opacity;
 
 void main() {
-    vec3 diff = texture(diffuse, in_vt).xyz * MaterialParams.diffuse_color.xyz;
-    out_color = vec4(diff, 1.0);
+    if (texture(opacity, in_vt).x > 0.5) 
+    {
+        vec3 diff = texture(diffuse, in_vt).xyz * MaterialParams.diffuse_color.xyz;
+        out_color = vec4(diff, 1.0);
+    } 
+    else 
+    {
+        discard; // not the best approach, but for this simple viewport is enough
+        // maybe in the future I will implement proper transparency, for now, this is enough
+    }
 }

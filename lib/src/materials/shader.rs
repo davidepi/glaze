@@ -9,7 +9,7 @@ macro_rules! include_shader {
     };
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum ShaderMat {
     Flat = 0,
 }
@@ -30,7 +30,7 @@ impl ShaderMat {
         }
     }
 
-    pub fn id(&self) -> u8 {
+    pub const fn id(&self) -> u8 {
         match self {
             ShaderMat::Flat => 0,
         }
@@ -44,7 +44,7 @@ impl ShaderMat {
     #[cfg(feature = "vulkan")]
     pub fn build_pipeline(&self) -> PipelineBuilder {
         match self {
-            ShaderMat::Flat => test_pipeline(),
+            ShaderMat::Flat => flat_pipeline(),
         }
     }
 }
@@ -66,14 +66,12 @@ impl From<u8> for ShaderMat {
 
 impl From<ShaderMat> for u8 {
     fn from(shader: ShaderMat) -> Self {
-        match shader {
-            ShaderMat::Flat => 0,
-        }
+        shader.id()
     }
 }
 
 #[cfg(feature = "vulkan")]
-fn test_pipeline() -> PipelineBuilder {
+fn flat_pipeline() -> PipelineBuilder {
     let mut pipeline = PipelineBuilder::default();
     let vertex_shader = include_shader!("flat.vert");
     let fragment_shader = include_shader!("flat.frag");
