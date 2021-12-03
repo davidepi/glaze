@@ -17,6 +17,7 @@ pub struct InteractiveView {
     mouse_pos: (f32, f32),
     rmb_down: bool,
     mmb_down: bool,
+    alt_speed_down: bool,
     state: UiState,
 }
 
@@ -49,6 +50,7 @@ impl InteractiveView {
                 mouse_pos: (0.0, 0.0),
                 rmb_down: false,
                 mmb_down: false,
+                alt_speed_down: false,
                 state,
             })
         } else {
@@ -122,23 +124,39 @@ impl InteractiveView {
 
 fn handle_keyboard(input: KeyboardInput, view: &mut InteractiveView) {
     match input.virtual_keycode {
-        Some(VirtualKeyCode::W) => camera_pos_advance(view, 0.1),
-        Some(VirtualKeyCode::S) => camera_pos_advance(view, -0.1),
-        Some(VirtualKeyCode::A) => camera_pos_strafe(view, -0.1),
-        Some(VirtualKeyCode::D) => camera_pos_strafe(view, 0.1),
+        Some(VirtualKeyCode::W) => camera_pos_advance(view, 1.0),
+        Some(VirtualKeyCode::S) => camera_pos_advance(view, -1.0),
+        Some(VirtualKeyCode::A) => camera_pos_strafe(view, -1.0),
+        Some(VirtualKeyCode::D) => camera_pos_strafe(view, 1.0),
+        Some(VirtualKeyCode::LShift) => match input.state {
+            ElementState::Pressed => view.alt_speed_down = true,
+            ElementState::Released => view.alt_speed_down = false,
+        },
         _ => {}
     }
 }
 
-fn camera_pos_strafe(view: &mut InteractiveView, magnitude: f32) {
+fn camera_pos_strafe(view: &mut InteractiveView, direction: f32) {
     if let Some(cam) = view.renderer.camera_mut() {
-        cam.strafe(magnitude);
+        let magnitude = view.state.mov_speed;
+        let multiplier = if view.alt_speed_down {
+            view.state.mov_speed_mul
+        } else {
+            1.0
+        };
+        cam.strafe(direction * magnitude * multiplier);
     }
 }
 
-fn camera_pos_advance(view: &mut InteractiveView, magnitude: f32) {
+fn camera_pos_advance(view: &mut InteractiveView, direction: f32) {
     if let Some(cam) = view.renderer.camera_mut() {
-        cam.advance(magnitude);
+        let magnitude = view.state.mov_speed;
+        let multiplier = if view.alt_speed_down {
+            view.state.mov_speed_mul
+        } else {
+            1.0
+        };
+        cam.advance(direction * magnitude * multiplier);
     }
 }
 
@@ -150,12 +168,32 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
     // if lmb pressed, move camera
     if view.rmb_down {
         if let Some(cam) = view.renderer.camera_mut() {
-            cam.look_around(f32::to_radians(delta.0), f32::to_radians(delta.1));
+            let magnitude = view.state.mouse_sensitivity;
+            let x_dir = if view.state.inverted_mouse_h {
+                1.0
+            } else {
+                -1.0
+            };
+            let y_dir = if view.state.inverted_mouse_v {
+                1.0
+            } else {
+                -1.0
+            };
+            cam.look_around(
+                f32::to_radians(magnitude * x_dir * delta.0),
+                f32::to_radians(magnitude * y_dir * delta.1),
+            );
         }
     }
     if view.mmb_down {
         if let Some(cam) = view.renderer.camera_mut() {
-            cam.elevate(-0.1 * delta.1);
+            let magnitude = view.state.vert_speed;
+            let direction = if view.state.inverted_vert_mov {
+                1.0
+            } else {
+                -1.0
+            };
+            cam.elevate(direction * magnitude * delta.1);
         }
     }
 }

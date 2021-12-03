@@ -10,9 +10,16 @@ use nfd2::Response;
 use winit::window::Window;
 
 pub struct UiState {
-    render_window: bool,
+    settings_window: bool,
     render_scale_cur: f32,
     render_scale_sel: f32,
+    pub inverted_mouse_h: bool,
+    pub inverted_mouse_v: bool,
+    pub mouse_sensitivity: f32,
+    pub mov_speed: f32,
+    pub mov_speed_mul: f32,
+    pub vert_speed: f32,
+    pub inverted_vert_mov: bool,
     textures_window: bool,
     textures_selected: Option<u16>,
     materials_window: bool,
@@ -23,9 +30,16 @@ pub struct UiState {
 impl UiState {
     pub fn new() -> Self {
         UiState {
-            render_window: false,
+            settings_window: false,
             render_scale_cur: 1.0,
             render_scale_sel: 1.0,
+            inverted_mouse_h: false,
+            inverted_mouse_v: false,
+            mouse_sensitivity: 0.05,
+            mov_speed: 1.0,
+            mov_speed_mul: 2.5,
+            vert_speed: 0.1,
+            inverted_vert_mov: false,
             textures_window: false,
             textures_selected: None,
             materials_window: false,
@@ -40,7 +54,7 @@ impl UiState {
 }
 
 pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
-    ui.show_demo_window(&mut state.render_window);
+    ui.show_demo_window(&mut state.settings_window);
     ui.main_menu_bar(|| {
         ui.menu("File", || {
             if MenuItem::new("Open").shortcut("Ctrl+O").build(ui) {
@@ -48,7 +62,7 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
             }
         });
         ui.menu("Window", || {
-            ui.checkbox("Render", &mut state.render_window);
+            ui.checkbox("Settings", &mut state.settings_window);
             ui.checkbox("Textures", &mut state.textures_window);
             ui.checkbox("Materials", &mut state.materials_window);
             ui.checkbox("Stats", &mut state.stats_window);
@@ -57,8 +71,8 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
     if state.stats_window {
         window_stats(ui, state, window, renderer);
     }
-    if state.render_window {
-        window_render(ui, state, window, renderer);
+    if state.settings_window {
+        window_settings(ui, state, window, renderer);
     }
     if state.textures_window {
         window_textures(ui, state, window, renderer);
@@ -68,14 +82,14 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
     }
 }
 
-fn window_render(
+fn window_settings(
     ui: &Ui,
     state: &mut UiState,
     window: &mut Window,
     renderer: &mut RealtimeRenderer,
 ) {
-    let mut closed = state.render_window;
-    imgui::Window::new("Render")
+    let mut closed = state.settings_window;
+    imgui::Window::new("Settings")
         .size([400.0, 400.0], Condition::Appearing)
         .opened(&mut closed)
         .save_settings(false)
@@ -92,14 +106,12 @@ fn window_render(
                 Slider::new("Render scale", 0.1, 2.5).build(ui, &mut state.render_scale_sel);
                 if ui.button("Apply") {
                     let w_size = window.inner_size();
-                    renderer.pause();
                     renderer.update_render_size(
                         w_size.width,
                         w_size.height,
                         state.render_scale_sel,
                     );
                     state.render_scale_cur = state.render_scale_sel;
-                    renderer.resume();
                 }
                 ui.separator();
                 let mut color = renderer.get_clear_color();
@@ -165,8 +177,21 @@ fn window_render(
                     _ => {}
                 }
             }
+            if CollapsingHeader::new("Controls").build(ui) {
+                ui.text("Mouse");
+                ui.checkbox("Invert vertical camera", &mut state.inverted_mouse_v);
+                ui.checkbox("Invert horizontal camera ", &mut state.inverted_mouse_h);
+                Slider::new("Sensibility", 0.01, 10.0).build(ui, &mut state.mouse_sensitivity);
+                ui.checkbox("Invert vertical movement", &mut state.inverted_vert_mov);
+                Slider::new("Vertical movement speed", 0.01, 10.0).build(ui, &mut state.vert_speed);
+                ui.separator();
+                ui.text("Keyboard");
+                Slider::new("Movement speed (normal)", 0.01, 10.0).build(ui, &mut state.mov_speed);
+                Slider::new("Fast movement multiplier", 1.0, 10.0)
+                    .build(ui, &mut state.mov_speed_mul);
+            }
         });
-    state.render_window = closed;
+    state.settings_window = closed;
 }
 
 fn window_textures(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut RealtimeRenderer) {

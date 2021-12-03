@@ -58,11 +58,11 @@ impl Camera {
     pub fn projection(&self, aspect_ratio: f32) -> Matrix4<f32> {
         match self {
             Camera::Perspective(cam) => {
-                perspective(Rad(cam.fovy(aspect_ratio)), aspect_ratio, 1.0, 100.0)
+                perspective(Rad(cam.fovy(aspect_ratio)), aspect_ratio, 0.1, 250.0)
             }
 
             Camera::Orthographic(cam) => {
-                ortho(-cam.scale, cam.scale, -cam.scale, cam.scale, 1.0, 100.0)
+                ortho(-cam.scale, cam.scale, -cam.scale, cam.scale, 0.1, 250.0)
             }
         }
     }
