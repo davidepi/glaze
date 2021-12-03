@@ -1,12 +1,12 @@
 [package]
-name = "glaze"
-version = "0.3.0"
-authors = ["Davide Pizzolotto <davide.pizzolotto@gmail.com>"]
-edition = "2021"
-license = "MIT"
+name     = "glaze"
+version  = "0.3.0"
+authors  = ["Davide Pizzolotto <davide.pizzolotto@gmail.com>"]
+edition  = "2021"
+license  = "MIT"
 
 [build-dependencies]
-shaderc = "0.7"
+shaderc = {version="0.7", optional=true}
 
 [dependencies]
 log = "0.4"
@@ -36,4 +36,4 @@ float-cmp = "0.9"
 
 [features]
 default = ["vulkan"]
-vulkan = ["ash", "winit", "gpu-allocator", "memoffset", "imgui"]
+vulkan = ["ash", "winit", "gpu-allocator", "memoffset", "imgui", "shaderc"]
