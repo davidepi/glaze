@@ -3,8 +3,8 @@ use glaze::{
     VulkanScene,
 };
 use imgui::{
-    CollapsingHeader, ColorEdit, ColorEditFlags, ColorPicker, ComboBox, Condition, Image, MenuItem,
-    Selectable, SelectableFlags, Slider, TextureId, Ui,
+    CollapsingHeader, ColorEdit, ColorEditFlags, ColorPicker, ComboBox, Condition, Image,
+    ImageButton, MenuItem, Selectable, SelectableFlags, Slider, TextureId, Ui,
 };
 use nfd2::Response;
 use winit::window::Window;
@@ -203,7 +203,33 @@ fn window_textures(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut 
                 let info = &scene.unwrap().textures.get(selected).unwrap().info;
                 ui.text(format!("Resolution {}x{}", info.width, info.height));
                 ui.text(format!("Format {}", channels_to_string(info.format)));
-                Image::new(TextureId::new(*selected as usize), [256.0, 256.0]).build(ui);
+                let tex_w = 512.0;
+                let tex_h = 512.0;
+                let pos = ui.cursor_screen_pos();
+                Image::new(TextureId::new(*selected as usize), [tex_w, tex_h]).build(ui);
+                if ui.is_item_hovered() {
+                    ui.tooltip(|| {
+                        let region_sz = 32.0;
+                        let mpos = ui.io().mouse_pos;
+                        let mut region_x = mpos[0] - pos[0] - region_sz * 0.5;
+                        let mut region_y = mpos[1] - pos[1] - region_sz * 0.5;
+                        let zoom = 4.0;
+                        region_x = region_x.clamp(0.0, tex_w - region_sz);
+                        region_y = region_y.clamp(0.0, tex_h - region_sz);
+                        let uv0 = [region_x / tex_w, region_y / tex_h];
+                        let uv1 = [
+                            (region_x + region_sz) / tex_w,
+                            (region_y + region_sz) / tex_h,
+                        ];
+                        Image::new(
+                            TextureId::new(*selected as usize),
+                            [region_sz * zoom, region_sz * zoom],
+                        )
+                        .uv0(uv0)
+                        .uv1(uv1)
+                        .build(ui);
+                    });
+                }
             }
         });
 }
@@ -228,6 +254,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut
     };
     if let Some(window) = imgui::Window::new("Materials")
         .opened(&mut closed)
+        .size([400.0, 400.0], Condition::Appearing)
         .save_settings(false)
         .begin(ui)
     {
@@ -266,10 +293,14 @@ fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut
                 }
                 shader_combo.end();
             }
-            let diffuse = texture_selector(ui, "Diffuse", current.diffuse, scene);
-            if diffuse != current.diffuse {
+            let (diff, diff_clicked) = texture_selector(ui, "Diffuse", current.diffuse, scene);
+            if diff != current.diffuse {
                 changed = true;
-                new_diffuse = Some(diffuse);
+                new_diffuse = Some(diff);
+            }
+            if diff_clicked {
+                state.textures_selected = diff;
+                state.textures_window = true;
             }
             let mut color = [
                 current.diffuse_mul[0] as f32 / 255.0,
@@ -287,10 +318,14 @@ fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut
                     (color[2] * 255.0) as u8,
                 ]);
             }
-            let opacity = texture_selector(ui, "Opacity", current.opacity, scene);
-            if opacity != current.opacity {
+            let (opac, opac_clicked) = texture_selector(ui, "Opacity", current.opacity, scene);
+            if opac != current.opacity {
                 changed = true;
-                new_opacity = Some(opacity);
+                new_opacity = Some(opac);
+            }
+            if opac_clicked {
+                state.textures_selected = opac;
+                state.textures_window = true;
             }
             if changed {
                 let mut new_mat = current.clone();
@@ -315,7 +350,8 @@ fn texture_selector(
     text: &str,
     mut selected: Option<u16>,
     scene: &VulkanScene,
-) -> Option<u16> {
+) -> (Option<u16>, bool) {
+    let mut clicked_on_preview = false;
     let name = if let Some(id) = selected {
         &scene.textures.get(&id).unwrap().info.name
     } else {
@@ -334,9 +370,20 @@ fn texture_selector(
     }
     if let Some(selected) = selected {
         ui.same_line();
-        Image::new(TextureId::new(selected as usize), [32.0, 32.0]).build(ui);
+        if ImageButton::new(TextureId::new(selected as usize), [16.0, 16.0])
+            .frame_padding(0)
+            .build(ui)
+        {
+            clicked_on_preview = true;
+        }
+        if ui.is_item_hovered() {
+            ui.tooltip(|| {
+                ui.text(name);
+                Image::new(TextureId::new(selected as usize), [256.0, 256.0]).build(ui);
+            });
+        }
     }
-    selected
+    (selected, clicked_on_preview)
 }
 
 fn window_stats(ui: &Ui, _: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
