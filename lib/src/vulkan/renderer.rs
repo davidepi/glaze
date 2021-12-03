@@ -294,12 +294,19 @@ impl RealtimeRenderer {
 
     pub fn change_material(&mut self, old: u16, new: Material) {
         if let Some(scene) = &mut self.scene {
+            let render_size = vk::Extent2D {
+                width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
+                height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
+            };
             scene.update_material(
                 self.instance.device_mut(),
                 old,
                 new,
                 &mut self.cmdm,
                 &mut self.descriptor_creator,
+                self.forward_pass.renderpass,
+                self.frame_data[0].descriptor.layout,
+                render_size,
             );
         }
     }

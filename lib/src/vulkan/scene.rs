@@ -114,15 +114,25 @@ impl VulkanScene {
         new: Material,
         cmdm: &mut CommandManager,
         dm: &mut DescriptorSetCreator,
+        rpass: vk::RenderPass,
+        frame_desc_layout: vk::DescriptorSetLayout,
+        render_size: vk::Extent2D,
     ) {
+        let new_shader = new.shader;
+        let already_has_new_shader = self
+            .materials
+            .iter()
+            .any(|(_, (mat, _))| mat.shader == new_shader);
+
         let (mat, desc) = self.materials.get_mut(&old).unwrap();
+        let old_shader = mat.shader;
         *mat = new;
         let params = MaterialParams::from(&*mat);
         let mapped = self
             .update_buffer
             .allocation
             .mapped_ptr()
-            .expect("Faield to map memory")
+            .expect("Failed to map memory")
             .cast()
             .as_ptr();
         unsafe {
@@ -135,7 +145,7 @@ impl VulkanScene {
             .min_uniform_buffer_offset_alignment;
         let padding = padding(PARAMS_SIZE, align);
         let copy_region = vk::BufferCopy {
-            src_offset: (PARAMS_SIZE + padding) * old as u64,
+            src_offset: 0,
             dst_offset: (PARAMS_SIZE + padding) * old as u64,
             size: PARAMS_SIZE,
         };
@@ -151,16 +161,37 @@ impl VulkanScene {
         };
         let cmd = cmdm.get_cmd_buffer();
         let fence = device.immediate_execute(cmd, command);
+        device.wait_completion(&[fence]);
         *desc = build_mat_desc_set(
             device,
             (&self.textures, &self.dflt_tex),
-            &self.update_buffer,
+            &self.params_buffer,
             self.sampler,
             old,
             mat,
             dm,
         );
-        device.wait_completion(&[fence]);
+        if !already_has_new_shader {
+            let new_pipeline = new_shader.build_pipeline().build(
+                device.logical(),
+                rpass,
+                render_size,
+                &[frame_desc_layout, desc.layout],
+            );
+            self.pipelines.insert(new_shader, new_pipeline);
+        }
+        if !self
+            .materials
+            .iter()
+            .any(|(_, (mat, _))| mat.shader == old_shader)
+        {
+            // possible to delete the pipeline
+            self.pipelines
+                .remove(&old_shader)
+                .unwrap()
+                .destroy(device.logical());
+        }
+        sort_meshes(&mut self.meshes, &self.materials);
     }
 
     pub fn init_pipelines(
@@ -377,6 +408,7 @@ fn build_mat_desc_set<T: Device>(
         offset: (PARAMS_SIZE + padding) * id as u64,
         range: PARAMS_SIZE,
     };
+    // TODO: merge materials with the same textures to avoid extra bindings
     let descriptor = dm
         .new_set()
         .bind_buffer(
