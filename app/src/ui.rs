@@ -251,6 +251,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut
             let mut new_shader = None;
             let mut new_diffuse = None;
             let mut new_diff_mul = None;
+            let mut new_opacity = None;
             ui.separator();
             let current = &scene.materials.get(selected).unwrap().0;
             if let Some(shader_combo) = ComboBox::new("Type")
@@ -286,6 +287,11 @@ fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut
                     (color[2] * 255.0) as u8,
                 ]);
             }
+            let opacity = texture_selector(ui, "Opacity", current.opacity, scene);
+            if opacity != current.opacity {
+                changed = true;
+                new_opacity = Some(opacity);
+            }
             if changed {
                 let mut new_mat = current.clone();
                 if let Some(shader) = new_shader {
@@ -294,6 +300,8 @@ fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut
                     new_mat.diffuse = new_diffuse;
                 } else if let Some(new_diff_mul) = new_diff_mul {
                     new_mat.diffuse_mul = new_diff_mul;
+                } else if let Some(new_opacity) = new_opacity {
+                    new_mat.opacity = new_opacity;
                 }
                 renderer.change_material(*selected, new_mat);
             }
