@@ -248,10 +248,10 @@ fn convert_materials(
     for material in materials {
         for (texture_type, textures) in &material.textures {
             let texture = textures.first().unwrap(); // support single textures only
-                                                     // replaces \ with / and hopes UNIX path do not use strange names
-            let tex_name = texture.path.clone().replace("\\", "/");
-            //TODO: add support for embedded textures
-            let mut path = PathBuf::from(&tex_name);
+                                                     // replace \ with / and hopes UNIX path do not use strange names
+                                                     //TODO: add support for embedded textures
+            let mut path = PathBuf::from(texture.path.clone().replace("\\", "/"));
+            let tex_name = texture.path.as_ref();
             if path.is_relative() {
                 path = PathBuf::from(original_path).parent().unwrap().join(path);
             }
@@ -343,19 +343,16 @@ fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, 
         match property.key.as_str() {
             "?mat.name" => retval.name = matprop_to_str(property),
             "$clr.diffuse" => retval.diffuse_mul = fcol_to_ucol(matprop_to_fvec(property)),
-            "$tex.file" => match property.semantic {
-                russimp::texture::TextureType::Diffuse => {
-                    retval.diffuse = used_textures
-                        .get(&used_name(&matprop_to_str(property), TextureFormat::Rgba))
-                        .cloned();
+            "$tex.file" => {
+                let prop_name = matprop_to_str(property);
+                let tex_name = used_name(&prop_name, TextureFormat::Rgba);
+                let texture = used_textures.get(&tex_name);
+                match property.semantic {
+                    russimp::texture::TextureType::Diffuse => retval.diffuse = texture.copied(),
+                    russimp::texture::TextureType::Opacity => retval.opacity = texture.copied(),
+                    _ => {}
                 }
-                russimp::texture::TextureType::Opacity => {
-                    retval.opacity = used_textures
-                        .get(&used_name(&matprop_to_str(property), TextureFormat::Gray))
-                        .cloned();
-                }
-                _ => {}
-            },
+            }
             _ => {} // super ugly...
         }
     }
