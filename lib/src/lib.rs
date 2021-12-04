@@ -1,3 +1,6 @@
+// some vulkan functions require a lot of parameters...
+#![allow(clippy::too_many_arguments)]
+
 mod geometry;
 mod materials;
 mod parser;

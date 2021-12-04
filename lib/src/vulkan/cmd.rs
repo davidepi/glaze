@@ -53,6 +53,7 @@ impl PoolManager {
         }
     }
 
+    #[must_use]
     fn reset(mut self, device: &ash::Device) -> PoolManager {
         unsafe {
             device
@@ -75,6 +76,7 @@ pub struct CommandManager {
     free_pools: Vec<PoolManager>,
     used_pools: Vec<PoolManager>,
     device: ash::Device,
+    queue_family_index: u32,
 }
 
 impl CommandManager {
@@ -89,6 +91,7 @@ impl CommandManager {
             current_pool,
             used_pools: Vec::with_capacity(POOL_NO),
             device,
+            queue_family_index,
         }
     }
 
@@ -101,8 +104,8 @@ impl CommandManager {
             std::mem::swap(&mut self.current_pool, &mut next_pool);
             self.used_pools.push(next_pool);
             self.get_cmd_buffer()
-        } else {
-            // no free pools available, pop HALF the used one and populate the free pools
+        } else if self.used_pools.len() > POOL_NO / 2 {
+            // no free pools, but there are a decent amount of used one. Resets half of them
             // half -> so the most recent ones have time to complete
             let half = self
                 .used_pools
@@ -111,6 +114,29 @@ impl CommandManager {
                 .collect::<Vec<_>>();
             self.free_pools.extend(half);
             self.get_cmd_buffer()
+        } else {
+            // no free pools, and no pools available. This can happen after a call to
+            // thread_exclusive_manager. Just create a new one. Only one because this call is
+            // EXTREMELY unlikely (or so do I think until I profile the application)
+            self.free_pools
+                .push(PoolManager::create(&self.device, self.queue_family_index));
+            self.get_cmd_buffer()
+        }
+    }
+
+    pub fn thread_exclusive_manger(&mut self) -> Self {
+        // get a single pool. Then the manager will auto expand if it needs to
+        let pool = if let Some(pool) = self.free_pools.pop() {
+            pool
+        } else {
+            PoolManager::create(&self.device, self.queue_family_index)
+        };
+        CommandManager {
+            current_pool: pool,
+            free_pools: Vec::new(),
+            used_pools: Vec::new(),
+            device: self.device.clone(),
+            queue_family_index: self.queue_family_index,
         }
     }
 

@@ -121,23 +121,37 @@ fn create_descriptor_pool(
     unsafe { device.create_descriptor_pool(&pool_info, None) }
         .expect("Failed to allocate descriptor pool")
 }
-//goes around Rust orphan rule and allows implementing Eq and Hash
+// goes around Rust orphan rule and allows implementing Eq and Hash
+// remove also the pointer from DescriptorSetLayoutBinding to have trait "Send"
 #[derive(Debug, Clone)]
 struct DescriptorSetLayoutBindingWrapper {
-    val: vk::DescriptorSetLayoutBinding,
+    pub binding: u32,
+    pub descriptor_type: vk::DescriptorType,
+    pub descriptor_count: u32,
+    pub stage_flags: vk::ShaderStageFlags,
+}
+
+impl DescriptorSetLayoutBindingWrapper {
+    pub fn new(dsbin: vk::DescriptorSetLayoutBinding) -> DescriptorSetLayoutBindingWrapper {
+        debug_assert!(
+            dsbin.p_immutable_samplers.is_null(),
+            "immutable samplers not supported"
+        );
+        DescriptorSetLayoutBindingWrapper {
+            binding: dsbin.binding,
+            descriptor_type: dsbin.descriptor_type,
+            descriptor_count: dsbin.descriptor_count,
+            stage_flags: dsbin.stage_flags,
+        }
+    }
 }
 
 impl PartialEq for DescriptorSetLayoutBindingWrapper {
     fn eq(&self, other: &Self) -> bool {
-        debug_assert_eq!(
-            self.val.p_immutable_samplers,
-            ptr::null(),
-            "immutable samplers not supported"
-        );
-        self.val.binding == other.val.binding
-            && self.val.descriptor_count == other.val.descriptor_count
-            && self.val.descriptor_type == other.val.descriptor_type
-            && self.val.stage_flags == other.val.stage_flags
+        self.binding == other.binding
+            && self.descriptor_count == other.descriptor_count
+            && self.descriptor_type == other.descriptor_type
+            && self.stage_flags == other.stage_flags
     }
 }
 
@@ -145,15 +159,10 @@ impl Eq for DescriptorSetLayoutBindingWrapper {}
 
 impl Hash for DescriptorSetLayoutBindingWrapper {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        debug_assert_eq!(
-            self.val.p_immutable_samplers,
-            ptr::null(),
-            "immutable samplers not supported"
-        );
-        self.val.binding.hash(state);
-        self.val.descriptor_count.hash(state);
-        self.val.descriptor_type.hash(state);
-        self.val.stage_flags.hash(state);
+        self.binding.hash(state);
+        self.descriptor_count.hash(state);
+        self.descriptor_type.hash(state);
+        self.stage_flags.hash(state);
     }
 }
 
@@ -184,7 +193,7 @@ impl DescriptorSetLayoutCache {
         let wrapping = desc
             .iter()
             .cloned()
-            .map(|x| DescriptorSetLayoutBindingWrapper { val: x })
+            .map(DescriptorSetLayoutBindingWrapper::new)
             .collect::<Vec<_>>();
         // wrapping.sort_by_key(|d| d.val.binding); // should be sorted already
         match self.cache.entry(wrapping) {

@@ -880,7 +880,6 @@ fn bytes_to_material(data: &[u8]) -> (u16, Material) {
     let diffuse_mul = [data[index + 0], data[index + 1], data[index + 2]];
     index += 3;
     let opacity_id = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
-    index += 2;
     let opacity = if opacity_id != u16::MAX {
         Some(opacity_id)
     } else {

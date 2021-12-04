@@ -20,7 +20,7 @@ pub trait Instance {
 
 pub struct PresentInstance {
     #[cfg(debug_assertions)]
-    logger: VkDebugLogger,
+    _logger: VkDebugLogger,
     surface: Surface,
     device: PresentDevice,
     //the following one must be destroyed for last
@@ -45,7 +45,7 @@ impl PresentInstance {
         );
         PresentInstance {
             #[cfg(debug_assertions)]
-            logger: VkDebugLogger::new(&instance.entry, &instance.instance),
+            _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
             instance,
             surface,
             device,
