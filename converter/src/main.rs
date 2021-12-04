@@ -218,6 +218,8 @@ fn convert_cameras(cameras: &[russimp::camera::Camera], pb: ProgressBar) -> Vec<
             target: Point3::new(camera.look_at.x, camera.look_at.y, camera.look_at.z),
             up: Vec3::new(camera.up.x, camera.up.y, camera.up.z),
             fovx: camera.horizontal_fov,
+            near: camera.clip_plane_near,
+            far: camera.clip_plane_far,
         }));
         pb.inc(1);
     }
@@ -227,6 +229,8 @@ fn convert_cameras(cameras: &[russimp::camera::Camera], pb: ProgressBar) -> Vec<
             target: Point3::new(0.0, 0.0, 100.0),
             up: Vec3::new(0.0, 1.0, 0.0),
             fovx: f32::to_radians(90.0),
+            near: 0.1,
+            far: 250.0,
         }));
         pb.inc(1);
     }

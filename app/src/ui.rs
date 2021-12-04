@@ -149,6 +149,8 @@ fn window_settings(
                                     target: camera.target(),
                                     up: camera.up(),
                                     fovx: 90.0_f32.to_radians(),
+                                    near: 0.1,
+                                    far: 250.0,
                                 });
                             }
                         }
@@ -161,17 +163,23 @@ fn window_settings(
                                     target: camera.target(),
                                     up: camera.up(),
                                     scale: 5.0,
+                                    near: 0.1,
+                                    far: 250.0,
                                 });
                             }
                         }
                     });
                 match renderer.camera_mut() {
                     Some(Camera::Perspective(cam)) => {
+                        Slider::new("Near clipping plane", 0.01, 1.0).build(ui, &mut cam.near);
+                        Slider::new("Far clipping plane", 100.0, 10000.0).build(ui, &mut cam.far);
                         let mut fovx = cam.fovx.to_degrees();
                         Slider::new("Field of View", 1.0, 150.0).build(ui, &mut fovx);
                         cam.fovx = fovx.to_radians();
                     }
                     Some(Camera::Orthographic(cam)) => {
+                        Slider::new("Near clipping plane", 0.01, 1.0).build(ui, &mut cam.near);
+                        Slider::new("Far clipping plane", 100.0, 10000.0).build(ui, &mut cam.far);
                         Slider::new("Scale", 1.0, 10.0).build(ui, &mut cam.scale);
                     }
                     _ => {}

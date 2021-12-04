@@ -6,6 +6,8 @@ pub struct PerspectiveCam {
     pub target: Point3<f32>,
     pub up: Vec3<f32>,
     pub fovx: f32, // in radians
+    pub near: f32,
+    pub far: f32,
 }
 
 impl PerspectiveCam {
@@ -20,6 +22,8 @@ pub struct OrthographicCam {
     pub target: Point3<f32>,
     pub up: Vec3<f32>,
     pub scale: f32,
+    pub near: f32,
+    pub far: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +52,20 @@ impl Camera {
         }
     }
 
+    pub fn near_plane(&self) -> f32 {
+        match self {
+            Camera::Perspective(cam) => cam.near,
+            Camera::Orthographic(cam) => cam.near,
+        }
+    }
+
+    pub fn far_plane(&self) -> f32 {
+        match self {
+            Camera::Perspective(cam) => cam.far,
+            Camera::Orthographic(cam) => cam.far,
+        }
+    }
+
     pub fn look_at_rh(&self) -> Matrix4<f32> {
         match self {
             Camera::Perspective(cam) => Matrix4::look_at_rh(cam.position, cam.target, cam.up),
@@ -58,12 +76,12 @@ impl Camera {
     pub fn projection(&self, aspect_ratio: f32) -> Matrix4<f32> {
         match self {
             Camera::Perspective(cam) => {
-                perspective(Rad(cam.fovy(aspect_ratio)), aspect_ratio, 0.1, 250.0)
+                perspective(Rad(cam.fovy(aspect_ratio)), aspect_ratio, cam.near, cam.far)
             }
 
-            Camera::Orthographic(cam) => {
-                ortho(-cam.scale, cam.scale, -cam.scale, cam.scale, 0.1, 250.0)
-            }
+            Camera::Orthographic(cam) => ortho(
+                -cam.scale, cam.scale, -cam.scale, cam.scale, cam.near, cam.far,
+            ),
         }
     }
 
@@ -174,6 +192,8 @@ mod tests {
             target: Point3::new(0.0, 0.0, -1.0),
             up: Vec3::new(0.0, 1.0, 0.0),
             fovx: f32::to_radians(91.0),
+            near: 0.1,
+            far: 100.0,
         };
         let fovy = camera.fovy(1.453);
         assert_approx_eq!(f32, fovy, f32::to_radians(70.0), epsilon = 1e-3);

@@ -579,6 +579,8 @@ fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
     let position;
     let target;
     let up;
+    let near_plane;
+    let far_plane;
     let other_arg;
     match camera {
         Camera::Perspective(cam) => {
@@ -587,6 +589,8 @@ fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
             target = cam.target;
             up = cam.up;
             other_arg = cam.fovx;
+            near_plane = cam.near;
+            far_plane = cam.far;
         }
         Camera::Orthographic(cam) => {
             camera_type = &[1];
@@ -594,19 +598,25 @@ fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
             target = cam.target;
             up = cam.up;
             other_arg = cam.scale;
+            near_plane = cam.near;
+            far_plane = cam.far;
         }
     }
     let pos: [f32; 3] = Point3::into(position);
     let tgt: [f32; 3] = Point3::into(target);
     let upp: [f32; 3] = Vec3::into(up);
     let oth = f32::to_le_bytes(other_arg);
+    let near = f32::to_le_bytes(near_plane);
+    let far = f32::to_le_bytes(far_plane);
     let cam_data_iter = pos
         .iter()
         .chain(tgt.iter())
         .chain(upp.iter())
         .copied()
         .flat_map(f32::to_le_bytes)
-        .chain(oth.iter().copied());
+        .chain(oth.iter().copied())
+        .chain(near.iter().copied())
+        .chain(far.iter().copied());
     camera_type.iter().copied().chain(cam_data_iter).collect()
 }
 
@@ -628,18 +638,24 @@ fn bytes_to_camera(data: &[u8]) -> Camera {
         f32::from_le_bytes(data[33..37].try_into().unwrap()),
     );
     let other_val = f32::from_le_bytes(data[37..41].try_into().unwrap());
+    let near = f32::from_le_bytes(data[41..45].try_into().unwrap());
+    let far = f32::from_le_bytes(data[45..49].try_into().unwrap());
     match cam_type {
         0 => Camera::Perspective(PerspectiveCam {
             position,
             target,
             up,
             fovx: other_val,
+            near,
+            far,
         }),
         1 => Camera::Orthographic(OrthographicCam {
             position,
             target,
             up,
             scale: other_val,
+            near,
+            far,
         }),
         _ => {
             panic!("Unexpected cam type")
@@ -984,18 +1000,24 @@ mod tests {
             let target = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
             let up = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
             let other_arg = rng.gen();
+            let near = rng.gen_range(0.001..1.0);
+            let far = rng.gen_range(10.0..10000.0);
             let cam = match cam_type {
                 1 => Camera::Perspective(PerspectiveCam {
                     position,
                     target,
                     up,
                     fovx: other_arg,
+                    near,
+                    far,
                 }),
                 2 => Camera::Orthographic(OrthographicCam {
                     position,
                     target,
                     up,
                     scale: other_arg,
+                    near,
+                    far,
                 }),
                 _ => {
                     panic!("Non existing variant");
