@@ -116,6 +116,7 @@ impl MemoryManager {
         extent: vk::Extent2D,
         usage: vk::ImageUsageFlags,
         aspect_mask: vk::ImageAspectFlags,
+        mip_levels: u32,
     ) -> AllocatedImage {
         // this methods default to ImageType 2D so it's weird to ask for a Extent3D
         let extent3d = vk::Extent3D {
@@ -130,7 +131,7 @@ impl MemoryManager {
             image_type: vk::ImageType::TYPE_2D,
             format,
             extent: extent3d,
-            mip_levels: 1,
+            mip_levels,
             array_layers: 1,
             samples: vk::SampleCountFlags::TYPE_1,
             tiling: vk::ImageTiling::OPTIMAL,
@@ -161,7 +162,7 @@ impl MemoryManager {
         let subresource_range = vk::ImageSubresourceRange {
             aspect_mask,
             base_mip_level: 0,
-            level_count: 1,
+            level_count: mip_levels,
             base_array_layer: 0,
             layer_count: 1,
         };

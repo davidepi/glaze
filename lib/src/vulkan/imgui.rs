@@ -71,6 +71,7 @@ impl ImguiDrawer {
                 fonts_extent,
                 vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
                 vk::ImageAspectFlags::COLOR,
+                1,
             );
             let mapped = fonts_cpu_buf
                 .allocation

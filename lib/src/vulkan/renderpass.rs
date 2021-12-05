@@ -30,6 +30,7 @@ impl RenderPass {
             extent,
             vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
             vk::ImageAspectFlags::COLOR,
+            1,
         );
         let depth_img = mm.create_image_gpu(
             "Forward pass depth image",
@@ -37,6 +38,7 @@ impl RenderPass {
             extent,
             vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
             vk::ImageAspectFlags::DEPTH,
+            1,
         );
         let color_attachment = vk::AttachmentDescription {
             flags: vk::AttachmentDescriptionFlags::empty(),

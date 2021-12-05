@@ -247,12 +247,12 @@ fn create_sampler<T: Device>(device: &T) -> vk::Sampler {
         address_mode_v: vk::SamplerAddressMode::REPEAT,
         address_mode_w: vk::SamplerAddressMode::REPEAT,
         mip_lod_bias: 0.0,
-        anisotropy_enable: vk::FALSE,
+        anisotropy_enable: vk::TRUE,
         max_anisotropy,
         compare_enable: vk::FALSE,
         compare_op: vk::CompareOp::ALWAYS,
         min_lod: 0.0,
-        max_lod: 0.0,
+        max_lod: 1000.0, // use maximum possible lod
         border_color: vk::BorderColor::INT_OPAQUE_BLACK,
         unnormalized_coordinates: vk::FALSE,
     };
@@ -495,7 +495,8 @@ fn load_texture_to_gpu<T: Device>(
     texture: Texture,
 ) -> TextureLoaded {
     let (width, height) = texture.dimensions();
-    let size = texture.bytes(0) as u64;
+    let mip_levels = texture.mipmap_levels();
+    let full_size = (0..mip_levels).map(|x| texture.bytes(x)).sum::<usize>();
     let extent = vk::Extent2D {
         width: width as u32,
         height: height as u32,
@@ -506,7 +507,7 @@ fn load_texture_to_gpu<T: Device>(
     };
     let buffer = mm.create_buffer(
         "Texture Buffer",
-        size,
+        full_size as u64,
         vk::BufferUsageFlags::TRANSFER_SRC,
         MemoryLocation::CpuToGpu,
     );
@@ -516,15 +517,20 @@ fn load_texture_to_gpu<T: Device>(
         extent,
         vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
         vk::ImageAspectFlags::COLOR,
+        mip_levels as u32,
     );
-    let mapped = buffer
+    let mut mapped = buffer
         .allocation
         .mapped_ptr()
         .expect("Failed to map memory")
         .cast()
         .as_ptr();
-    unsafe {
-        std::ptr::copy_nonoverlapping(texture.ptr(0), mapped, size as usize);
+    for level in 0..mip_levels {
+        let size = texture.bytes(level);
+        unsafe {
+            std::ptr::copy_nonoverlapping(texture.ptr(level), mapped, size);
+            mapped = mapped.add(size);
+        }
     }
     let subresource_range = vk::ImageSubresourceRange {
         aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -557,24 +563,33 @@ fn load_texture_to_gpu<T: Device>(
         image: image.image,
         subresource_range,
     };
-    let image_subresource = vk::ImageSubresourceLayers {
-        aspect_mask: vk::ImageAspectFlags::COLOR,
-        mip_level: 0,
-        base_array_layer: 0,
-        layer_count: 1,
-    };
-    let copy_region = vk::BufferImageCopy {
-        buffer_offset: 0,
-        buffer_row_length: 0,   // 0 = same as image width
-        buffer_image_height: 0, // 0 = same as image height
-        image_subresource,
-        image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
-        image_extent: vk::Extent3D {
-            width: width as u32,
-            height: height as u32,
-            depth: 1,
-        },
-    };
+    let mut regions = Vec::with_capacity(mip_levels);
+    let mut buffer_offset = 0;
+    let (mut width, mut height) = (width, height);
+    for level in 0..mip_levels {
+        let image_subresource = vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: level as u32,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        let copy_region = vk::BufferImageCopy {
+            buffer_offset,
+            buffer_row_length: 0,   // 0 = same as image width
+            buffer_image_height: 0, // 0 = same as image height
+            image_subresource,
+            image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+            image_extent: vk::Extent3D {
+                width: width as u32,
+                height: height as u32,
+                depth: 1,
+            },
+        };
+        regions.push(copy_region);
+        buffer_offset += texture.bytes(level) as u64;
+        width >>= 1;
+        height >>= 1;
+    }
     let command = unsafe {
         |device: &ash::Device, cmd: vk::CommandBuffer| {
             device.cmd_pipeline_barrier(
@@ -591,7 +606,7 @@ fn load_texture_to_gpu<T: Device>(
                 buffer.buffer,
                 image.image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[copy_region],
+                &regions,
             );
             device.cmd_pipeline_barrier(
                 cmd,
