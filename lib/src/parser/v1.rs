@@ -55,6 +55,10 @@ struct Offsets {
     mat_off: u64,
     mat_len: u64,
     mat_hash: u64,
+    // currently unused
+    _light_len: u64,
+    _light_off: u64,
+    _next: u64,
 }
 
 impl Offsets {
@@ -93,6 +97,9 @@ impl Offsets {
             mat_off,
             mat_len,
             mat_hash,
+            _light_len: 0,
+            _light_off: 0,
+            _next: 0,
         })
     }
 
@@ -222,6 +229,9 @@ impl<R: Read + Seek> ContentV1<R> {
             mat_off: mat_offset as u64,
             mat_len: mat_size as u64,
             mat_hash,
+            _light_len: 0,
+            _light_off: 0,
+            _next: 0,
         }
         .as_bytes();
         hasher.write(&offsets);
@@ -714,28 +724,39 @@ fn texture_to_bytes((index, texture): &(u16, Texture)) -> Vec<u8> {
     let name = texture.name();
     let str_len = name.bytes().len();
     assert!(str_len < 256);
-    let mut tex_data = Vec::new();
     let (width, height) = texture.dimensions();
-    // ad-hoc compression surely better than general purpose one
-    PngEncoder::new_with_quality(
-        &mut tex_data,
-        image::png::CompressionType::Fast,
-        image::png::FilterType::Up,
-    )
-    .encode(
-        texture.raw(),
-        width as u32,
-        height as u32,
-        texture.format().to_color_type(),
-    )
-    .expect("Failed to encode texture");
+    let miplvls = texture.mipmap_levels();
+    let (mut w_mip, mut h_mip) = (width, height);
+    let mut tex_data = Vec::new();
+    for level in 0..miplvls {
+        let mut mip_data = Vec::new();
+        let mip = texture.raw(level);
+        // ad-hoc compression surely better than general purpose one
+        PngEncoder::new_with_quality(
+            &mut mip_data,
+            image::png::CompressionType::Fast,
+            image::png::FilterType::Up,
+        )
+        .encode(
+            mip,
+            w_mip as u32,
+            h_mip as u32,
+            texture.format().to_color_type(),
+        )
+        .expect("Failed to encode texture");
+        w_mip >>= 1;
+        h_mip >>= 1;
+        tex_data.extend((mip_data.len() as u32).to_le_bytes());
+        tex_data.extend(mip_data);
+    }
     let tex_len = tex_data.len();
-    let total_len = std::mem::size_of::<u16>() + 2 * std::mem::size_of::<u8>() + str_len + tex_len;
+    let total_len = std::mem::size_of::<u16>() + 3 * std::mem::size_of::<u8>() + str_len + tex_len;
     let mut retval = Vec::with_capacity(total_len);
     retval.extend(index.to_le_bytes());
     retval.push(format_to_u8(texture.format()));
     retval.push(str_len as u8);
     retval.extend(name.bytes());
+    retval.push(miplvls as u8);
     retval.extend(tex_data);
     retval
 }
@@ -762,38 +783,52 @@ fn bytes_to_texture(data: &[u8]) -> Result<(u16, Texture), Error> {
     let mut index = 4;
     let name = String::from_utf8(data[index..index + str_len].to_vec()).unwrap();
     index += str_len;
-    let decoder = PngDecoder::new(&data[index..]).expect("Corrupted image");
-    let dimensions = decoder.dimensions();
-    let mut decoded = vec![0; decoder.total_bytes() as usize];
-    decoder
-        .read_image(&mut decoded)
-        .expect("Failed to decode image");
+    let miplvls = data[index] as usize;
+    index += 1;
+    let mut dimensions = Vec::with_capacity(miplvls);
+    let mut mipmaps = Vec::with_capacity(miplvls);
+    for _ in 0..miplvls {
+        let miplen = u32::from_le_bytes(data[index..index + 4].try_into().unwrap()) as usize;
+        index += 4;
+        let decoder = PngDecoder::new(&data[index..index + miplen]).expect("Corrupted image");
+        index += miplen;
+        dimensions.push(decoder.dimensions());
+        let mut decoded = vec![0; decoder.total_bytes() as usize];
+        decoder
+            .read_image(&mut decoded)
+            .expect("Failed to decode image");
+        mipmaps.push(decoded);
+    }
     let info = TextureInfo {
         name,
         format,
-        width: dimensions.0 as u16,
-        height: dimensions.1 as u16,
+        width: dimensions[0].0 as u16,
+        height: dimensions[0].1 as u16,
     };
     let texture = match format {
         TextureFormat::Gray => {
-            let conversion_error = Error::new(
-                ErrorKind::InvalidData,
-                "Failed to parse data into grayscale image",
-            );
-            Texture::new_gray(
-                info,
-                GrayImage::from_raw(dimensions.0, dimensions.1, decoded).ok_or(conversion_error)?,
-            )
+            let mut data = Vec::with_capacity(miplvls);
+            for (mip, (w, h)) in mipmaps.into_iter().zip(dimensions.into_iter()) {
+                let conversion_error = Error::new(
+                    ErrorKind::InvalidData,
+                    "Failed to parse data into grayscale image",
+                );
+                let tex = GrayImage::from_raw(w, h, mip).ok_or(conversion_error)?;
+                data.push(tex);
+            }
+            Texture::new_gray_with_mipmaps(info, data)
         }
         TextureFormat::Rgba => {
-            let conversion_error = Error::new(
-                ErrorKind::InvalidData,
-                "Failed to parse data into rgba image",
-            );
-            Texture::new_rgba(
-                info,
-                RgbaImage::from_raw(dimensions.0, dimensions.1, decoded).ok_or(conversion_error)?,
-            )
+            let mut data = Vec::with_capacity(miplvls);
+            for (mip, (w, h)) in mipmaps.into_iter().zip(dimensions.into_iter()) {
+                let conversion_error = Error::new(
+                    ErrorKind::InvalidData,
+                    "Failed to parse data into rgba image",
+                );
+                let tex = RgbaImage::from_raw(w, h, mip).ok_or(conversion_error)?;
+                data.push(tex);
+            }
+            Texture::new_rgba_with_mipmaps(info, data)
         }
     };
     Ok((tex_index, texture))

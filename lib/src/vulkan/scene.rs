@@ -495,7 +495,7 @@ fn load_texture_to_gpu<T: Device>(
     texture: Texture,
 ) -> TextureLoaded {
     let (width, height) = texture.dimensions();
-    let size = texture.len() as u64;
+    let size = texture.bytes(0) as u64;
     let extent = vk::Extent2D {
         width: width as u32,
         height: height as u32,
@@ -524,7 +524,7 @@ fn load_texture_to_gpu<T: Device>(
         .cast()
         .as_ptr();
     unsafe {
-        std::ptr::copy_nonoverlapping(texture.ptr(), mapped, size as usize);
+        std::ptr::copy_nonoverlapping(texture.ptr(0), mapped, size as usize);
     }
     let subresource_range = vk::ImageSubresourceRange {
         aspect_mask: vk::ImageAspectFlags::COLOR,

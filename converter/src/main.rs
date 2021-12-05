@@ -138,7 +138,11 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
     let mesh_thread = thread::spawn(move || convert_meshes(&mesh_data, mesh_pb));
     let cameras = camera_thread.join().unwrap();
     let (materials, textures) = material_thread.join().unwrap()?;
+    let mm_pb = mpb.add(ProgressBar::new(1));
+    mm_pb.set_style(style.clone());
+    let tex_mm_thread = thread::spawn(move || gen_mipmaps(textures, mm_pb));
     let (vertices, meshes) = mesh_thread.join().unwrap()?;
+    let textures = tex_mm_thread.join().unwrap();
     mpb.clear().ok();
     Ok(TempScene {
         vertices,
@@ -147,6 +151,17 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
         textures,
         materials,
     })
+}
+
+fn gen_mipmaps(mut textures: Vec<(u16, Texture)>, pb: ProgressBar) -> Vec<(u16, Texture)> {
+    let effort = textures.len();
+    pb.set_length(effort as u64);
+    pb.set_message("Generating mipmaps");
+    for (_, texture) in textures.iter_mut() {
+        texture.gen_mipmaps();
+        pb.inc(1);
+    }
+    textures
 }
 
 fn convert_meshes(
@@ -514,7 +529,8 @@ mod tests {
             assert_eq!(parsed.meshes()?.len(), 1);
             assert_eq!(parsed.cameras()?.len(), 1);
             assert_eq!(parsed.materials()?.len(), 2);
-            assert_eq!(parsed.textures()?.len(), 1);
+            let textures = parsed.textures()?;
+            assert_eq!(textures[0].1.mipmap_levels(), 10);
             assert_eq!(parsed.vertices()?.len(), 24);
         } else {
             panic!("Failed to parse back scene")
