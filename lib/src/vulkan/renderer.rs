@@ -15,8 +15,8 @@ use crate::{include_shader, Camera, Material, ReadParsed};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
-use winit::window::Window;
 
 const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::UNIFORM_BUFFER, 1.0)];
 const FRAMES_IN_FLIGHT: usize = 2;
@@ -42,7 +42,6 @@ struct FrameDataBuf {
 }
 
 pub struct RealtimeRenderer {
-    instance: PresentInstance,
     swapchain: Swapchain,
     descriptor_creator: DescriptorSetCreator,
     copy_sampler: vk::Sampler,
@@ -60,33 +59,33 @@ pub struct RealtimeRenderer {
     frame_no: usize,
     paused: bool,
     stats: InternalStats,
+    instance: Rc<PresentInstance>,
 }
 
 impl RealtimeRenderer {
     pub fn create(
-        window: &Window,
+        instance: Rc<PresentInstance>,
         imgui: &mut imgui::Context,
         window_width: u32,
         window_height: u32,
         render_scale: f32,
     ) -> Self {
-        let mut instance = PresentInstance::new(window);
         let descriptor_allocator =
-            DescriptorAllocator::new(instance.device().logical().clone(), &AVG_DESC);
+            DescriptorAllocator::new(instance.device().logical_clone(), &AVG_DESC);
         let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
         let mut descriptor_creator =
             DescriptorSetCreator::new(descriptor_allocator, descriptor_cache);
         let mut mm = MemoryManager::new(
             instance.instance(),
-            instance.device().logical(),
+            instance.device().logical_clone(),
             instance.device().physical().device,
             FRAMES_IN_FLIGHT as u8,
         );
         let mut cmdm = CommandManager::new(
-            instance.device().logical().clone(),
+            instance.device().logical_clone(),
             instance.present_device().graphic_index(),
         );
-        let swapchain = Swapchain::create(&instance, window_width, window_height);
+        let swapchain = Swapchain::create(instance.clone(), window_width, window_height);
         let render_size = vk::Extent2D {
             width: (window_width as f32 * render_scale) as u32,
             height: (window_height as f32 * render_scale) as u32,
@@ -135,7 +134,7 @@ impl RealtimeRenderer {
         forward_pass.clear_color[0].color.float32 = clear_color;
         let imgui_renderer = ImguiDrawer::new(
             imgui,
-            instance.device_mut(),
+            instance.device(),
             &mut mm,
             &mut cmdm,
             &mut descriptor_creator,
@@ -226,8 +225,7 @@ impl RealtimeRenderer {
             scene.deinit_pipelines(self.instance.device().logical());
         }
         self.render_scale = scale;
-        self.swapchain
-            .recreate(&self.instance, window_width, window_height);
+        self.swapchain.recreate(window_width, window_height);
         self.imgui_renderer
             .update(self.instance.device().logical(), &self.swapchain);
         let render_size = vk::Extent2D {
@@ -269,7 +267,7 @@ impl RealtimeRenderer {
             scene.unload(self.instance.device(), &mut self.mm);
         }
         if let Ok(mut new) = VulkanScene::load(
-            self.instance.device_mut(),
+            self.instance.device(),
             parsed,
             &mut self.mm,
             &mut self.cmdm,
@@ -299,7 +297,7 @@ impl RealtimeRenderer {
                 height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
             };
             scene.update_material(
-                self.instance.device_mut(),
+                self.instance.device(),
                 old,
                 new,
                 &mut self.cmdm,
@@ -331,12 +329,7 @@ impl RealtimeRenderer {
         self.forward_pass
             .destroy(self.instance.device().logical(), &mut self.mm);
         self.copy_pipeline.destroy(self.instance.device().logical());
-        self.descriptor_creator.destroy();
-        self.swapchain.destroy(&self.instance);
-        self.cmdm.destroy();
-        self.mm.destroy();
         self.sync.destroy(self.instance.device());
-        self.instance.destroy();
     }
 
     pub fn draw_frame(&mut self, imgui_data: Option<&imgui::DrawData>) {

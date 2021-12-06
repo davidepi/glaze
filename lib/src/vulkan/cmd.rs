@@ -1,4 +1,5 @@
 use std::ptr;
+use std::sync::Arc;
 
 use ash::vk;
 
@@ -64,7 +65,7 @@ impl PoolManager {
         self
     }
 
-    fn destroy(self, device: &ash::Device) {
+    fn destroy(&self, device: &ash::Device) {
         unsafe {
             device.destroy_command_pool(self.pool, None);
         }
@@ -75,12 +76,12 @@ pub struct CommandManager {
     current_pool: PoolManager,
     free_pools: Vec<PoolManager>,
     used_pools: Vec<PoolManager>,
-    device: ash::Device,
+    device: Arc<ash::Device>,
     queue_family_index: u32,
 }
 
 impl CommandManager {
-    pub fn new(device: ash::Device, queue_family_index: u32) -> CommandManager {
+    pub fn new(device: Arc<ash::Device>, queue_family_index: u32) -> CommandManager {
         let mut free_pools = (0..POOL_NO)
             .into_iter()
             .map(|_| PoolManager::create(&device, queue_family_index))
@@ -139,13 +140,15 @@ impl CommandManager {
             queue_family_index: self.queue_family_index,
         }
     }
+}
 
-    pub fn destroy(self) {
+impl Drop for CommandManager {
+    fn drop(&mut self) {
         self.free_pools
-            .into_iter()
+            .drain(..)
             .for_each(|pool| pool.destroy(&self.device));
         self.used_pools
-            .into_iter()
+            .drain(..)
             .for_each(|pool| pool.destroy(&self.device));
         self.current_pool.destroy(&self.device);
     }

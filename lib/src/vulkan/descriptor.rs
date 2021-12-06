@@ -3,6 +3,7 @@ use ash::vk;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ptr;
+use std::sync::Arc;
 
 const MAX_SETS: usize = 512;
 const MAX_POOLS: usize = 4;
@@ -18,11 +19,14 @@ pub struct DescriptorAllocator {
     pool_sizes: Vec<vk::DescriptorPoolSize>,
     free_pools: Vec<vk::DescriptorPool>,
     used_pools: Vec<vk::DescriptorPool>,
-    device: ash::Device,
+    device: Arc<ash::Device>,
 }
 
 impl DescriptorAllocator {
-    pub fn new(device: ash::Device, avg_desc: &[(vk::DescriptorType, f32)]) -> DescriptorAllocator {
+    pub fn new(
+        device: Arc<ash::Device>,
+        avg_desc: &[(vk::DescriptorType, f32)],
+    ) -> DescriptorAllocator {
         let pool_sizes = avg_desc
             .iter()
             .map(|(ty, avg)| vk::DescriptorPoolSize {
@@ -93,11 +97,13 @@ impl DescriptorAllocator {
     pub fn reset_all_pools(&mut self) {
         self.reset_pools(true);
     }
+}
 
-    pub fn destroy(self) {
+impl Drop for DescriptorAllocator {
+    fn drop(&mut self) {
         self.free_pools
-            .into_iter()
-            .chain(self.used_pools)
+            .drain(..)
+            .chain(self.used_pools.drain(..))
             .for_each(|pool| unsafe {
                 self.device.destroy_descriptor_pool(pool, None);
             });
@@ -213,10 +219,12 @@ impl DescriptorSetLayoutCache {
             }
         }
     }
+}
 
-    pub fn destroy(self) {
-        self.cache.into_iter().for_each(|(_, layout)| unsafe {
-            self.device.destroy_descriptor_set_layout(layout, None)
+impl Drop for DescriptorSetLayoutCache {
+    fn drop(&mut self) {
+        self.cache.iter().for_each(|(_, layout)| unsafe {
+            self.device.destroy_descriptor_set_layout(*layout, None)
         });
     }
 }
@@ -241,11 +249,6 @@ impl DescriptorSetCreator {
             bindings: Vec::new(),
             info: Vec::new(),
         }
-    }
-
-    pub fn destroy(self) {
-        self.cache.destroy();
-        self.alloc.destroy();
     }
 }
 

@@ -1,6 +1,7 @@
-use glaze::RealtimeRenderer;
+use glaze::{PresentInstance, RealtimeRenderer};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use std::error::Error;
+use std::rc::Rc;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
@@ -34,8 +35,9 @@ impl InteractiveView {
             let mut imgui = imgui::Context::create();
             let mut platform = WinitPlatform::init(&mut imgui);
             platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
+            let instance = Rc::new(PresentInstance::new(&window));
             let renderer = RealtimeRenderer::create(
-                &window,
+                instance.clone(),
                 &mut imgui,
                 default_size.width,
                 default_size.height,

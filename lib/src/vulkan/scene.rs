@@ -42,7 +42,7 @@ struct UnfinishedExecutions {
 
 impl VulkanScene {
     pub fn load<T: Device>(
-        device: &mut T,
+        device: &T,
         mut scene: Box<dyn ReadParsed>,
         mm: &mut MemoryManager,
         cmdm: &mut CommandManager,
@@ -109,7 +109,7 @@ impl VulkanScene {
 
     pub(crate) fn update_material<T: Device>(
         &mut self,
-        device: &mut T,
+        device: &T,
         old: u16,
         new: Material,
         cmdm: &mut CommandManager,
@@ -265,7 +265,7 @@ fn create_sampler<T: Device>(device: &T) -> vk::Sampler {
 }
 
 fn load_vertices_to_gpu<T: Device>(
-    device: &mut T,
+    device: &T,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
@@ -310,7 +310,7 @@ fn load_vertices_to_gpu<T: Device>(
 }
 
 fn load_indices_to_gpu<T: Device>(
-    device: &mut T,
+    device: &T,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
@@ -431,7 +431,7 @@ fn build_mat_desc_set<T: Device>(
 }
 
 fn load_materials_parameters<T: Device>(
-    device: &mut T,
+    device: &T,
     materials: &[(u16, Material)],
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
@@ -488,7 +488,7 @@ fn load_materials_parameters<T: Device>(
 }
 
 fn load_texture_to_gpu<T: Device>(
-    device: &mut T,
+    device: &T,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,

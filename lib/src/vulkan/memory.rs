@@ -1,4 +1,5 @@
 use std::ptr;
+use std::sync::Arc;
 
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
@@ -19,7 +20,7 @@ pub struct AllocatedImage {
 }
 
 pub struct MemoryManager {
-    device: ash::Device,
+    device: Arc<ash::Device>,
     frames_in_flight: u8,
     deferred_buffers: Vec<(AllocatedBuffer, u8)>,
     allocator: Allocator,
@@ -28,7 +29,7 @@ pub struct MemoryManager {
 impl MemoryManager {
     pub fn new(
         instance: &ash::Instance,
-        device: &ash::Device,
+        device: Arc<ash::Device>,
         physical_device: vk::PhysicalDevice,
         frames_in_flight: u8,
     ) -> Self {
@@ -53,14 +54,14 @@ impl MemoryManager {
         };
         let acd = AllocatorCreateDesc {
             instance: instance.clone(),
-            device: device.clone(),
+            device: (*device).clone(),
             physical_device,
             debug_settings,
             buffer_device_address: false,
         };
         let allocator = Allocator::new(&acd).expect("Failed to create memory allocator");
         MemoryManager {
-            device: device.clone(),
+            device,
             frames_in_flight,
             deferred_buffers: Vec::new(),
             allocator,
@@ -220,8 +221,10 @@ impl MemoryManager {
             self.deferred_buffers = retain;
         }
     }
+}
 
-    pub fn destroy(mut self) {
+impl Drop for MemoryManager {
+    fn drop(&mut self) {
         while let Some((buf, _)) = self.deferred_buffers.pop() {
             self.free_buffer(buf);
         }

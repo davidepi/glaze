@@ -1,25 +1,28 @@
 use super::debug::{cchars_to_string, ValidationLayers};
 use super::surface::Surface;
 use ash::vk;
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::ptr;
+use std::sync::Arc;
 
 pub trait Device {
     fn logical(&self) -> &ash::Device;
+    fn logical_clone(&self) -> Arc<ash::Device>;
     fn physical(&self) -> &PhysicalDevice;
     #[must_use]
-    fn immediate_execute<F>(&mut self, cmd: vk::CommandBuffer, command: F) -> vk::Fence
+    fn immediate_execute<F>(&self, cmd: vk::CommandBuffer, command: F) -> vk::Fence
     where
         F: Fn(&ash::Device, vk::CommandBuffer);
-    fn wait_completion(&mut self, tokens: &[vk::Fence]);
+    fn wait_completion(&self, tokens: &[vk::Fence]);
 }
 
 pub struct PresentDevice {
-    logical: ash::Device,
+    logical: Arc<ash::Device>,
     physical: PhysicalDevice,
     graphic_index: u32,
-    immediate_fences: Vec<vk::Fence>,
+    immediate_fences: RefCell<Vec<vk::Fence>>,
     graphic_queue: vk::Queue,
 }
 
@@ -52,12 +55,16 @@ impl PresentDevice {
             p_next: ptr::null(),
             flags: vk::FenceCreateFlags::empty(),
         };
-        let immediate_fences = (0..10)
-            .map(|_| unsafe { logical.create_fence(&ci, None) }.expect("Failed to create fence"))
-            .collect();
+        let immediate_fences = RefCell::new(
+            (0..10)
+                .map(|_| {
+                    unsafe { logical.create_fence(&ci, None) }.expect("Failed to create fence")
+                })
+                .collect::<Vec<_>>(),
+        );
         let graphic_queue = unsafe { logical.get_device_queue(graphic_index, 0) };
         PresentDevice {
-            logical,
+            logical: Arc::new(logical),
             physical,
             graphic_index,
             immediate_fences,
@@ -72,10 +79,12 @@ impl PresentDevice {
     pub fn graphic_queue(&self) -> vk::Queue {
         self.graphic_queue
     }
+}
 
-    pub fn destroy(self) {
+impl Drop for PresentDevice {
+    fn drop(&mut self) {
         unsafe {
-            self.immediate_fences.into_iter().for_each(|fence| {
+            self.immediate_fences.get_mut().drain(..).for_each(|fence| {
                 self.logical.destroy_fence(fence, None);
             });
             self.logical.destroy_device(None);
@@ -84,6 +93,10 @@ impl PresentDevice {
 }
 
 impl Device for PresentDevice {
+    fn logical_clone(&self) -> Arc<ash::Device> {
+        self.logical.clone()
+    }
+
     fn logical(&self) -> &ash::Device {
         &self.logical
     }
@@ -92,11 +105,11 @@ impl Device for PresentDevice {
         &self.physical
     }
 
-    fn immediate_execute<F>(&mut self, cmd: vk::CommandBuffer, command: F) -> vk::Fence
+    fn immediate_execute<F>(&self, cmd: vk::CommandBuffer, command: F) -> vk::Fence
     where
         F: Fn(&ash::Device, vk::CommandBuffer),
     {
-        let fence = self.immediate_fences.pop().unwrap_or_else(|| {
+        let fence = self.immediate_fences.borrow_mut().pop().unwrap_or_else(|| {
             let ci = vk::FenceCreateInfo {
                 s_type: vk::StructureType::FENCE_CREATE_INFO,
                 p_next: ptr::null(),
@@ -137,7 +150,7 @@ impl Device for PresentDevice {
         fence
     }
 
-    fn wait_completion(&mut self, tokens: &[vk::Fence]) {
+    fn wait_completion(&self, tokens: &[vk::Fence]) {
         unsafe {
             self.logical
                 .wait_for_fences(tokens, true, u64::MAX)
@@ -145,7 +158,7 @@ impl Device for PresentDevice {
             self.logical
                 .reset_fences(tokens)
                 .expect("Failed to reset fence");
-            self.immediate_fences.extend(tokens);
+            self.immediate_fences.borrow_mut().extend(tokens);
         }
     }
 }

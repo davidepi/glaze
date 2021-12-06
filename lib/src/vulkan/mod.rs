@@ -17,6 +17,7 @@ mod sync;
 // used in the material module
 pub(crate) use self::pipeline::PipelineBuilder;
 // used in the texture module
+pub use self::instance::PresentInstance;
 pub(crate) use self::memory::AllocatedImage;
 pub use self::renderer::RealtimeRenderer;
 pub use self::scene::VulkanScene;

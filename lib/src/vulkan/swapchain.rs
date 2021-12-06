@@ -1,5 +1,6 @@
 use ash::vk;
 use std::ptr;
+use std::rc::Rc;
 
 use super::device::Device;
 use super::instance::{Instance, PresentInstance};
@@ -17,16 +18,17 @@ pub struct Swapchain {
     extent: vk::Extent2D,
     image_views: Vec<vk::ImageView>,
     render_passes: Vec<FinalRenderPass>,
+    instance: Rc<PresentInstance>,
 }
 
 impl Swapchain {
-    pub fn create(instance: &PresentInstance, width: u32, height: u32) -> Self {
+    pub fn create(instance: Rc<PresentInstance>, width: u32, height: u32) -> Self {
         swapchain_init(instance, width, height, None)
     }
 
-    pub fn recreate(&mut self, instance: &PresentInstance, width: u32, height: u32) {
-        destroy(self, instance, true);
-        let new = swapchain_init(instance, width, height, Some(self.swapchain));
+    pub fn recreate(&mut self, width: u32, height: u32) {
+        destroy(self, true);
+        let new = swapchain_init(self.instance.clone(), width, height, Some(self.swapchain));
         *self = new;
     }
 
@@ -72,28 +74,30 @@ impl Swapchain {
             _ => panic!("Failed to acquire next image"),
         }
     }
-
-    pub fn destroy(mut self, instance: &PresentInstance) {
-        destroy(&mut self, instance, false);
-    }
 }
 
-fn destroy(sc: &mut Swapchain, instance: &PresentInstance, partial: bool) {
+fn destroy(sc: &mut Swapchain, partial: bool) {
     unsafe {
         sc.render_passes
             .drain(..)
-            .for_each(|r| r.destroy(instance.device().logical()));
+            .for_each(|r| r.destroy(sc.instance.device().logical()));
         sc.image_views
             .drain(..)
-            .for_each(|iw| instance.device().logical().destroy_image_view(iw, None));
+            .for_each(|iw| sc.instance.device().logical().destroy_image_view(iw, None));
         if !partial {
             sc.loader.destroy_swapchain(sc.swapchain, None);
         }
     }
 }
 
+impl Drop for Swapchain {
+    fn drop(&mut self) {
+        destroy(self, false);
+    }
+}
+
 fn swapchain_init(
-    instance: &PresentInstance,
+    instance: Rc<PresentInstance>,
     width: u32,
     height: u32,
     old: Option<vk::SwapchainKHR>,
@@ -178,6 +182,7 @@ fn swapchain_init(
         extent: ci.image_extent,
         image_views,
         render_passes,
+        instance,
     }
 }
 

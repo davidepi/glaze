@@ -1,5 +1,5 @@
-// some vulkan functions require a lot of parameters...
 #![allow(clippy::too_many_arguments)]
+#![allow(clippy::type_complexity)]
 
 mod geometry;
 mod materials;
@@ -11,6 +11,4 @@ pub use geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
 pub use materials::{Material, ShaderMat, Texture, TextureFormat, TextureInfo};
 pub use parser::{converted_file, parse, serialize, ParserVersion, ReadParsed};
 #[cfg(feature = "vulkan")]
-pub use vulkan::RealtimeRenderer;
-#[cfg(feature = "vulkan")]
-pub use vulkan::VulkanScene;
+pub use vulkan::{PresentInstance, RealtimeRenderer, VulkanScene};

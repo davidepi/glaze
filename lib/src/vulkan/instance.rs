@@ -15,7 +15,6 @@ pub trait Instance {
     fn entry(&self) -> &ash::Entry;
     fn instance(&self) -> &ash::Instance;
     fn device(&self) -> &Self::DeviceItem;
-    fn device_mut(&mut self) -> &mut Self::DeviceItem;
 }
 
 pub struct PresentInstance {
@@ -63,10 +62,6 @@ impl PresentInstance {
     pub fn surface_capabilities(&self) -> SurfaceSupport {
         self.device.physical().surface_capabilities(&self.surface)
     }
-
-    pub fn destroy(self) {
-        self.device.destroy();
-    }
 }
 
 impl Instance for PresentInstance {
@@ -82,10 +77,6 @@ impl Instance for PresentInstance {
 
     fn device(&self) -> &PresentDevice {
         &self.device
-    }
-
-    fn device_mut(&mut self) -> &mut Self::DeviceItem {
-        &mut self.device
     }
 }
 
