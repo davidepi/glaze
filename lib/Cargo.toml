@@ -16,17 +16,17 @@ twox-hash = "1.6"
 fnv = "1.0"
 xz2 ="0.1"
 ash = {version="0.33", optional=true}
-winit = {version="0.25", optional=true}
-gpu-allocator = {version="0.10", optional=true}
+winit = {version="0.25.0", optional=true}
+gpu-allocator = {version="0.11.0", optional=true}
 memoffset = {version="0.6", optional=true}
 imgui = {version="0.8", optional=true}
 
-[target.'cfg(all(target_os = "macos",features="vulkan"))'.dependencies]
-metal = "0.20.0"
-cocoa = "0.24.0"
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = {version="0.20.0", optional=true}
+cocoa = {version="0.24.0", optional=true}
 
-[target.'cfg(all(target_os = "windows", features="vulkan"))'.dependencies]
-winapi = "0.3.9"
+[target.'cfg(target_os = "windows")'.dependencies]
+winapi = {version="0.3.9", optional=true}
 
 [dev-dependencies]
 rand = "0.8"
@@ -36,4 +36,4 @@ float-cmp = "0.9"
 
 [features]
 default = ["vulkan"]
-vulkan = ["ash", "winit", "gpu-allocator", "memoffset", "imgui", "shaderc"]
+vulkan = ["ash", "winit", "gpu-allocator", "memoffset", "imgui", "shaderc", "metal", "cocoa", "winapi"]
