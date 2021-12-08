@@ -73,7 +73,7 @@ impl PoolManager {
 }
 
 pub struct CommandManager {
-    current_pool: PoolManager,
+    current_pool: Option<PoolManager>,
     free_pools: Vec<PoolManager>,
     used_pools: Vec<PoolManager>,
     device: Arc<ash::Device>,
@@ -86,7 +86,7 @@ impl CommandManager {
             .into_iter()
             .map(|_| PoolManager::create(&device, queue_family_index))
             .collect::<Vec<_>>();
-        let current_pool = free_pools.pop().unwrap();
+        let current_pool = free_pools.pop();
         CommandManager {
             free_pools,
             current_pool,
@@ -97,13 +97,19 @@ impl CommandManager {
     }
 
     pub fn get_cmd_buffer(&mut self) -> vk::CommandBuffer {
-        if let Some(buffer) = self.current_pool.get() {
-            // buffer available, from the current pool
-            buffer
-        } else if let Some(mut next_pool) = self.free_pools.pop() {
-            // current pool is full, but there are free pools
-            std::mem::swap(&mut self.current_pool, &mut next_pool);
-            self.used_pools.push(next_pool);
+        if let Some(pool) = &mut self.current_pool {
+            // a pool is available
+            if let Some(buffer) = pool.get() {
+                // buffer available, from the current pool
+                buffer
+            } else {
+                // current pool is full, replace with none and repeat recursion
+                self.used_pools.push(self.current_pool.take().unwrap());
+                self.get_cmd_buffer()
+            }
+        } else if let Some(next_pool) = self.free_pools.pop() {
+            // there is a free pool available
+            self.current_pool = Some(next_pool);
             self.get_cmd_buffer()
         } else if self.used_pools.len() > POOL_NO / 2 {
             // no free pools, but there are a decent amount of used one. Resets half of them
@@ -125,20 +131,22 @@ impl CommandManager {
         }
     }
 
-    pub fn thread_exclusive_manger(&mut self) -> Self {
-        // get a single pool. Then the manager will auto expand if it needs to
-        let pool = if let Some(pool) = self.free_pools.pop() {
-            pool
-        } else {
-            PoolManager::create(&self.device, self.queue_family_index)
-        };
+    pub fn thread_exclusive(&mut self) -> Self {
         CommandManager {
-            current_pool: pool,
+            current_pool: self.free_pools.pop(), // the manager will auto expand if this is none
             free_pools: Vec::new(),
             used_pools: Vec::new(),
             device: self.device.clone(),
             queue_family_index: self.queue_family_index,
         }
+    }
+
+    pub fn merge(&mut self, mut other: Self) {
+        if let Some(other_current) = other.current_pool.take() {
+            self.used_pools.push(other_current);
+        }
+        self.used_pools.append(&mut other.used_pools);
+        self.free_pools.append(&mut other.free_pools);
     }
 }
 
@@ -150,6 +158,8 @@ impl Drop for CommandManager {
         self.used_pools
             .drain(..)
             .for_each(|pool| pool.destroy(&self.device));
-        self.current_pool.destroy(&self.device);
+        if let Some(pool) = self.current_pool.take() {
+            pool.destroy(&self.device);
+        }
     }
 }

@@ -1,7 +1,5 @@
 use super::cmd::CommandManager;
-use super::descriptor::{
-    Descriptor, DescriptorAllocator, DescriptorSetCreator, DescriptorSetLayoutCache,
-};
+use super::descriptor::{Descriptor, DescriptorSetCreator};
 use super::device::Device;
 use super::imgui::ImguiDrawer;
 use super::instance::{Instance, PresentInstance};
@@ -43,11 +41,11 @@ struct FrameDataBuf {
 
 pub struct RealtimeRenderer {
     swapchain: Swapchain,
-    descriptor_creator: DescriptorSetCreator,
     copy_sampler: vk::Sampler,
     copy_pipeline: Pipeline,
     forward_pass: RenderPass,
     imgui_renderer: ImguiDrawer,
+    dm: DescriptorSetCreator,
     mm: MemoryManager,
     cmdm: CommandManager,
     sync: PresentSync<FRAMES_IN_FLIGHT>,
@@ -70,11 +68,7 @@ impl RealtimeRenderer {
         window_height: u32,
         render_scale: f32,
     ) -> Self {
-        let descriptor_allocator =
-            DescriptorAllocator::new(instance.device().logical_clone(), &AVG_DESC);
-        let descriptor_cache = DescriptorSetLayoutCache::new(instance.device().logical().clone());
-        let mut descriptor_creator =
-            DescriptorSetCreator::new(descriptor_allocator, descriptor_cache);
+        let mut dm = DescriptorSetCreator::new(instance.device().logical_clone(), &AVG_DESC);
         let mut mm = MemoryManager::new(
             instance.instance(),
             instance.device().logical_clone(),
@@ -103,7 +97,7 @@ impl RealtimeRenderer {
                 offset: 0,
                 range: std::mem::size_of::<FrameData>() as u64,
             };
-            let descriptor = descriptor_creator
+            let descriptor = dm
                 .new_set()
                 .bind_buffer(
                     buf_info,
@@ -128,7 +122,7 @@ impl RealtimeRenderer {
             instance.device().logical(),
             copy_sampler,
             &mut mm,
-            &mut descriptor_creator,
+            &mut dm,
             render_size,
         );
         forward_pass.clear_color[0].color.float32 = clear_color;
@@ -137,7 +131,7 @@ impl RealtimeRenderer {
             instance.device(),
             &mut mm,
             &mut cmdm,
-            &mut descriptor_creator,
+            &mut dm,
             &swapchain,
         );
         let copy_pipeline = create_copy_pipeline(
@@ -147,13 +141,12 @@ impl RealtimeRenderer {
             &[forward_pass.copy_descriptor.layout],
         );
         RealtimeRenderer {
-            instance,
             swapchain,
-            descriptor_creator,
             copy_sampler,
             copy_pipeline,
             forward_pass,
             imgui_renderer,
+            dm,
             mm,
             cmdm,
             sync,
@@ -165,6 +158,7 @@ impl RealtimeRenderer {
             frame_no: 0,
             paused: false,
             stats: InternalStats::default(),
+            instance,
         }
     }
 
@@ -236,7 +230,7 @@ impl RealtimeRenderer {
             self.instance.device().logical(),
             self.copy_sampler,
             &mut self.mm,
-            &mut self.descriptor_creator,
+            &mut self.dm,
             render_size,
         );
         forward_pass.clear_color[0].color.float32 = self.clear_color;
@@ -260,19 +254,31 @@ impl RealtimeRenderer {
         }
     }
 
-    pub fn change_scene(&mut self, parsed: Box<dyn ReadParsed>) {
+    pub fn change_scene(&mut self, parsed: Box<dyn ReadParsed + Send>) {
         self.wait_idle();
         if let Some(mut scene) = self.scene.take() {
             scene.deinit_pipelines(self.instance.device().logical());
             scene.unload(self.instance.device(), &mut self.mm);
         }
-        if let Ok(mut new) = VulkanScene::load(
-            self.instance.device(),
-            parsed,
-            &mut self.mm,
-            &mut self.cmdm,
-            &mut self.descriptor_creator,
-        ) {
+        let mut send_dm = self.dm.thread_exclusive();
+        let mut send_mm = self.mm.thread_exclusive();
+        let mut send_cmdm = self.cmdm.thread_exclusive();
+        let device_clone = self.instance.device().clone();
+        let load_tid = std::thread::spawn(move || {
+            let scene = VulkanScene::load(
+                &device_clone,
+                parsed,
+                &mut send_mm,
+                &mut send_cmdm,
+                &mut send_dm,
+            );
+            (send_mm, send_dm, send_cmdm, scene)
+        });
+        let (send_mm, send_dm, send_cmdm, scene) = load_tid.join().unwrap();
+        self.dm.merge(send_dm);
+        self.cmdm.merge(send_cmdm);
+        self.mm.merge(send_mm);
+        if let Ok(mut new) = scene {
             let render_size = vk::Extent2D {
                 width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
                 height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
@@ -301,7 +307,7 @@ impl RealtimeRenderer {
                 old,
                 new,
                 &mut self.cmdm,
-                &mut self.descriptor_creator,
+                &mut self.dm,
                 self.forward_pass.renderpass,
                 self.frame_data[0].descriptor.layout,
                 render_size,
@@ -379,7 +385,7 @@ impl RealtimeRenderer {
                             cmd,
                             dd,
                             &mut self.mm,
-                            &mut self.descriptor_creator,
+                            &mut self.dm,
                             self.scene.as_ref(),
                             &mut self.stats,
                         );

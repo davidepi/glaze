@@ -1,9 +1,10 @@
-// this entire file is based on https://vkguide.dev/docs/extra-chapter/abstracting_descriptors/
+// this entire file WAS based on https://vkguide.dev/docs/extra-chapter/abstracting_descriptors/
+
 use ash::vk;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const MAX_SETS: usize = 512;
 const MAX_POOLS: usize = 4;
@@ -14,8 +15,8 @@ pub struct Descriptor {
     pub layout: vk::DescriptorSetLayout,
 }
 
-pub struct DescriptorAllocator {
-    current_pool: vk::DescriptorPool,
+struct DescriptorAllocator {
+    current_pool: Option<vk::DescriptorPool>,
     pool_sizes: Vec<vk::DescriptorPoolSize>,
     free_pools: Vec<vk::DescriptorPool>,
     used_pools: Vec<vk::DescriptorPool>,
@@ -23,7 +24,7 @@ pub struct DescriptorAllocator {
 }
 
 impl DescriptorAllocator {
-    pub fn new(
+    fn new(
         device: Arc<ash::Device>,
         avg_desc: &[(vk::DescriptorType, f32)],
     ) -> DescriptorAllocator {
@@ -37,7 +38,7 @@ impl DescriptorAllocator {
         let mut free_pools = (0..MAX_POOLS)
             .map(|_| create_descriptor_pool(&device, &pool_sizes))
             .collect::<Vec<_>>();
-        let current_pool = free_pools.pop().unwrap();
+        let current_pool = free_pools.pop();
         DescriptorAllocator {
             current_pool,
             pool_sizes,
@@ -47,16 +48,20 @@ impl DescriptorAllocator {
         }
     }
 
-    pub fn alloc(&mut self, layout: vk::DescriptorSetLayout) -> vk::DescriptorSet {
-        let layouts = [layout];
-        let mut alloc_ci = vk::DescriptorSetAllocateInfo {
-            s_type: vk::StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
-            p_next: ptr::null(),
-            descriptor_pool: self.current_pool,
-            descriptor_set_count: 1,
-            p_set_layouts: layouts.as_ptr(),
+    fn alloc(&mut self, layout: vk::DescriptorSetLayout) -> vk::DescriptorSet {
+        let res = if let Some(descriptor_pool) = self.current_pool {
+            let layouts = [layout];
+            let alloc_ci = vk::DescriptorSetAllocateInfo {
+                s_type: vk::StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
+                p_next: ptr::null(),
+                descriptor_pool,
+                descriptor_set_count: 1,
+                p_set_layouts: layouts.as_ptr(),
+            };
+            unsafe { self.device.allocate_descriptor_sets(&alloc_ci) }
+        } else {
+            Err(vk::Result::ERROR_OUT_OF_POOL_MEMORY)
         };
-        let res = unsafe { self.device.allocate_descriptor_sets(&alloc_ci) };
         match res {
             Ok(mut desc) => desc.pop().unwrap(),
             Err(vk::Result::ERROR_FRAGMENTED_POOL | vk::Result::ERROR_OUT_OF_POOL_MEMORY) => {
@@ -64,15 +69,23 @@ impl DescriptorAllocator {
                     .free_pools
                     .pop()
                     .unwrap_or_else(|| create_descriptor_pool(&self.device, &self.pool_sizes));
-                self.used_pools.push(self.current_pool);
-                self.current_pool = new_pool;
-                alloc_ci.descriptor_pool = new_pool;
-                unsafe { self.device.allocate_descriptor_sets(&alloc_ci) }
-                    .expect("Failed to allocate descriptor set")
-                    .pop()
-                    .unwrap()
+                if let Some(pool) = self.current_pool.take() {
+                    self.used_pools.push(pool);
+                }
+                self.current_pool = Some(new_pool);
+                self.alloc(layout)
             }
             _ => panic!("Failed to allocate descriptor set"),
+        }
+    }
+
+    fn thread_exclusive(&mut self) -> Self {
+        DescriptorAllocator {
+            current_pool: self.free_pools.pop(),
+            pool_sizes: self.pool_sizes.clone(),
+            free_pools: Vec::new(),
+            used_pools: Vec::new(),
+            device: self.device.clone(),
         }
     }
 
@@ -86,16 +99,22 @@ impl DescriptorAllocator {
         });
         self.free_pools.append(&mut self.used_pools);
         if reset_current {
-            unsafe {
-                self.device
-                    .reset_descriptor_pool(self.current_pool, vk::DescriptorPoolResetFlags::empty())
+            if let Some(pool) = self.current_pool.take() {
+                unsafe {
+                    self.device
+                        .reset_descriptor_pool(pool, vk::DescriptorPoolResetFlags::empty())
+                }
+                .expect("Failed to reset descriptor pool");
             }
-            .expect("Failed to reset descriptor pool");
         }
     }
 
-    pub fn reset_all_pools(&mut self) {
-        self.reset_pools(true);
+    fn merge(&mut self, mut other: Self) {
+        if let Some(other_current) = other.current_pool.take() {
+            self.used_pools.push(other_current);
+        }
+        self.used_pools.append(&mut other.used_pools);
+        self.free_pools.append(&mut other.free_pools);
     }
 }
 
@@ -107,7 +126,9 @@ impl Drop for DescriptorAllocator {
             .for_each(|pool| unsafe {
                 self.device.destroy_descriptor_pool(pool, None);
             });
-        unsafe { self.device.destroy_descriptor_pool(self.current_pool, None) };
+        if let Some(pool) = self.current_pool.take() {
+            unsafe { self.device.destroy_descriptor_pool(pool, None) };
+        }
     }
 }
 
@@ -182,20 +203,20 @@ enum BufOrImgInfo {
     Img(vk::DescriptorImageInfo),
 }
 
-pub struct DescriptorSetLayoutCache {
+struct DescriptorSetLayoutCache {
     cache: HashMap<Vec<DescriptorSetLayoutBindingWrapper>, vk::DescriptorSetLayout>,
-    device: ash::Device,
+    device: Arc<ash::Device>,
 }
 
 impl DescriptorSetLayoutCache {
-    pub fn new(device: ash::Device) -> DescriptorSetLayoutCache {
+    fn new(device: Arc<ash::Device>) -> DescriptorSetLayoutCache {
         DescriptorSetLayoutCache {
             cache: HashMap::new(),
             device,
         }
     }
 
-    pub fn get(&mut self, desc: &[vk::DescriptorSetLayoutBinding]) -> vk::DescriptorSetLayout {
+    fn get(&mut self, desc: &[vk::DescriptorSetLayoutBinding]) -> vk::DescriptorSetLayout {
         let wrapping = desc
             .iter()
             .cloned()
@@ -230,30 +251,43 @@ impl Drop for DescriptorSetLayoutCache {
 }
 
 pub struct DescriptorSetCreator {
-    cache: DescriptorSetLayoutCache,
+    cache: Arc<Mutex<DescriptorSetLayoutCache>>,
     alloc: DescriptorAllocator,
 }
 
 impl DescriptorSetCreator {
     pub fn new(
-        alloc: DescriptorAllocator,
-        cache: DescriptorSetLayoutCache,
+        device: Arc<ash::Device>,
+        avg_desc: &[(vk::DescriptorType, f32)],
     ) -> DescriptorSetCreator {
+        let alloc = DescriptorAllocator::new(device.clone(), avg_desc);
+        let cache = Arc::new(Mutex::new(DescriptorSetLayoutCache::new(device)));
         DescriptorSetCreator { cache, alloc }
     }
 
     pub fn new_set(&mut self) -> DescriptorSetBuilder {
         DescriptorSetBuilder {
             alloc: &mut self.alloc,
-            cache: &mut self.cache,
+            cache: self.cache.clone(),
             bindings: Vec::new(),
             info: Vec::new(),
         }
     }
+
+    pub fn thread_exclusive(&mut self) -> Self {
+        DescriptorSetCreator {
+            cache: self.cache.clone(),
+            alloc: self.alloc.thread_exclusive(),
+        }
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.alloc.merge(other.alloc);
+    }
 }
 
 pub struct DescriptorSetBuilder<'a> {
-    cache: &'a mut DescriptorSetLayoutCache,
+    cache: Arc<Mutex<DescriptorSetLayoutCache>>,
     alloc: &'a mut DescriptorAllocator,
     bindings: Vec<vk::DescriptorSetLayoutBinding>,
     info: Vec<BufOrImgInfo>,
@@ -300,7 +334,7 @@ impl<'a> DescriptorSetBuilder<'a> {
     }
 
     pub fn build(self) -> Descriptor {
-        let layout = self.cache.get(&self.bindings);
+        let layout = self.cache.lock().unwrap().get(&self.bindings);
         let set = self.alloc.alloc(layout);
         let mut writes = Vec::new();
         for i in 0..self.bindings.len() {

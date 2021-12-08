@@ -1,5 +1,5 @@
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
@@ -23,7 +23,7 @@ pub struct MemoryManager {
     device: Arc<ash::Device>,
     frames_in_flight: u8,
     deferred_buffers: Vec<(AllocatedBuffer, u8)>,
-    allocator: Allocator,
+    allocator: Arc<Mutex<Allocator>>,
 }
 
 impl MemoryManager {
@@ -59,7 +59,9 @@ impl MemoryManager {
             debug_settings,
             buffer_device_address: false,
         };
-        let allocator = Allocator::new(&acd).expect("Failed to create memory allocator");
+        let allocator = Arc::new(Mutex::new(
+            Allocator::new(&acd).expect("Failed to create memory allocator"),
+        ));
         MemoryManager {
             device,
             frames_in_flight,
@@ -96,6 +98,8 @@ impl MemoryManager {
         };
         let allocation = self
             .allocator
+            .lock()
+            .unwrap()
             .allocate(&alloc_desc)
             .expect("Allocation failed. OOM?");
         unsafe {
@@ -153,6 +157,8 @@ impl MemoryManager {
         };
         let allocation = self
             .allocator
+            .lock()
+            .unwrap()
             .allocate(&alloc_desc)
             .expect("Allocation failed. OOM?");
         unsafe {
@@ -189,14 +195,20 @@ impl MemoryManager {
     pub fn free_image(&mut self, image: AllocatedImage) {
         unsafe { self.device.destroy_image_view(image.image_view, None) };
         unsafe { self.device.destroy_image(image.image, None) };
-        if self.allocator.free(image.allocation).is_err() {
+        if self
+            .allocator
+            .lock()
+            .unwrap()
+            .free(image.allocation)
+            .is_err()
+        {
             log::warn!("Failed to free memory");
         }
     }
 
     pub fn free_buffer(&mut self, buf: AllocatedBuffer) {
         unsafe { self.device.destroy_buffer(buf.buffer, None) };
-        if self.allocator.free(buf.allocation).is_err() {
+        if self.allocator.lock().unwrap().free(buf.allocation).is_err() {
             log::warn!("Failed to free memory");
         }
     }
@@ -220,6 +232,19 @@ impl MemoryManager {
             drop.into_iter().for_each(|buf| self.free_buffer(buf));
             self.deferred_buffers = retain;
         }
+    }
+
+    pub fn thread_exclusive(&self) -> Self {
+        MemoryManager {
+            device: self.device.clone(),
+            frames_in_flight: self.frames_in_flight,
+            deferred_buffers: Vec::new(),
+            allocator: self.allocator.clone(),
+        }
+    }
+
+    pub fn merge(&mut self, mut other: Self) {
+        self.deferred_buffers.append(&mut other.deferred_buffers);
     }
 }
 

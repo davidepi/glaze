@@ -1,11 +1,10 @@
 use super::debug::{cchars_to_string, ValidationLayers};
 use super::surface::Surface;
 use ash::vk;
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ffi::CStr;
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub trait Device {
     fn logical(&self) -> &ash::Device;
@@ -18,11 +17,12 @@ pub trait Device {
     fn wait_completion(&self, tokens: &[vk::Fence]);
 }
 
+#[derive(Clone)]
 pub struct PresentDevice {
     logical: Arc<ash::Device>,
     physical: PhysicalDevice,
     graphic_index: u32,
-    immediate_fences: RefCell<Vec<vk::Fence>>,
+    immediate_fences: Arc<Mutex<Vec<vk::Fence>>>,
     graphic_queue: vk::Queue,
 }
 
@@ -55,13 +55,13 @@ impl PresentDevice {
             p_next: ptr::null(),
             flags: vk::FenceCreateFlags::empty(),
         };
-        let immediate_fences = RefCell::new(
+        let immediate_fences = Arc::new(Mutex::new(
             (0..10)
                 .map(|_| {
                     unsafe { logical.create_fence(&ci, None) }.expect("Failed to create fence")
                 })
                 .collect::<Vec<_>>(),
-        );
+        ));
         let graphic_queue = unsafe { logical.get_device_queue(graphic_index, 0) };
         PresentDevice {
             logical: Arc::new(logical),
@@ -84,10 +84,18 @@ impl PresentDevice {
 impl Drop for PresentDevice {
     fn drop(&mut self) {
         unsafe {
-            self.immediate_fences.get_mut().drain(..).for_each(|fence| {
-                self.logical.destroy_fence(fence, None);
-            });
-            self.logical.destroy_device(None);
+            if Arc::strong_count(&self.immediate_fences) == 1 {
+                self.immediate_fences
+                    .lock()
+                    .unwrap()
+                    .drain(..)
+                    .for_each(|fence| {
+                        self.logical.destroy_fence(fence, None);
+                    });
+            }
+            if Arc::strong_count(&self.logical) == 1 {
+                self.logical.destroy_device(None);
+            }
         }
     }
 }
@@ -109,14 +117,19 @@ impl Device for PresentDevice {
     where
         F: Fn(&ash::Device, vk::CommandBuffer),
     {
-        let fence = self.immediate_fences.borrow_mut().pop().unwrap_or_else(|| {
-            let ci = vk::FenceCreateInfo {
-                s_type: vk::StructureType::FENCE_CREATE_INFO,
-                p_next: ptr::null(),
-                flags: vk::FenceCreateFlags::empty(),
-            };
-            unsafe { self.logical.create_fence(&ci, None) }.expect("Failed to create fence")
-        });
+        let fence = self
+            .immediate_fences
+            .lock()
+            .unwrap()
+            .pop()
+            .unwrap_or_else(|| {
+                let ci = vk::FenceCreateInfo {
+                    s_type: vk::StructureType::FENCE_CREATE_INFO,
+                    p_next: ptr::null(),
+                    flags: vk::FenceCreateFlags::empty(),
+                };
+                unsafe { self.logical.create_fence(&ci, None) }.expect("Failed to create fence")
+            });
         let cmd_begin = vk::CommandBufferBeginInfo {
             s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
             p_next: ptr::null(),
@@ -158,7 +171,7 @@ impl Device for PresentDevice {
             self.logical
                 .reset_fences(tokens)
                 .expect("Failed to reset fence");
-            self.immediate_fences.borrow_mut().extend(tokens);
+            self.immediate_fences.lock().unwrap().extend(tokens);
         }
     }
 }
@@ -175,6 +188,7 @@ impl SurfaceSupport {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct PhysicalDevice {
     pub device: vk::PhysicalDevice,
     pub properties: vk::PhysicalDeviceProperties,

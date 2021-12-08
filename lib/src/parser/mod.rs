@@ -94,7 +94,7 @@ impl Display for ParseVersionError {
 /// let mut parsed = glaze::parse("test.bin").expect("Failed to parse file");
 /// let vertices = parsed.vertices().unwrap();
 /// ```
-pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ReadParsed>, Error> {
+pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ReadParsed + Send>, Error> {
     let fin = File::open(file)?;
     let mut reader = BufReader::new(fin);
     let mut header = [0; HEADER_LEN];
