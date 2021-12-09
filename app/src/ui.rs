@@ -1,15 +1,20 @@
+use std::time::Instant;
+
 use glaze::{
     parse, Camera, OrthographicCam, PerspectiveCam, RealtimeRenderer, ShaderMat, TextureFormat,
     VulkanScene,
 };
 use imgui::{
     CollapsingHeader, ColorEdit, ColorEditFlags, ColorPicker, ComboBox, Condition, Image,
-    ImageButton, MenuItem, Selectable, SelectableFlags, Slider, TextureId, Ui,
+    ImageButton, MenuItem, PopupModal, Selectable, SelectableFlags, Slider, TextureId, Ui,
 };
 use nfd2::Response;
 use winit::window::Window;
 
 pub struct UiState {
+    open_loading_popup: bool,
+    current_tick: usize,
+    last_tick_time: Instant,
     settings_window: bool,
     render_scale_cur: f32,
     render_scale_sel: f32,
@@ -30,6 +35,9 @@ pub struct UiState {
 impl UiState {
     pub fn new() -> Self {
         UiState {
+            open_loading_popup: false,
+            current_tick: 0,
+            last_tick_time: Instant::now(),
             settings_window: false,
             render_scale_cur: 1.0,
             render_scale_sel: 1.0,
@@ -50,14 +58,17 @@ impl UiState {
 
     pub fn change_scene(&mut self) {
         self.textures_selected = None;
+        self.materials_selected = None;
+        // I need to open the popup in the same scope of the rendering
+        self.open_loading_popup = true;
     }
 }
 
 pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
-    ui.show_demo_window(&mut state.settings_window);
+    ui.show_demo_window(&mut state.stats_window);
     ui.main_menu_bar(|| {
         ui.menu("File", || {
-            if MenuItem::new("Open").shortcut("Ctrl+O").build(ui) {
+            if MenuItem::new("Open").build(ui) {
                 open_scene(renderer, state);
             }
         });
@@ -66,6 +77,11 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
             ui.checkbox("Textures", &mut state.textures_window);
             ui.checkbox("Materials", &mut state.materials_window);
             ui.checkbox("Stats", &mut state.stats_window);
+        });
+        ui.menu("About", || {
+            if MenuItem::new("Help").build(ui) {
+                ui.open_popup("Help me");
+            }
         });
     });
     if state.stats_window {
@@ -79,6 +95,29 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
     }
     if state.materials_window {
         window_materials(ui, state, window, renderer);
+    }
+    if state.open_loading_popup {
+        state.open_loading_popup = false;
+        ui.open_popup("Loading scene...");
+    }
+    if let Some(_token) = PopupModal::new("Loading scene...")
+        .always_auto_resize(true)
+        .resizable(false)
+        .movable(false)
+        .begin_popup(ui)
+    {
+        if let Some(load_msg) = renderer.is_loading() {
+            // let spinner_ticks = ['⠁', '⠂', '⠄', '⡀', '⢀', '⠠', '⠐', '⠈'];
+            let spinner_ticks = ['\\', '|', '/', '-'];
+            let tick = spinner_ticks[state.current_tick % spinner_ticks.len()];
+            if state.last_tick_time.elapsed().as_millis() > 50 {
+                state.current_tick += 1;
+                state.last_tick_time = Instant::now();
+            }
+            ui.text(format!("{} {}", tick, load_msg));
+        } else {
+            ui.close_current_popup();
+        };
     }
 }
 

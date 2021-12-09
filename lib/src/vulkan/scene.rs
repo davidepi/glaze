@@ -1,5 +1,6 @@
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::mpsc::Sender;
 
 use super::cmd::CommandManager;
 use super::descriptor::{Descriptor, DescriptorSetCreator};
@@ -47,19 +48,34 @@ impl VulkanScene {
         mm: &mut MemoryManager,
         cmdm: &mut CommandManager,
         dm: &mut DescriptorSetCreator,
+        wchan: Sender<String>,
     ) -> Result<Self, std::io::Error> {
         let mut unf = UnfinishedExecutions {
             fences: Vec::new(),
             buffers_to_free: Vec::new(),
         };
+        wchan.send("[1/4] Loading vertices...".to_string()).ok();
         let vertex_buffer = load_vertices_to_gpu(device, mm, cmdm, &mut unf, &scene.vertices()?);
+        wchan.send("[2/4] Loading meshes...".to_string()).ok();
         let (mut meshes, index_buffer) =
             load_indices_to_gpu(device, mm, cmdm, &mut unf, &scene.meshes()?);
         let sampler = create_sampler(device);
-        let textures = scene
-            .textures()?
+        wchan.send("[3/4] Loading textures...".to_string()).ok();
+        let scene_textures = scene.textures()?;
+        let textures_no = scene_textures.len();
+        let textures = scene_textures
             .into_iter()
-            .map(|(id, tex)| (id, load_texture_to_gpu(device, mm, cmdm, &mut unf, tex)))
+            .enumerate()
+            .map(|(idx, (id, tex))| {
+                wchan
+                    .send(format!(
+                        "[3/4] Loading textures... ({}/{})",
+                        idx + 1,
+                        textures_no
+                    ))
+                    .ok();
+                (id, load_texture_to_gpu(device, mm, cmdm, &mut unf, tex))
+            })
             .collect();
         let dflt_tex = load_texture_to_gpu(device, mm, cmdm, &mut unf, Texture::default());
         let parsed_mats = scene.materials()?;
@@ -68,6 +84,7 @@ impl VulkanScene {
         unf.buffers_to_free
             .into_iter()
             .for_each(|b| mm.free_buffer(b));
+        wchan.send("[4/4] Loading materials...".to_string()).ok();
         let materials = parsed_mats
             .into_iter()
             .map(|(id, mat)| {

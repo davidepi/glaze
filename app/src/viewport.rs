@@ -37,7 +37,7 @@ impl InteractiveView {
             platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
             let instance = Rc::new(PresentInstance::new(&window));
             let renderer = RealtimeRenderer::create(
-                instance.clone(),
+                instance,
                 &mut imgui,
                 default_size.width,
                 default_size.height,

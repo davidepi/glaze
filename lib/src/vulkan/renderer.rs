@@ -14,6 +14,8 @@ use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
 use std::rc::Rc;
+use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::UNIFORM_BUFFER, 1.0)];
@@ -39,6 +41,18 @@ struct FrameDataBuf {
     descriptor: Descriptor,
 }
 
+struct SceneLoad {
+    reader: Receiver<String>,
+    is_alive: Arc<bool>,
+    last_message: String,
+    join_handle: std::thread::JoinHandle<(
+        MemoryManager,
+        DescriptorSetCreator,
+        CommandManager,
+        Result<VulkanScene, std::io::Error>,
+    )>,
+}
+
 pub struct RealtimeRenderer {
     swapchain: Swapchain,
     copy_sampler: vk::Sampler,
@@ -50,12 +64,12 @@ pub struct RealtimeRenderer {
     cmdm: CommandManager,
     sync: PresentSync<FRAMES_IN_FLIGHT>,
     scene: Option<VulkanScene>,
+    scene_loading: Option<SceneLoad>,
     frame_data: [FrameDataBuf; FRAMES_IN_FLIGHT],
     clear_color: [f32; 4],
     start_time: Instant,
     render_scale: f32,
     frame_no: usize,
-    paused: bool,
     stats: InternalStats,
     instance: Rc<PresentInstance>,
 }
@@ -151,12 +165,12 @@ impl RealtimeRenderer {
             cmdm,
             sync,
             scene: None,
+            scene_loading: None,
             frame_data: frame_data.try_into().unwrap(),
             clear_color,
             start_time: Instant::now(),
             render_scale,
             frame_no: 0,
-            paused: false,
             stats: InternalStats::default(),
             instance,
         }
@@ -164,16 +178,6 @@ impl RealtimeRenderer {
 
     pub fn wait_idle(&self) {
         unsafe { self.instance.device().logical().device_wait_idle() }.expect("Failed to wait idle")
-    }
-
-    pub fn pause(&mut self) {
-        self.wait_idle();
-        self.paused = true;
-    }
-
-    pub fn resume(&mut self) {
-        self.wait_idle();
-        self.paused = false;
     }
 
     pub fn render_scale(&self) -> f32 {
@@ -199,6 +203,14 @@ impl RealtimeRenderer {
 
     pub fn scene(&self) -> Option<&VulkanScene> {
         self.scene.as_ref()
+    }
+
+    pub fn is_loading(&self) -> Option<&String> {
+        if let Some(loading) = &self.scene_loading {
+            Some(&loading.last_message)
+        } else {
+            None
+        }
     }
 
     pub fn scene_mut(&mut self) -> Option<&mut VulkanScene> {
@@ -264,35 +276,61 @@ impl RealtimeRenderer {
         let mut send_mm = self.mm.thread_exclusive();
         let mut send_cmdm = self.cmdm.thread_exclusive();
         let device_clone = self.instance.device().clone();
+        let is_alive = Arc::new(false);
+        let token_thread = is_alive.clone();
+        let (wchan, rchan) = mpsc::channel();
         let load_tid = std::thread::spawn(move || {
+            let _is_alive = is_alive;
             let scene = VulkanScene::load(
                 &device_clone,
                 parsed,
                 &mut send_mm,
                 &mut send_cmdm,
                 &mut send_dm,
+                wchan,
             );
             (send_mm, send_dm, send_cmdm, scene)
         });
-        let (send_mm, send_dm, send_cmdm, scene) = load_tid.join().unwrap();
-        self.dm.merge(send_dm);
-        self.cmdm.merge(send_cmdm);
-        self.mm.merge(send_mm);
-        if let Ok(mut new) = scene {
-            let render_size = vk::Extent2D {
-                width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
-                height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
-            };
-            new.init_pipelines(
-                render_size,
-                self.instance.device().logical(),
-                self.forward_pass.renderpass,
-                self.frame_data[0].descriptor.layout,
-            );
-            self.scene = Some(new);
-            self.start_time = Instant::now();
-        } else {
-            log::error!("Failed to load scene");
+        self.scene_loading = Some(SceneLoad {
+            reader: rchan,
+            last_message: "Loading...".to_string(),
+            is_alive: token_thread,
+            join_handle: load_tid,
+        });
+    }
+
+    fn finish_change_scene(&mut self) {
+        if let Some(scene_loading) = &mut self.scene_loading {
+            if Arc::strong_count(&scene_loading.is_alive) == 1 {
+                // loading finished, swap scene
+                let scene_loading = self.scene_loading.take().unwrap();
+                let (send_mm, send_dm, send_cmdm, scene) =
+                    scene_loading.join_handle.join().unwrap();
+                self.dm.merge(send_dm);
+                self.cmdm.merge(send_cmdm);
+                self.mm.merge(send_mm);
+                if let Ok(mut new) = scene {
+                    let render_size = vk::Extent2D {
+                        width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
+                        height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
+                    };
+                    new.init_pipelines(
+                        render_size,
+                        self.instance.device().logical(),
+                        self.forward_pass.renderpass,
+                        self.frame_data[0].descriptor.layout,
+                    );
+                    self.scene = Some(new);
+                    self.start_time = Instant::now();
+                } else {
+                    log::error!("Failed to load scene");
+                }
+            } else {
+                //still loading, update message (if necessary)
+                if let Ok(msg) = scene_loading.reader.try_recv() {
+                    scene_loading.last_message = msg;
+                }
+            }
         }
     }
 
@@ -339,10 +377,8 @@ impl RealtimeRenderer {
     }
 
     pub fn draw_frame(&mut self, imgui_data: Option<&imgui::DrawData>) {
-        if self.paused {
-            return;
-        }
         self.stats.update();
+        self.finish_change_scene();
         let frame_sync = self.sync.get(self.frame_no);
         frame_sync.wait_acquire(self.instance.device());
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
