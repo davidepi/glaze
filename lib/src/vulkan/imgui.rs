@@ -1,5 +1,5 @@
 use super::cmd::CommandManager;
-use super::descriptor::{Descriptor, DescriptorSetCreator};
+use super::descriptor::{Descriptor, DescriptorSetManager};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 use super::pipeline::{Pipeline, PipelineBuilder};
@@ -14,40 +14,51 @@ use gpu_allocator::MemoryLocation;
 use imgui::{DrawCmdParams, TextureId};
 use std::ptr;
 
-const DEFAULT_VERTEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawVert>() as u64;
-const DEFAULT_INDEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawIdx>() as u64;
+/// initial buffer size for the imgui vertex buffer
+const INITIAL_VERTEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawVert>() as u64;
+/// initial buffer size for the imgui index buffer
+const INITIAL_INDEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawIdx>() as u64;
+/// ID used to reference the imgui font atlas. This should not be used by any other texture.
 const FONT_ATLAS_TEXTURE_ID: TextureId = TextureId::new(usize::MAX);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+/// Push constants for the imgui pipeline
 struct ImguiPC {
     scale: Vec2<f32>,
     translate: Vec2<f32>,
 }
 
-pub struct ImguiDrawer {
+/// Imgui backend for vulkan
+pub struct ImguiRenderer {
+    /// size of the allocated vertex buffer (in bytes)
     vertex_size: u64,
+    /// vertex buffer
     vertex_buf: AllocatedBuffer,
+    /// size of the allocated index buffer (in bytes)
     index_size: u64,
+    /// index buffer
     index_buf: AllocatedBuffer,
+    /// font atlas image
     font: AllocatedImage,
+    font_descriptor: Descriptor,
     pipeline: Pipeline,
     sampler: vk::Sampler,
-    font_descriptor: Descriptor,
     tex_descs: FnvHashMap<u16, Descriptor>,
 }
 
-impl ImguiDrawer {
-    pub fn new<T: Device>(
+impl ImguiRenderer {
+    /// Creates a new imgui renderer
+    pub(super) fn new<T: Device>(
         context: &mut imgui::Context,
         device: &T,
         mm: &mut MemoryManager,
         cmdm: &mut CommandManager,
-        descriptor_creator: &mut DescriptorSetCreator,
+        descriptor_creator: &mut DescriptorSetManager,
         swapchain: &Swapchain,
     ) -> Self {
-        let vertex_size = DEFAULT_VERTEX_SIZE;
-        let index_size = DEFAULT_INDEX_SIZE;
+        let vertex_size = INITIAL_VERTEX_SIZE;
+        let index_size = INITIAL_INDEX_SIZE;
         let fonts_gpu_buf;
         {
             let mut fonts_ref = context.fonts();
@@ -149,13 +160,15 @@ impl ImguiDrawer {
         }
     }
 
-    pub fn update(&mut self, device: &ash::Device, swapchain: &Swapchain) {
+    /// Updates the underlying swapchain (and therefore the imgui render size)
+    pub(super) fn update_swapchain(&mut self, device: &ash::Device, swapchain: &Swapchain) {
         let mut pipeline = build_imgui_pipeline(device, swapchain, &self.font_descriptor);
         std::mem::swap(&mut self.pipeline, &mut pipeline);
         pipeline.destroy(device);
     }
 
-    pub fn destroy(self, device: &ash::Device, mm: &mut MemoryManager) {
+    /// destroy the imgui renderer
+    pub(super) fn destroy(self, device: &ash::Device, mm: &mut MemoryManager) {
         self.pipeline.destroy(device);
         unsafe { device.destroy_sampler(self.sampler, None) };
         mm.free_buffer(self.vertex_buf);
@@ -163,13 +176,14 @@ impl ImguiDrawer {
         mm.free_image(self.font);
     }
 
-    pub fn draw(
+    /// draw the ui. This should be called inside an existing render pass.
+    pub(super) fn draw(
         &mut self,
         device: &ash::Device,
         cmd: vk::CommandBuffer,
         draw_data: &imgui::DrawData,
         mm: &mut MemoryManager,
-        dm: &mut DescriptorSetCreator,
+        dm: &mut DescriptorSetManager,
         scene: Option<&VulkanScene>,
         stats: &mut InternalStats,
     ) {
@@ -370,10 +384,11 @@ impl ImguiDrawer {
     }
 }
 
+/// Builds the imgui pipeline. font_descriptor is the descriptor set containing the font texture.
 fn build_imgui_pipeline(
     device: &ash::Device,
     swapchain: &Swapchain,
-    descriptor: &Descriptor,
+    font_descriptor: &Descriptor,
 ) -> Pipeline {
     let mut builder = PipelineBuilder {
         binding_descriptions: vec![vk::VertexInputBindingDescription {
@@ -431,10 +446,11 @@ fn build_imgui_pipeline(
         device,
         swapchain.renderpass(),
         swapchain.extent(),
-        &[descriptor.layout],
+        &[font_descriptor.layout],
     )
 }
 
+/// Uploads an image in the cpu_buf to the gpu_buf. The image is transitioned to the optimal layout
 fn upload_image<T: Device>(
     device: &T,
     cmdm: &mut CommandManager,
@@ -525,6 +541,7 @@ fn upload_image<T: Device>(
     device.wait_completion(&[fence]);
 }
 
+/// Reads a struct as a sequence of bytes
 unsafe fn as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     std::slice::from_raw_parts((p as *const T) as *const u8, std::mem::size_of::<T>())
 }

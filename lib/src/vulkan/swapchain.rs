@@ -7,11 +7,15 @@ use super::instance::{Instance, PresentInstance};
 use super::renderpass::FinalRenderPass;
 use super::sync::PresentFrameSync;
 
+/// The swapchain image used as target for the current frame
 pub struct AcquiredImage<'a> {
+    /// Frame index (in the swapchain images array)
     pub index: u32,
+    /// Reference to the Final
     pub renderpass: &'a FinalRenderPass,
 }
 
+/// Wrapper for the swapchain, its image views, and the render pass writing to the images.
 pub struct Swapchain {
     swapchain: vk::SwapchainKHR,
     loader: ash::extensions::khr::Swapchain,
@@ -22,28 +26,35 @@ pub struct Swapchain {
 }
 
 impl Swapchain {
+    /// Creates a new swapchain with the given size.
     pub fn create(instance: Rc<PresentInstance>, width: u32, height: u32) -> Self {
         swapchain_init(instance, width, height, None)
     }
 
+    /// Recreate the current swapchain with a new size.
     pub fn recreate(&mut self, width: u32, height: u32) {
         destroy(self, true);
         let new = swapchain_init(self.instance.clone(), width, height, Some(self.swapchain));
         *self = new;
     }
 
+    /// Returns the swapchain image extent.
     pub fn extent(&self) -> vk::Extent2D {
         self.extent
     }
 
-    pub fn swapchain_khr(&self) -> vk::SwapchainKHR {
+    /// Returns the swapchain raw handle.
+    pub fn raw_handle(&self) -> vk::SwapchainKHR {
         self.swapchain
     }
 
+    /// Returns the render pass writing to the swapchain image.
     pub fn renderpass(&self) -> vk::RenderPass {
+        // all render passes are essentially the same
         self.render_passes[0].renderpass
     }
 
+    /// Presents an image to the surface.
     pub fn queue_present(&self, queue: vk::Queue, present_info: &vk::PresentInfoKHR) {
         unsafe {
             match self.loader.queue_present(queue, present_info) {
@@ -56,12 +67,13 @@ impl Swapchain {
         }
     }
 
+    /// Acquires the next swapchain frame to be renderered to.
     pub fn acquire_next_image<'a>(&'a self, sync: &PresentFrameSync) -> Option<AcquiredImage<'a>> {
         let acquired = unsafe {
             self.loader.acquire_next_image(
                 self.swapchain,
                 u64::MAX,
-                sync.image_available(),
+                sync.image_available,
                 vk::Fence::null(),
             )
         };
@@ -76,6 +88,9 @@ impl Swapchain {
     }
 }
 
+/// Destroys a swapchain.
+/// The partial parameter is used to indicate that the swapchain will be resized (keeping the raw
+/// handle as parameter for the ash::vk::SwapchainCreateInfoKHR).
 fn destroy(sc: &mut Swapchain, partial: bool) {
     unsafe {
         sc.render_passes
@@ -96,6 +111,8 @@ impl Drop for Swapchain {
     }
 }
 
+/// Creates a new swapchain with the given size. If an old swapchain is present, it will be recycled
+/// for a faster initialization.
 fn swapchain_init(
     instance: Rc<PresentInstance>,
     width: u32,

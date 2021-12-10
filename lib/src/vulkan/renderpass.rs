@@ -1,25 +1,37 @@
-use std::ptr;
-
-use super::descriptor::{Descriptor, DescriptorSetCreator};
+use super::descriptor::{Descriptor, DescriptorSetManager};
 use super::memory::{AllocatedImage, MemoryManager};
 use ash::vk;
+use std::ptr;
 
+/// Wrapper for a render pass and its attachments.
+/// This pass is expected to save its content to a shader optimal attachment that will be later
+/// copied onto the swapchain image with a [FinalRenderPass]
 pub struct RenderPass {
+    /// The render pass raw handle.
     pub renderpass: vk::RenderPass,
+    /// Framebuffer used for the render pass.
     pub framebuffer: vk::Framebuffer,
+    /// Extent of the render pass.
     pub extent: vk::Extent2D,
+    /// Color attachment of this render pass.
     color: AllocatedImage,
+    /// Depth attachment of this render pass.
     depth: Option<AllocatedImage>,
+    /// Descriptor used to blit this render pass onto the final pass.
     pub copy_descriptor: Descriptor,
+    /// Clear color of this render pass.
     pub clear_color: Vec<vk::ClearValue>,
 }
 
 impl RenderPass {
+    /// Creates a forward pass with a color and a depth attachment.
+    /// The color format is RGBA8_SRGB, the depth format is D32_SFLOAT.
+    /// This pass has only a single subpass.
     pub fn forward(
         device: &ash::Device,
         copy_sampler: vk::Sampler,
         mm: &mut MemoryManager,
-        descriptor_creator: &mut DescriptorSetCreator,
+        descriptor_creator: &mut DescriptorSetManager,
         extent: vk::Extent2D,
     ) -> RenderPass {
         let color_format = vk::Format::R8G8B8A8_SRGB;
@@ -156,6 +168,7 @@ impl RenderPass {
         }
     }
 
+    /// Starts the render pass
     pub fn begin(&self, device: &ash::Device, cmd: vk::CommandBuffer) {
         let render_area = vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
@@ -175,12 +188,14 @@ impl RenderPass {
         }
     }
 
+    /// Ends the render pass
     pub fn end(&self, device: &ash::Device, cmd: vk::CommandBuffer) {
         unsafe {
             device.cmd_end_render_pass(cmd);
         }
     }
 
+    /// Destroys the render pass
     pub fn destroy(self, device: &ash::Device, mm: &mut MemoryManager) {
         mm.free_image(self.color);
         if let Some(depth) = self.depth {
@@ -193,14 +208,23 @@ impl RenderPass {
     }
 }
 
+/// The final render pass.
+/// This is the render pass that will be written to the swapchain image.
 pub struct FinalRenderPass {
+    /// The render pass raw handle
     pub renderpass: vk::RenderPass,
+    /// The framebuffer for this render pass
     pub framebuffer: vk::Framebuffer,
+    /// The extent of the render pass
     pub extent: vk::Extent2D,
+    /// Image view of the framebuffer
     pub view: vk::ImageView,
 }
 
 impl FinalRenderPass {
+    /// Creates the final render pass.
+    /// The parameters `format`, `view` and `extent` refers to the swapchain image format, view and
+    /// extent.
     pub fn new(
         device: &ash::Device,
         format: vk::Format,
@@ -278,6 +302,7 @@ impl FinalRenderPass {
         }
     }
 
+    ///Begins the render pass
     pub fn begin(&self, device: &ash::Device, cmd: vk::CommandBuffer) {
         let render_area = vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
@@ -297,12 +322,14 @@ impl FinalRenderPass {
         }
     }
 
+    /// Ends the render pass
     pub fn end(&self, device: &ash::Device, cmd: vk::CommandBuffer) {
         unsafe {
             device.cmd_end_render_pass(cmd);
         }
     }
 
+    /// Destroys the render pass
     pub fn destroy(self, device: &ash::Device) {
         unsafe {
             device.destroy_framebuffer(self.framebuffer, None);

@@ -6,27 +6,53 @@ use std::ffi::CStr;
 use std::ptr;
 use std::sync::{Arc, Mutex};
 
+/// Trait representing a Vulkan device wrapper.
 pub trait Device {
+    /// Returns the Vulkan logical device.
     fn logical(&self) -> &ash::Device;
+
+    /// Returns an atomic reference counted clone of the Vulkan logical device.
     fn logical_clone(&self) -> Arc<ash::Device>;
+
+    /// Returns the Vulkan physical device.
     fn physical(&self) -> &PhysicalDevice;
+
+    /// Executes a closure with the Vulkan logical device.
+    ///
+    /// The closure is executed asynchronously in the command buffer `cmd` and returns a fence as a
+    /// result.
+    /// In order to ensure completion, one has to call [Device::wait_completion] passing the
+    /// fence received from the current function.
     #[must_use]
     fn immediate_execute<F>(&self, cmd: vk::CommandBuffer, command: F) -> vk::Fence
     where
         F: Fn(&ash::Device, vk::CommandBuffer);
+
+    /// Waits for the completion of a [Device::immediate_execute] function.
     fn wait_completion(&self, tokens: &[vk::Fence]);
 }
 
+/// A wrapper for a Vulkan device used to render on a presentation device.
+///
+/// This struct wraps together a logical device, with some features and extensions, and a queue
+/// family.
+/// The device is enclosed within an [Arc] to be able to be shared between threads without
+/// additional clones.
 #[derive(Clone)]
 pub struct PresentDevice {
     logical: Arc<ash::Device>,
-    physical: PhysicalDevice,
+    physical: Arc<PhysicalDevice>,
+    // graphic queue index
     graphic_index: u32,
     immediate_fences: Arc<Mutex<Vec<vk::Fence>>>,
     graphic_queue: vk::Queue,
 }
 
 impl PresentDevice {
+    /// Creates a new device which supports rendering on a presentation device.
+    ///
+    /// Requires the raw Vulkan instance, a list of device extensions, a list of physical device
+    /// features and the Surface to use.
     pub fn new(
         instance: &ash::Instance,
         ext: &[&'static CStr],
@@ -65,17 +91,19 @@ impl PresentDevice {
         let graphic_queue = unsafe { logical.get_device_queue(graphic_index, 0) };
         PresentDevice {
             logical: Arc::new(logical),
-            physical,
+            physical: Arc::new(physical),
             graphic_index,
             immediate_fences,
             graphic_queue,
         }
     }
 
+    /// Returns the queue family index of the graphics queue.
     pub fn graphic_index(&self) -> u32 {
         self.graphic_index
     }
 
+    /// Returns the graphics queue.
     pub fn graphic_queue(&self) -> vk::Queue {
         self.graphic_queue
     }
@@ -176,6 +204,7 @@ impl Device for PresentDevice {
     }
 }
 
+/// Features of the current surface
 pub struct SurfaceSupport {
     pub capabilities: vk::SurfaceCapabilitiesKHR,
     pub formats: Vec<vk::SurfaceFormatKHR>,
@@ -183,11 +212,13 @@ pub struct SurfaceSupport {
 }
 
 impl SurfaceSupport {
+    /// Returns true if the surface supports at least one format and one present mode.
     pub fn has_formats_and_present_modes(&self) -> bool {
         !self.formats.is_empty() && !self.present_modes.is_empty()
     }
 }
 
+/// Wrapper for a physical device, with its properties and features.
 #[derive(Debug, Clone)]
 pub struct PhysicalDevice {
     pub device: vk::PhysicalDevice,
@@ -196,6 +227,7 @@ pub struct PhysicalDevice {
 }
 
 impl PhysicalDevice {
+    /// Lists all the physical devices on the system.
     pub fn list_all(instance: &ash::Instance) -> Vec<Self> {
         let physical_devices =
             unsafe { instance.enumerate_physical_devices() }.expect("No physical devices found");
@@ -208,6 +240,7 @@ impl PhysicalDevice {
         wscores.into_iter().map(|(_, device)| device).collect()
     }
 
+    /// Retrieves the surface capabilities for a given surface and the current physical device.
     pub fn surface_capabilities(&self, surface: &Surface) -> SurfaceSupport {
         let capabilities = unsafe {
             surface
@@ -235,6 +268,7 @@ impl PhysicalDevice {
     }
 }
 
+/// Assigns a score to the physical device in the order discrete, integrated, and cpu
 fn rate_physical_device_suitability(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
@@ -258,6 +292,7 @@ fn rate_physical_device_suitability(
     )
 }
 
+/// Returns true if the device supports the given extensions
 fn device_supports_requested_extensions(
     instance: &ash::Instance,
     ext: &[&'static CStr],
@@ -273,6 +308,7 @@ fn device_supports_requested_extensions(
         .any(|x| !available_extensions.contains(&x))
 }
 
+/// Returns true if the device supports the given features
 fn device_supports_features(device: &PhysicalDevice, features: vk::PhysicalDeviceFeatures) -> bool {
     // so, the features class has every feature as a field so it's a bit tricky to check in a loop.
     // instead, I will bitwise AND the device features and the requested features, and expect the
@@ -297,6 +333,7 @@ fn device_supports_features(device: &PhysicalDevice, features: vk::PhysicalDevic
     result == requested_features
 }
 
+/// Returns true if the physical device supports the depth buffer.
 fn device_supports_depth_buffer(
     instance: &ash::Instance,
     format: vk::Format,
@@ -308,6 +345,7 @@ fn device_supports_depth_buffer(
         .contains(vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
 }
 
+/// Returns the index of a graphics queue family for the given device (no guarantee on the order).
 fn graphics_present_index(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
@@ -333,7 +371,8 @@ fn graphics_present_index(
         .next()
 }
 
-pub fn create_logical_device(
+/// Creates the logical device, using a given physical device, extensions, features and queue indices
+fn create_logical_device(
     instance: &ash::Instance,
     ext: &[&'static CStr],
     device: &PhysicalDevice,
@@ -356,14 +395,15 @@ pub fn create_logical_device(
         queue_create_infos.push(queue_create_info);
     }
     let required_device_extensions = ext.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
+    let validations_arr = validations.as_ptr();
     let device_create_info = vk::DeviceCreateInfo {
         s_type: vk::StructureType::DEVICE_CREATE_INFO,
         p_next: ptr::null(),
         flags: vk::DeviceCreateFlags::empty(),
         queue_create_info_count: queue_create_infos.len() as u32,
         p_queue_create_infos: queue_create_infos.as_ptr(),
-        enabled_layer_count: validations.len() as u32,
-        pp_enabled_layer_names: validations.as_ptr(),
+        enabled_layer_count: validations_arr.len() as u32,
+        pp_enabled_layer_names: validations_arr.as_ptr(),
         enabled_extension_count: required_device_extensions.len() as u32,
         pp_enabled_extension_names: required_device_extensions.as_ptr(),
         p_enabled_features: &features_requested,

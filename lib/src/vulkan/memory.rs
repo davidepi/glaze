@@ -1,32 +1,44 @@
-use std::ptr;
-use std::sync::{Arc, Mutex};
-
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
 use gpu_allocator::{AllocatorDebugSettings, MemoryLocation};
+use std::ptr;
+use std::sync::{Arc, Mutex};
 
+/// An allocated buffer-memory pair.
 #[derive(Debug)]
 pub struct AllocatedBuffer {
+    /// Handle for the raw buffer
     pub buffer: vk::Buffer,
+    /// Size of the buffer
     pub size: u64, //not necessarily the same as allocation size
+    /// Allocated area on the memory
     pub allocation: Allocation,
 }
 
+/// An allocated buffer-image-imageview tuple.
 #[derive(Debug)]
 pub struct AllocatedImage {
+    /// Handle for the raw image
     pub image: vk::Image,
+    /// Handle for the raw image view
     pub image_view: vk::ImageView,
+    /// Allocated area on the memory
     pub allocation: Allocation,
 }
 
+/// Manages allocations performed on the GPU.
 pub struct MemoryManager {
     device: Arc<ash::Device>,
     frames_in_flight: u8,
+    /// F
     deferred_buffers: Vec<(AllocatedBuffer, u8)>,
     allocator: Arc<Mutex<Allocator>>,
 }
 
 impl MemoryManager {
+    /// Creates a new memory manager for the given physical device.
+    /// The `frames_in_flight` parameter is used to determine when it is appropriate to free
+    /// deferred buffers.
     pub fn new(
         instance: &ash::Instance,
         device: Arc<ash::Device>,
@@ -70,6 +82,7 @@ impl MemoryManager {
         }
     }
 
+    /// Creates a new AllocatedBuffer with the given name, size, usage and location.
     pub fn create_buffer(
         &mut self,
         name: &'static str,
@@ -114,6 +127,7 @@ impl MemoryManager {
         }
     }
 
+    /// Creates a new AllocatedImage on the GPU memory.
     pub fn create_image_gpu(
         &mut self,
         name: &'static str,
@@ -192,6 +206,7 @@ impl MemoryManager {
         }
     }
 
+    /// Immediately frees an AllocatedImage.
     pub fn free_image(&mut self, image: AllocatedImage) {
         unsafe { self.device.destroy_image_view(image.image_view, None) };
         unsafe { self.device.destroy_image(image.image, None) };
@@ -206,6 +221,7 @@ impl MemoryManager {
         }
     }
 
+    /// Immediately frees an AllocatedBuffer.
     pub fn free_buffer(&mut self, buf: AllocatedBuffer) {
         unsafe { self.device.destroy_buffer(buf.buffer, None) };
         if self.allocator.lock().unwrap().free(buf.allocation).is_err() {
@@ -213,10 +229,17 @@ impl MemoryManager {
         }
     }
 
+    /// Adds an AllocatedBuffer to be freed after all frames_in_flight have been cycled once.
+    ///
+    /// This is done to avoid freeing the buffer between the time when the command is sent and the
+    /// time when the command is executed.
     pub fn deferred_free_buffer(&mut self, buf: AllocatedBuffer) {
         self.deferred_buffers.push((buf, 0));
     }
 
+    /// Increases the counter of elapsed frames.
+    /// If there are some deferred buffers to be freed an at least frames_in_flight frames have
+    /// passed since their addition, they are freed.
     pub fn frame_end_clean(&mut self) {
         if !self.deferred_buffers.is_empty() {
             let mut retain = Vec::with_capacity(self.deferred_buffers.len());
@@ -234,6 +257,8 @@ impl MemoryManager {
         }
     }
 
+    /// Clones this MemoryManager to be used in another thread.
+    /// The inner allocator is the same, however each clone has its own list of deferred buffers.
     pub fn thread_exclusive(&self) -> Self {
         MemoryManager {
             device: self.device.clone(),
@@ -243,6 +268,7 @@ impl MemoryManager {
         }
     }
 
+    /// Consumes a command manager previously taken with [MemoryManager::thread_exclusive].
     pub fn merge(&mut self, mut other: Self) {
         self.deferred_buffers.append(&mut other.deferred_buffers);
     }

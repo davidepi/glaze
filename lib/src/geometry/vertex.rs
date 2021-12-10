@@ -2,16 +2,21 @@
 use ash::vk;
 use cgmath::{Vector2 as Vec2, Vector3 as Vec3};
 
+/// A three dimensional point in space, used as a vertex for a triangle.
 #[repr(C, packed)]
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Vertex {
+    /// The vertex position in 3D space.
     pub vv: Vec3<f32>,
+    /// The vertex normal.
     pub vn: Vec3<f32>,
+    /// The vertex texture coordinate.
     pub vt: Vec2<f32>,
 }
 
 impl Vertex {
     #[cfg(feature = "vulkan")]
+    /// Returns the vertex bindings descriptions to be used in Vulkan pipelines.
     pub const fn binding_descriptions() -> [vk::VertexInputBindingDescription; 1] {
         [vk::VertexInputBindingDescription {
             binding: 0,
@@ -21,6 +26,7 @@ impl Vertex {
     }
 
     #[cfg(feature = "vulkan")]
+    /// Returns the vertex attribute descriptions to be used in Vulkan pipelines.
     pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
         use memoffset::offset_of;
         [

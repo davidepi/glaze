@@ -1,29 +1,37 @@
 // this entire file WAS based on https://vkguide.dev/docs/extra-chapter/abstracting_descriptors/
-
 use ash::vk;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 use std::sync::{Arc, Mutex};
 
-const MAX_SETS: usize = 512;
+/// Initial number of allocated descriptor pools.
 const MAX_POOLS: usize = 4;
+/// Number of descriptor sets per pool.
+const MAX_SETS: usize = 512;
 
+/// Wraps a descriptor set and a descriptor set layout in a single struct.
 #[derive(Debug, Copy, Clone)]
 pub struct Descriptor {
     pub set: vk::DescriptorSet,
     pub layout: vk::DescriptorSetLayout,
 }
 
+/// Allocator manager for descriptor pools and sets.
 struct DescriptorAllocator {
+    /// Current pool in use.
     current_pool: Option<vk::DescriptorPool>,
+    /// Typical amount of each descriptor type contained in this pool.
     pool_sizes: Vec<vk::DescriptorPoolSize>,
+    /// Unused descriptor pools.
     free_pools: Vec<vk::DescriptorPool>,
+    /// Filled descriptor pools.
     used_pools: Vec<vk::DescriptorPool>,
     device: Arc<ash::Device>,
 }
 
 impl DescriptorAllocator {
+    /// Creates a new descriptor allocator with the given usage.
     fn new(
         device: Arc<ash::Device>,
         avg_desc: &[(vk::DescriptorType, f32)],
@@ -48,6 +56,8 @@ impl DescriptorAllocator {
         }
     }
 
+    /// Allocates a new descriptor set with the give layout from the current pool.
+    /// Changes pool if necessary.
     fn alloc(&mut self, layout: vk::DescriptorSetLayout) -> vk::DescriptorSet {
         let res = if let Some(descriptor_pool) = self.current_pool {
             let layouts = [layout];
@@ -79,6 +89,11 @@ impl DescriptorAllocator {
         }
     }
 
+    /// Lends a manager to another thread. The vulkan specification says that each pool must
+    /// be exclusive to a single thread.
+    ///
+    /// This manager SHOULD be returned with the [DesciptorAllocator::merge] call even though it is
+    /// not strictly necessary to do so (but it is better, in order to minimize wasted memory).
     fn thread_exclusive(&mut self) -> Self {
         DescriptorAllocator {
             current_pool: self.free_pools.pop(),
@@ -89,6 +104,7 @@ impl DescriptorAllocator {
         }
     }
 
+    /// Resets all the descriptor pools.
     fn reset_pools(&mut self, reset_current: bool) {
         self.used_pools.iter().for_each(|pool| {
             unsafe {
@@ -109,6 +125,7 @@ impl DescriptorAllocator {
         }
     }
 
+    /// Consumes a descriptor manager previously taken with [DescriptorAllocator::thread_exclusive].
     fn merge(&mut self, mut other: Self) {
         if let Some(other_current) = other.current_pool.take() {
             self.used_pools.push(other_current);
@@ -132,6 +149,7 @@ impl Drop for DescriptorAllocator {
     }
 }
 
+/// Creates a raw descriptor pool with the given size
 fn create_descriptor_pool(
     device: &ash::Device,
     pool_sizes: &[vk::DescriptorPoolSize],
@@ -148,8 +166,12 @@ fn create_descriptor_pool(
     unsafe { device.create_descriptor_pool(&pool_info, None) }
         .expect("Failed to allocate descriptor pool")
 }
-// goes around Rust orphan rule and allows implementing Eq and Hash
-// remove also the pointer from DescriptorSetLayoutBinding to have trait "Send"
+
+/// A Wrapper for a descriptor set binding
+///
+/// Goes around Rust orphan rule and allows implementing Eq and Hash
+/// Removes also the immutable sampler from DescriptorSetLayoutBinding to have trait "Send".
+/// Currently immutable samplers are not used in this lib.
 #[derive(Debug, Clone)]
 struct DescriptorSetLayoutBindingWrapper {
     pub binding: u32,
@@ -159,10 +181,11 @@ struct DescriptorSetLayoutBindingWrapper {
 }
 
 impl DescriptorSetLayoutBindingWrapper {
+    /// Creates a new wrapper from a raw descriptor set layout binding
     pub fn new(dsbin: vk::DescriptorSetLayoutBinding) -> DescriptorSetLayoutBindingWrapper {
         debug_assert!(
             dsbin.p_immutable_samplers.is_null(),
-            "immutable samplers not supported"
+            "immutable samplers not supported in this lib"
         );
         DescriptorSetLayoutBindingWrapper {
             binding: dsbin.binding,
@@ -193,29 +216,35 @@ impl Hash for DescriptorSetLayoutBindingWrapper {
     }
 }
 
-// DescriptorSetLayout uses pointers and, in my code, is created in a different function than the
-// build one. Of course, in the optimized build, the target of this pointers is deallocated so I'm
-// forced to store it in this wrapper and build the DescriptorSetLayoutWrite function in the
-// DescriptorSetBuilder::build()
+/// Wrapper containing a DescriptorBufferInfo or a DescriptorImageInfo
+///
+/// DescriptorSetLayout uses pointers and, in this lib, is created in a different function than the
+/// build one. Therefore, in the optimized build, the target of this pointers is deallocated so I'm
+/// forced to store it in this wrapper and build the DescriptorSetLayoutWrite function in the
+/// DescriptorSetBuilder::build()
 #[derive(Debug, Copy, Clone)]
 enum BufOrImgInfo {
     Buf(vk::DescriptorBufferInfo),
     Img(vk::DescriptorImageInfo),
 }
 
+/// Cache for descriptor set layouts
 struct DescriptorSetLayoutCache {
     cache: HashMap<Vec<DescriptorSetLayoutBindingWrapper>, vk::DescriptorSetLayout>,
     device: Arc<ash::Device>,
 }
 
 impl DescriptorSetLayoutCache {
-    fn new(device: Arc<ash::Device>) -> DescriptorSetLayoutCache {
+    /// Creates an empty descriptor set layout cache
+    fn empty(device: Arc<ash::Device>) -> DescriptorSetLayoutCache {
         DescriptorSetLayoutCache {
             cache: HashMap::new(),
             device,
         }
     }
 
+    /// Retrieves a descriptor set layout from the cache if it exists, otherwise it creates and adds
+    /// it to the cache. In any case the descriptor set layout is returned.
     fn get(&mut self, desc: &[vk::DescriptorSetLayoutBinding]) -> vk::DescriptorSetLayout {
         let wrapping = desc
             .iter()
@@ -250,21 +279,24 @@ impl Drop for DescriptorSetLayoutCache {
     }
 }
 
-pub struct DescriptorSetCreator {
+/// Manages the allocation and reuse of descriptor sets and layouts.
+pub struct DescriptorSetManager {
     cache: Arc<Mutex<DescriptorSetLayoutCache>>,
     alloc: DescriptorAllocator,
 }
 
-impl DescriptorSetCreator {
+impl DescriptorSetManager {
+    /// Creates a new descriptor set manager with the given average usage
     pub fn new(
         device: Arc<ash::Device>,
         avg_desc: &[(vk::DescriptorType, f32)],
-    ) -> DescriptorSetCreator {
+    ) -> DescriptorSetManager {
         let alloc = DescriptorAllocator::new(device.clone(), avg_desc);
-        let cache = Arc::new(Mutex::new(DescriptorSetLayoutCache::new(device)));
-        DescriptorSetCreator { cache, alloc }
+        let cache = Arc::new(Mutex::new(DescriptorSetLayoutCache::empty(device)));
+        DescriptorSetManager { cache, alloc }
     }
 
+    /// Creates a new descriptor set
     pub fn new_set(&mut self) -> DescriptorSetBuilder {
         DescriptorSetBuilder {
             alloc: &mut self.alloc,
@@ -274,18 +306,29 @@ impl DescriptorSetCreator {
         }
     }
 
+    /// Clones this manager to be used in another thread.
+    /// The descriptor set layout cache is shared between the two threads, but each thread possess
+    /// its own allocator.
+    /// [DescriptorSetManager::merge] should be called when the child thread ends, if the child
+    /// thread descriptor sets outlives the child thread lifetime.
     pub fn thread_exclusive(&mut self) -> Self {
-        DescriptorSetCreator {
+        DescriptorSetManager {
             cache: self.cache.clone(),
             alloc: self.alloc.thread_exclusive(),
         }
     }
 
+    /// Merges another descriptor set manager into this one. Given that the cache is shared, between
+    /// all descriptor set managers, only the allocator is merged. This operation is redundant
+    /// if the other manager descriptors are not used anymore, but necessary otherwise.
     pub fn merge(&mut self, other: Self) {
         self.alloc.merge(other.alloc);
     }
 }
 
+/// Builder for a descriptor set.
+///
+/// Creates a descriptor set with a builder pattern.
 pub struct DescriptorSetBuilder<'a> {
     cache: Arc<Mutex<DescriptorSetLayoutCache>>,
     alloc: &'a mut DescriptorAllocator,
@@ -294,6 +337,8 @@ pub struct DescriptorSetBuilder<'a> {
 }
 
 impl<'a> DescriptorSetBuilder<'a> {
+    /// Binds a buffer to the current set.
+    /// Note that bindings are ordered.
     #[must_use]
     pub fn bind_buffer(
         mut self,
@@ -313,6 +358,9 @@ impl<'a> DescriptorSetBuilder<'a> {
         self.info.push(BufOrImgInfo::Buf(buf_info));
         self
     }
+
+    /// Binds an image to the current set.
+    /// Note that bindings are ordered.
     #[must_use]
     pub fn bind_image(
         mut self,
@@ -333,6 +381,7 @@ impl<'a> DescriptorSetBuilder<'a> {
         self
     }
 
+    /// Builds the descriptor set.
     pub fn build(self) -> Descriptor {
         let layout = self.cache.lock().unwrap().get(&self.bindings);
         let set = self.alloc.alloc(layout);

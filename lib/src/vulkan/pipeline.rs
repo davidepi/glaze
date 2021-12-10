@@ -3,12 +3,16 @@ use ash::vk;
 use std::ffi::CString;
 use std::ptr;
 
+/// A Vulkan pipeline paired with a pipeline layout.
 pub struct Pipeline {
+    /// The raw Vulkan pipeline.
     pub pipeline: vk::Pipeline,
+    /// The raw Vulkan pipeline layout.
     pub layout: vk::PipelineLayout,
 }
 
 impl Pipeline {
+    /// Destroys both the pipeline and the pipeline layout.
     pub fn destroy(&self, device: &ash::Device) {
         unsafe {
             device.destroy_pipeline_layout(self.layout, None);
@@ -17,21 +21,49 @@ impl Pipeline {
     }
 }
 
+/// Creates a Pipeline with a simil-builder pattern.
+///
+/// Usually the pipeline is created with [Pipeline::default], then the builder fields edited,
+/// and finally the function [PipelinBuilder::build] called.
+///
+/// Several pipelines can be configured just by using the [ShaderMat::build_pipeline] method.
 pub struct PipelineBuilder {
+    /// Shaders to use in the pipeline.
+    /// Vector of `(shader SPIR-V data, function name, shader stage)`.
+    /// Edit this vector or use [Pipeline::push_shader].
     pub shaders: Vec<(Vec<u8>, CString, vk::ShaderStageFlags)>,
+    /// Vertex binding descriptions.
+    ///
+    /// Generally [Vertex::binding_descriptions] but may be edited.
     pub binding_descriptions: Vec<vk::VertexInputBindingDescription>,
+    /// Vertex attribute binding descriptions.
+    ///
+    /// Generally [Vertex::attribute_descriptions] but may be edited.
     pub attribute_descriptions: Vec<vk::VertexInputAttributeDescription>,
+    /// Input assembly create info.
     pub input_assembly: vk::PipelineInputAssemblyStateCreateInfo,
+    /// Rasterizer create info.
     pub rasterizer: vk::PipelineRasterizationStateCreateInfo,
+    /// Multisample create info.
     pub multisampling: vk::PipelineMultisampleStateCreateInfo,
+    /// Depth stencil create info.
     pub depth_stencil: vk::PipelineDepthStencilStateCreateInfo,
+    /// Blending settings to be applied for each attachment of the render pass.
     pub blending_settings: Vec<vk::PipelineColorBlendAttachmentState>,
-    pub blending: (Option<vk::LogicOp>, [f32; 4]),
+    /// Logical operation for the blending stage.
+    pub blend_op: (Option<vk::LogicOp>, [f32; 4]),
+    /// Push constants for this pipeline.
     pub push_constant: Option<vk::PushConstantRange>,
+    /// Dynamic states for this pipeline.
     pub dynamic_states: Vec<vk::DynamicState>,
 }
 
 impl PipelineBuilder {
+    /// Adds a shader to the pipeline.
+    /// # Arguments:
+    /// - `shader`: the SPIR-V bytecode of the shader
+    /// - `name`: the name of the shader function to call
+    /// - `stage`: the shader stage to use
     pub fn push_shader(&mut self, shader: &[u8], func: &'static str, stage: vk::ShaderStageFlags) {
         self.shaders.push((
             shader.to_vec(),
@@ -40,11 +72,17 @@ impl PipelineBuilder {
         ));
     }
 
+    /// Builds the pipeline.
+    /// # Arguments:
+    /// - `device`: the device that will use this pipeline
+    /// - `renderpass`: the render pass handle where this pipeline will be used
+    /// - `viewport_extent`: the viewport extent in which this pipeline will be used
+    /// - `set_layout`: the layout of all descriptor sets used by this pipeline
     pub fn build(
         self,
         device: &ash::Device,
         renderpass: vk::RenderPass,
-        extent: vk::Extent2D,
+        viewport_extent: vk::Extent2D,
         set_layout: &[vk::DescriptorSetLayout],
     ) -> Pipeline {
         let shader_stages = self
@@ -72,14 +110,14 @@ impl PipelineBuilder {
         let viewports = [vk::Viewport {
             x: 0.0,
             y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
+            width: viewport_extent.width as f32,
+            height: viewport_extent.height as f32,
             min_depth: 0.0,
             max_depth: 1.0,
         }];
         let scissors = [vk::Rect2D {
             offset: vk::Offset2D { x: 0, y: 0 },
-            extent,
+            extent: viewport_extent,
         }];
         let viewport_state = vk::PipelineViewportStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_VIEWPORT_STATE_CREATE_INFO,
@@ -94,15 +132,15 @@ impl PipelineBuilder {
             s_type: vk::StructureType::PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::PipelineColorBlendStateCreateFlags::empty(),
-            logic_op_enable: if self.blending.0.is_some() {
+            logic_op_enable: if self.blend_op.0.is_some() {
                 vk::TRUE
             } else {
                 vk::FALSE
             },
-            logic_op: self.blending.0.unwrap_or(vk::LogicOp::COPY),
+            logic_op: self.blend_op.0.unwrap_or(vk::LogicOp::COPY),
             attachment_count: self.blending_settings.len() as u32,
             p_attachments: self.blending_settings.as_ptr(),
-            blend_constants: self.blending.1,
+            blend_constants: self.blend_op.1,
         };
         let push_constants = if let Some(pc) = self.push_constant {
             vec![pc]
@@ -158,6 +196,7 @@ impl PipelineBuilder {
         Pipeline { pipeline, layout }
     }
 
+    /// Disables the depth-test for the pipeline.
     pub fn no_depth(&mut self) {
         self.depth_stencil = vk::PipelineDepthStencilStateCreateInfo {
             s_type: vk::StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
@@ -175,6 +214,9 @@ impl PipelineBuilder {
         };
     }
 
+    /// Sets the push constants for the current pipeline.
+    ///
+    /// Expects the push contant size and the shader stage as parameters.
     pub fn push_constants(&mut self, size: usize, stage: vk::ShaderStageFlags) {
         self.push_constant = Some(vk::PushConstantRange {
             stage_flags: stage,
@@ -185,6 +227,17 @@ impl PipelineBuilder {
 }
 
 impl Default for PipelineBuilder {
+    /// Creates a default pipeline.
+    ///
+    /// The default pipeline contains:
+    /// - vec3, vec3, vec2 vertices
+    /// - CCW culling rasterizer
+    /// - no blending
+    /// - no multisampling
+    /// - no blending
+    /// - depth test but no stencil
+    /// - no push constants
+    /// - no dynamic states
     fn default() -> Self {
         let shaders = Vec::with_capacity(2);
         // vertex input cannot stay inside the builder because it uses pointer
@@ -247,7 +300,7 @@ impl Default for PipelineBuilder {
             alpha_blend_op: vk::BlendOp::ADD,
             color_write_mask: vk::ColorComponentFlags::all(),
         }];
-        let blending = (None, [0.0; 4]);
+        let blend_op = (None, [0.0; 4]);
         PipelineBuilder {
             shaders,
             binding_descriptions,
@@ -257,13 +310,14 @@ impl Default for PipelineBuilder {
             multisampling,
             depth_stencil,
             blending_settings,
-            blending,
+            blend_op,
             push_constant: None,
             dynamic_states: Vec::with_capacity(0),
         }
     }
 }
 
+/// Creates a shader module
 fn create_shader_module(device: &ash::Device, shader: &[u8]) -> vk::ShaderModule {
     let shader_module_create_info = vk::ShaderModuleCreateInfo {
         s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
@@ -279,6 +333,7 @@ fn create_shader_module(device: &ash::Device, shader: &[u8]) -> vk::ShaderModule
     }
 }
 
+/// Destroys a shader module
 fn destroy_shader_module(device: &ash::Device, shader_module: vk::ShaderModule) {
     unsafe {
         device.destroy_shader_module(shader_module, None);

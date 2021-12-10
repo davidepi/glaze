@@ -6,7 +6,6 @@ mod imgui;
 mod instance;
 mod memory;
 mod pipeline;
-mod platform;
 mod renderer;
 mod renderpass;
 mod scene;
@@ -15,9 +14,10 @@ mod swapchain;
 mod sync;
 
 // used in the material module
-pub(crate) use self::pipeline::PipelineBuilder;
+pub use self::pipeline::{Pipeline, PipelineBuilder};
 // used in the texture module
+pub use self::descriptor::Descriptor;
 pub use self::instance::PresentInstance;
-pub(crate) use self::memory::AllocatedImage;
+pub use self::memory::AllocatedImage;
 pub use self::renderer::RealtimeRenderer;
 pub use self::scene::VulkanScene;

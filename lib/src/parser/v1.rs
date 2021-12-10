@@ -11,15 +11,30 @@ use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use twox_hash::XxHash64;
 use xz2::read::{XzDecoder, XzEncoder};
 
-const CONTENT_LIST_SIZE: usize = std::mem::size_of::<Offsets>();
+/*-------------------------------------- FILE STRUCTURE ----------------------------------------.
+| The initial header is handled by the parse() function and ignored by this module.             |
+| After the header, a HASH_SIZE byte hash is read. This is the hash of the Offsets structure.   |
+| The Offsets structure has a fixed size so it must be read and compared against this hash.     |
+| If everything is fine, the Offsets structure can be parsed to discover offsets, length and    |
+| hash value of every other chunk. Each chunk can then be read independently.                   |
+| Each chunk can be found at the offset specified in the Offsets structure. The offset is       |
+| relative to the beginning of the file, including the initial header. The offset points to the |
+| fixed size expected hash for the chunk, after which the actual chunk data can be found.       |
+\.--------------------------------------------------------------------------------------------*/
+
+/// Seed for the hasher used in this file format.
 const HASHER_SEED: u64 = 0x368262AAA1DEB64D;
+/// Length of each hash used in this file format.
 const HASH_SIZE: usize = std::mem::size_of::<u64>();
+/// Size of the offsets structure.
 const OFFSET_SIZE: usize = std::mem::size_of::<Offsets>();
 
+/// Returns the hasher used by this file format.
 fn get_hasher() -> impl Hasher {
     XxHash64::with_seed(HASHER_SEED)
 }
 
+/// Compress some data using lzma with compression level 9
 fn compress(data: &[u8]) -> Vec<u8> {
     let mut compressed = Vec::new();
     let mut encoder = XzEncoder::new(data, 9);
@@ -29,6 +44,7 @@ fn compress(data: &[u8]) -> Vec<u8> {
     compressed
 }
 
+/// Decompress some data using lzma
 fn decompress(data: &[u8]) -> Vec<u8> {
     let mut decoder = XzDecoder::new(data);
     let mut decompressed = Vec::new();
@@ -38,33 +54,56 @@ fn decompress(data: &[u8]) -> Vec<u8> {
     decompressed
 }
 
+/// All the Offsets used by this file format.
+/// Expressed in bytes from the very beginning of the file (including the common header).
+/// Each offset points to the expected hash of the chunk.
+/// Following the hash (which has a fixed size) there is the chunk data for chunk length bytes.
 struct Offsets {
-    // in bytes from the very beginning of the file (including the common header)
+    /// Vertices block offset.
     vert_off: u64,
+    /// Vertices block length.
     vert_len: u64,
+    /// Expected hash of the vertices block.
     vert_hash: u64,
+    /// Meshes block offset.
     mesh_off: u64,
+    /// Meshes block length.
     mesh_len: u64,
+    /// Expected hash of the meshes block.
     mesh_hash: u64,
+    /// Cameras block offset.
     cam_off: u64,
+    /// Cameras block length.
     cam_len: u64,
+    /// Expected hash of the cameras block.
     cam_hash: u64,
+    /// Textures block offset.
     tex_off: u64,
+    /// Textures block length.
     tex_len: u64,
+    /// Expected hash of the textures block.
     tex_hash: u64,
+    /// Materials block offset.
     mat_off: u64,
+    /// Materials block length.
     mat_len: u64,
+    /// Expected hash of the materials block.
     mat_hash: u64,
-    // currently unused
+    /// Currently unused.
     _light_len: u64,
+    /// Currently unused.
     _light_off: u64,
+    /// Currently unused.
+    _light_hash: u64,
+    /// Reserved to point to another structure yet to be defined.
     _next: u64,
 }
 
 impl Offsets {
+    /// Reads the offsets structure from the file and parse it.
     fn seek_and_parse<R: Read + Seek>(file: &mut R) -> Result<Offsets, Error> {
         file.seek(SeekFrom::Start((HEADER_LEN + HASH_SIZE) as u64))?;
-        let mut cl_data = [0; CONTENT_LIST_SIZE];
+        let mut cl_data = [0; OFFSET_SIZE];
         file.read_exact(&mut cl_data)?;
         let vert_off = u64::from_le_bytes(cl_data[0..8].try_into().unwrap());
         let vert_len = u64::from_le_bytes(cl_data[8..16].try_into().unwrap());
@@ -99,10 +138,12 @@ impl Offsets {
             mat_hash,
             _light_len: 0,
             _light_off: 0,
+            _light_hash: 0,
             _next: 0,
         })
     }
 
+    /// Converts the offsets structure into an array of bytes.
     fn as_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(120);
         bytes.extend(&self.vert_off.to_le_bytes());
@@ -124,12 +165,16 @@ impl Offsets {
     }
 }
 
+/// Parser for this file format.
 pub(super) struct ContentV1<R: Read + Seek> {
+    /// Handle to the Reader
     file: R,
+    /// Offsets of this particular file.
     offsets: Offsets,
 }
 
 impl<R: Read + Seek> ContentV1<R> {
+    /// Initializes the parser for this particular file format.
     pub(super) fn parse(mut file: R) -> Result<Self, Error> {
         let mut offset_hash = [0; HASH_SIZE];
         file.read_exact(&mut offset_hash)?;
@@ -149,6 +194,7 @@ impl<R: Read + Seek> ContentV1<R> {
         }
     }
 
+    /// Writes the scene structures into the file handled by this parser.
     pub(super) fn serialize<W: Write + Seek>(
         mut fout: W,
         vertices: &[Vertex],
@@ -231,6 +277,7 @@ impl<R: Read + Seek> ContentV1<R> {
             mat_hash,
             _light_len: 0,
             _light_off: 0,
+            _light_hash: 0,
             _next: 0,
         }
         .as_bytes();
@@ -355,12 +402,20 @@ impl<R: Read + Seek> ReadParsed for ContentV1<R> {
     }
 }
 
+/// Trait for parsed chunks of data.
+/// This does *NOT* include the hash.
 trait ParsedChunk {
+    /// Item contained in the chunk.
     type Item;
+    /// Encodes several items into a chunk.
     fn encode(item: &[Self::Item]) -> Self;
+    /// Copies an array of bytes into this chunk.
     fn decode(data: Vec<u8>) -> Self;
+    /// Gets the amount of bytes composing a chunk
     fn size_bytes(&self) -> usize;
+    /// Decodes the array of bytes composing this chunk and returns the items.
     fn elements(self) -> Result<Vec<Self::Item>, Error>;
+    /// Gets the array of bytes composing this chunk.
     fn data(self) -> Vec<u8>;
 }
 
@@ -396,6 +451,7 @@ impl ParsedChunk for VertexChunk {
     }
 }
 
+/// Converts a Vertex to a vector of bytes.
 fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
     let vv: [f32; 3] = Vec3::into(vert.vv);
     let vn: [f32; 3] = Vec3::into(vert.vn);
@@ -408,6 +464,7 @@ fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
         .collect()
 }
 
+/// Converts a vector of bytes to a Vertex.
 fn bytes_to_vertex(data: &[u8]) -> Vertex {
     let vv = Vec3::new(
         f32::from_le_bytes(data[0..4].try_into().unwrap()),
@@ -476,6 +533,7 @@ impl ParsedChunk for MeshChunk {
     }
 }
 
+/// Converts a Mesh to a vector of bytes.
 fn mesh_to_bytes(mesh: &Mesh) -> Vec<u8> {
     let faces_no = u32::to_le_bytes(mesh.indices.len() as u32);
     let instances_no = u32::to_le_bytes(mesh.instances.len() as u32);
@@ -497,6 +555,7 @@ fn mesh_to_bytes(mesh: &Mesh) -> Vec<u8> {
     retval
 }
 
+/// Converts a vector of bytes to a Mesh.
 fn bytes_to_mesh(data: &[u8]) -> Mesh {
     let faces_no = u32::from_le_bytes(data[0..4].try_into().unwrap());
     let instances_no = u32::from_le_bytes(data[4..8].try_into().unwrap());
@@ -584,6 +643,7 @@ impl ParsedChunk for CameraChunk {
     }
 }
 
+/// Converts a Camera to a vector of bytes.
 fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
     let camera_type;
     let position;
@@ -630,6 +690,7 @@ fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
     camera_type.iter().copied().chain(cam_data_iter).collect()
 }
 
+/// Converts a vector of bytes to a Camera.
 fn bytes_to_camera(data: &[u8]) -> Camera {
     let cam_type = data[0];
     let position = Point3::new(
@@ -720,6 +781,7 @@ impl ParsedChunk for TextureChunk {
     }
 }
 
+/// Converts a Texture to a vector of bytes.
 fn texture_to_bytes((index, texture): &(u16, Texture)) -> Vec<u8> {
     let name = texture.name();
     let str_len = name.bytes().len();
@@ -776,6 +838,7 @@ fn u8_to_format(format: u8) -> Result<TextureFormat, Error> {
     }
 }
 
+/// Converts a vector of bytes to a Texture.
 fn bytes_to_texture(data: &[u8]) -> Result<(u16, Texture), Error> {
     let tex_index = u16::from_le_bytes(data[0..2].try_into().unwrap());
     let format = u8_to_format(data[2])?;
@@ -884,6 +947,7 @@ impl ParsedChunk for MaterialChunk {
     }
 }
 
+/// Converts a Material to a vector of bytes.
 fn material_to_bytes((index, material): &(u16, Material)) -> Vec<u8> {
     let str_len = material.name.bytes().len();
     assert!(str_len < 256);
@@ -913,6 +977,7 @@ fn material_to_bytes((index, material): &(u16, Material)) -> Vec<u8> {
     retval
 }
 
+/// Converts a vector of bytes to a Material.
 fn bytes_to_material(data: &[u8]) -> (u16, Material) {
     let mat_index = u16::from_le_bytes(data[0..2].try_into().unwrap());
     let str_len = data[2] as usize;

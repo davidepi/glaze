@@ -1,22 +1,32 @@
+#[cfg(debug_assertions)]
+use crate::vulkan::debug::logger::VkDebugLogger;
 use crate::vulkan::debug::ValidationLayers;
 use crate::vulkan::device::{Device, PresentDevice, SurfaceSupport};
-use crate::vulkan::platform;
 use crate::vulkan::surface::Surface;
 use ash::vk;
 use std::ffi::{CStr, CString};
 use std::ptr;
 use winit::window::Window;
 
-#[cfg(debug_assertions)]
-use crate::vulkan::debug::logger::VkDebugLogger;
-
+/// Trait used by Vulkan instance wrappers.
+///
+/// Common trait used by the wrappers of this crate. Allows the retrieval of the instance itself,
+/// and the underlying device.
 pub trait Instance {
+    /// The type of device used by the instance.
     type DeviceItem;
-    fn entry(&self) -> &ash::Entry;
+
+    /// Returns a reference to the raw vulkan instance.
     fn instance(&self) -> &ash::Instance;
+
+    /// Returns a reference to the underlying device wrapper.
     fn device(&self) -> &Self::DeviceItem;
 }
 
+/// Vulkan instance for a device supporting a presentation surface.
+///
+/// Wraps together a Vulkan instance, a device and a presentation surface.
+/// When compiled in debug mode, validations are automatically enabled.
 pub struct PresentInstance {
     #[cfg(debug_assertions)]
     _logger: VkDebugLogger,
@@ -27,8 +37,29 @@ pub struct PresentInstance {
 }
 
 impl PresentInstance {
+    /// Creates a new instance using the given window as presentation surface.
+    ///
+    /// # Extensions
+    /// The following Vulkan extensions are required:
+    /// - VK_KHR_surface
+    /// - VK_KHR_swapchain
+    /// - VK_EXT_debug_utils (only when compiled in debug mode)
+    /// - VK_KHR_xlib_surface (only when compiled for GNU/Linux)
+    /// - VK_KHR_win32_surface (only when compiled for Windows)
+    /// - VK_MVK_macos_surface (only when compiled for macOs)
+    ///
+    /// # Features
+    /// The following features are required to be supported on the physical device:
+    /// - sampler anisotropy
+    ///
+    /// # Examples
+    /// Basic usage:
+    /// ``` no_run
+    /// let window = winit::Window::new();
+    /// let instance = PresentInstance::new(&window);
+    /// ```
     pub fn new(window: &Window) -> Self {
-        let instance_extensions = platform::required_extensions();
+        let instance_extensions = required_extensions();
         let device_extensions = vec![ash::extensions::khr::Swapchain::name()];
         let device_features = vk::PhysicalDeviceFeatures {
             sampler_anisotropy: vk::TRUE,
@@ -51,14 +82,17 @@ impl PresentInstance {
         }
     }
 
+    /// Returns the device used for presentation.
     pub fn present_device(&self) -> &PresentDevice {
         &self.device
     }
 
+    /// Returns the surface used for presentation.
     pub fn surface(&self) -> &Surface {
         &self.surface
     }
 
+    /// Returns the capabilities of the current surface.
     pub fn surface_capabilities(&self) -> SurfaceSupport {
         self.device.physical().surface_capabilities(&self.surface)
     }
@@ -66,10 +100,6 @@ impl PresentInstance {
 
 impl Instance for PresentInstance {
     type DeviceItem = PresentDevice;
-
-    fn entry(&self) -> &ash::Entry {
-        &self.instance.entry
-    }
 
     fn instance(&self) -> &ash::Instance {
         &self.instance.instance
@@ -80,12 +110,48 @@ impl Instance for PresentInstance {
     }
 }
 
+/// Returns the required vulkan extension names to present on a surface.
+/// Note that each OS returns a different set of extensions.
+fn required_extensions() -> Vec<&'static CStr> {
+    let retval;
+    #[cfg(target_os = "macos")]
+    {
+        retval = vec![
+            ash::extensions::khr::Surface::name(),
+            ash::extensions::mvk::MacOSSurface::name(),
+            #[cfg(debug_assertions)]
+            ash::extensions::ext::DebugUtils::name(),
+        ]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        retval = vec![
+            ash::extensions::khr::Surface::name(),
+            ash::extensions::khr::Win32Surface::name(),
+            #[cfg(debug_assertions)]
+            ash::extensions::ext::DebugUtils::name(),
+        ]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        retval = vec![
+            ash::extensions::khr::Surface::name(),
+            ash::extensions::khr::XlibSurface::name(),
+            #[cfg(debug_assertions)]
+            ash::extensions::ext::DebugUtils::name(),
+        ]
+    }
+    retval
+}
+
+/// Basic vulkan instance. Wrapper for ash::Entry and ash::Instance (to avoid Entry being dropped)
 struct BasicInstance {
     entry: ash::Entry,
     instance: ash::Instance,
 }
 
 impl BasicInstance {
+    /// creates a new instance with the given extensions
     fn new(extensions: &[&'static CStr]) -> Self {
         let entry = match unsafe { ash::Entry::new() } {
             Ok(entry) => entry,
@@ -104,6 +170,7 @@ impl Drop for BasicInstance {
     }
 }
 
+/// Creates a new vulkan instance.
 fn create_instance(entry: &ash::Entry, extensions: &[&'static CStr]) -> ash::Instance {
     let validations = ValidationLayers::application_default();
     if !validations.check_support(entry) {
@@ -126,13 +193,14 @@ fn create_instance(entry: &ash::Entry, extensions: &[&'static CStr]) -> ash::Ins
         api_version: vk::API_VERSION_1_2,
     };
     let extensions_array = extensions.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
+    let validations_arr = validations.as_ptr();
     let creation_info = vk::InstanceCreateInfo {
         s_type: vk::StructureType::INSTANCE_CREATE_INFO,
         p_next: ptr::null(),
         flags: vk::InstanceCreateFlags::empty(),
         p_application_info: &app_info,
-        enabled_layer_count: validations.len() as u32,
-        pp_enabled_layer_names: validations.as_ptr(),
+        enabled_layer_count: validations_arr.len() as u32,
+        pp_enabled_layer_names: validations_arr.as_ptr(),
         enabled_extension_count: extensions_array.len() as u32,
         pp_enabled_extension_names: extensions_array.as_ptr(),
     };

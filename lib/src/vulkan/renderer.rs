@@ -1,7 +1,7 @@
 use super::cmd::CommandManager;
-use super::descriptor::{Descriptor, DescriptorSetCreator};
+use super::descriptor::{Descriptor, DescriptorSetManager};
 use super::device::Device;
-use super::imgui::ImguiDrawer;
+use super::imgui::ImguiRenderer;
 use super::instance::{Instance, PresentInstance};
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::{Pipeline, PipelineBuilder};
@@ -18,63 +18,115 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// Average descriptor set usage.
 const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::UNIFORM_BUFFER, 1.0)];
+/// Number of frames prepared by the CPU while waiting for the GPU.
 const FRAMES_IN_FLIGHT: usize = 2;
 
+/// Stats about the renderer.
 #[derive(Debug, Copy, Clone)]
 pub struct Stats {
+    /// Average frames per second.
     pub fps: f32,
+    /// Average draw calls per frame in the last second.
     pub avg_draw_calls: f32,
 }
 
+/// Per-frame data passed to the GPU.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FrameData {
+    /// Projection matrix * View matrix.
     pub projview: Matrix4<f32>,
+    /// Time elapsed since scene loading, in seconds.
     pub frame_time: f32,
 }
 
+/// Contains the required helpers to send a FrameData struct to the GPU shaders.
 #[derive(Debug)]
 struct FrameDataBuf {
+    /// Buffer containing the FrameData.
     buffer: AllocatedBuffer,
+    /// Actual data on the CPU.
     data: FrameData,
+    /// Descriptor set containing the per-frame data (set 0).
     descriptor: Descriptor,
 }
 
+/// Contains the loading scene state.
+/// Recall that scene loading is performed asynchronously.
 struct SceneLoad {
+    /// The channel receaving updates on the loading progress.
     reader: Receiver<String>,
+    /// This arc counter drops to 1 when the scene is loaded (inner value is unused).
     is_alive: Arc<bool>,
+    /// Last message received from the channel.
     last_message: String,
+    /// Thread join handle.
     join_handle: std::thread::JoinHandle<(
         MemoryManager,
-        DescriptorSetCreator,
+        DescriptorSetManager,
         CommandManager,
         Result<VulkanScene, std::io::Error>,
     )>,
 }
 
+/// Realtime renderer capable of rendering a scene to a presentation surface.
 pub struct RealtimeRenderer {
+    /// Swapchain of the renderer.
     swapchain: Swapchain,
+    /// Sampler used to copy the forward pass attachment to the swapchain image.
     copy_sampler: vk::Sampler,
+    /// Pipeline used to copy the forward pass attachment to the swapchain image.
     copy_pipeline: Pipeline,
+    /// Forward pass.
     forward_pass: RenderPass,
-    imgui_renderer: ImguiDrawer,
-    dm: DescriptorSetCreator,
+    /// UI Renderer.
+    imgui_renderer: ImguiRenderer,
+    /// Manager for the descriptor pools and sets.
+    dm: DescriptorSetManager,
+    /// Manager for the memory allocation.
     mm: MemoryManager,
+    /// Manager for the command pools and buffers.
     cmdm: CommandManager,
+    /// Synchronization structures for each frame.
     sync: PresentSync<FRAMES_IN_FLIGHT>,
+    /// Scene to be rendered.
     scene: Option<VulkanScene>,
+    /// Scene being loaded.
     scene_loading: Option<SceneLoad>,
+    /// Per-frame data, for each frame.
     frame_data: [FrameDataBuf; FRAMES_IN_FLIGHT],
+    /// Clear color of the forward pass.
     clear_color: [f32; 4],
+    /// Instant when the rendering of the current scene started.
     start_time: Instant,
+    /// Scaling factor of the rendered area (the renderered area is swapchain image * scale).
     render_scale: f32,
+    /// Current frame index.
     frame_no: usize,
+    /// Stats about the renderer.
     stats: InternalStats,
+    /// Vulkan instance.
     instance: Rc<PresentInstance>,
 }
 
 impl RealtimeRenderer {
+    /// Creates a new realtime renderer.
+    /// Takes a vukan instance, an imgui context, the window dimensions and the render scale.
+    /// # Examples
+    /// basic usage:
+    /// ``` no_run
+    /// let window = winit::window::Window::new();
+    /// let mut imgui = imgui::Context::create();
+    /// let renderer = RealtimeRenderer::create(
+    ///     instance,
+    ///     &mut imgui,
+    ///     window.inner_size().width,
+    ///     window.inner_size().height,
+    ///     1.0,
+    /// );
+    /// ```
     pub fn create(
         instance: Rc<PresentInstance>,
         imgui: &mut imgui::Context,
@@ -82,7 +134,7 @@ impl RealtimeRenderer {
         window_height: u32,
         render_scale: f32,
     ) -> Self {
-        let mut dm = DescriptorSetCreator::new(instance.device().logical_clone(), &AVG_DESC);
+        let mut dm = DescriptorSetManager::new(instance.device().logical_clone(), &AVG_DESC);
         let mut mm = MemoryManager::new(
             instance.instance(),
             instance.device().logical_clone(),
@@ -140,7 +192,7 @@ impl RealtimeRenderer {
             render_size,
         );
         forward_pass.clear_color[0].color.float32 = clear_color;
-        let imgui_renderer = ImguiDrawer::new(
+        let imgui_renderer = ImguiRenderer::new(
             imgui,
             instance.device(),
             &mut mm,
@@ -176,14 +228,19 @@ impl RealtimeRenderer {
         }
     }
 
+    /// Waits until all the queued frames have been rendered.
     pub fn wait_idle(&self) {
         unsafe { self.instance.device().logical().device_wait_idle() }.expect("Failed to wait idle")
     }
 
+    /// Returns the current render scale.
     pub fn render_scale(&self) -> f32 {
         self.render_scale
     }
 
+    /// Returns the current background color.
+    ///
+    /// Color is expressed as RGB floats in the range [0, 1].
     pub fn get_clear_color(&self) -> [f32; 3] {
         [
             self.clear_color[0],
@@ -192,19 +249,29 @@ impl RealtimeRenderer {
         ]
     }
 
+    /// Sets the background color.
+    ///
+    /// Color is expressed as RGB floats in the range [0, 1].
     pub fn set_clear_color(&mut self, color: [f32; 3]) {
         self.clear_color = [color[0], color[1], color[2], 1.0];
         self.forward_pass.clear_color[0].color.float32 = self.clear_color;
     }
 
+    /// Returns the current stats of the renderer
     pub fn stats(&self) -> Stats {
         self.stats.last_val
     }
 
+    /// Returns the current scene being rendered.
+    ///
+    /// Returns None if no scene is loaded.
     pub fn scene(&self) -> Option<&VulkanScene> {
         self.scene.as_ref()
     }
 
+    /// Returns the current loading status of the scene.
+    ///
+    /// Returns None if no scene is being loaded.
     pub fn is_loading(&self) -> Option<&String> {
         if let Some(loading) = &self.scene_loading {
             Some(&loading.last_message)
@@ -213,10 +280,16 @@ impl RealtimeRenderer {
         }
     }
 
+    /// Returns a mutable reference to the scene being renderered.
+    ///
+    /// Returns None if no scene is loaded.
     pub fn scene_mut(&mut self) -> Option<&mut VulkanScene> {
         self.scene.as_mut()
     }
 
+    /// Returns a mutable reference to the camera of the current scene.
+    ///
+    /// Returns None if no scene is loaded.
     pub fn camera_mut(&mut self) -> Option<&mut Camera> {
         if let Some(scene) = &mut self.scene {
             Some(&mut scene.current_cam)
@@ -225,6 +298,9 @@ impl RealtimeRenderer {
         }
     }
 
+    /// Changes the render size of the renderer.
+    ///
+    /// The render size will be (window_width * render_scale, window_height * render_scale).
     pub fn update_render_size(&mut self, window_width: u32, window_height: u32, scale: f32) {
         self.wait_idle();
         if let Some(scene) = &mut self.scene {
@@ -233,7 +309,7 @@ impl RealtimeRenderer {
         self.render_scale = scale;
         self.swapchain.recreate(window_width, window_height);
         self.imgui_renderer
-            .update(self.instance.device().logical(), &self.swapchain);
+            .update_swapchain(self.instance.device().logical(), &self.swapchain);
         let render_size = vk::Extent2D {
             width: (window_width as f32 * scale) as u32,
             height: (window_height as f32 * scale) as u32,
@@ -266,6 +342,25 @@ impl RealtimeRenderer {
         }
     }
 
+    /// Loads a new scene in the renderer.
+    /// # Examples
+    /// Basic usage:
+    /// ``` no_run
+    /// // init renderer
+    /// let window = winit::window::Window::new();
+    /// let mut imgui = imgui::Context::create();
+    /// let mut renderer = RealtimeRenderer::create(
+    ///     instance,
+    ///     &mut imgui,
+    ///     window.inner_size().width,
+    ///     window.inner_size().height,
+    ///     1.0,
+    /// );
+    /// // parse scene
+    /// let scene_path = "/path/to/scene";
+    /// let parsed = parse(scene_path).expect("Failed to parse scene");
+    /// renderer.change_scene(parsed);
+    /// ```
     pub fn change_scene(&mut self, parsed: Box<dyn ReadParsed + Send>) {
         self.wait_idle();
         if let Some(mut scene) = self.scene.take() {
@@ -299,6 +394,8 @@ impl RealtimeRenderer {
         });
     }
 
+    /// Checks if the scene loading is finished and replaces the current loaded scene with the new
+    /// one.
     fn finish_change_scene(&mut self) {
         if let Some(scene_loading) = &mut self.scene_loading {
             if Arc::strong_count(&scene_loading.is_alive) == 1 {
@@ -334,6 +431,9 @@ impl RealtimeRenderer {
         }
     }
 
+    /// Updates a single material.
+    ///
+    /// `old` is the index of the old material.
     pub fn change_material(&mut self, old: u16, new: Material) {
         if let Some(scene) = &mut self.scene {
             let render_size = vk::Extent2D {
@@ -353,6 +453,7 @@ impl RealtimeRenderer {
         }
     }
 
+    /// Terminates rendering and frees all resources.
     pub fn destroy(mut self) {
         self.wait_idle();
         self.imgui_renderer
@@ -376,6 +477,9 @@ impl RealtimeRenderer {
         self.sync.destroy(self.instance.device());
     }
 
+    /// Draws a single frame.
+    ///
+    /// If there is a GUI to draw, the `imgui_data` should contain the GUI data.
     pub fn draw_frame(&mut self, imgui_data: Option<&imgui::DrawData>) {
         self.stats.update();
         self.finish_change_scene();
@@ -432,8 +536,8 @@ impl RealtimeRenderer {
                     .end_command_buffer(cmd)
                     .expect("Failed to end command buffer");
             }
-            let wait_sem = [frame_sync.image_available()];
-            let signal_sem = [frame_sync.render_finished()];
+            let wait_sem = [frame_sync.image_available];
+            let signal_sem = [frame_sync.render_finished];
             let submit_ci = vk::SubmitInfo {
                 s_type: vk::StructureType::SUBMIT_INFO,
                 p_next: ptr::null(),
@@ -445,7 +549,7 @@ impl RealtimeRenderer {
                 signal_semaphore_count: signal_sem.len() as u32,
                 p_signal_semaphores: signal_sem.as_ptr(),
             };
-            let swapchains = [self.swapchain.swapchain_khr()];
+            let swapchains = [self.swapchain.raw_handle()];
             let present_ci = vk::PresentInfoKHR {
                 s_type: vk::StructureType::PRESENT_INFO_KHR,
                 p_next: ptr::null(),
@@ -459,7 +563,7 @@ impl RealtimeRenderer {
             let queue = self.instance.device().graphic_queue();
             unsafe {
                 device
-                    .queue_submit(queue, &[submit_ci], frame_sync.acquire_fence())
+                    .queue_submit(queue, &[submit_ci], frame_sync.acquire)
                     .expect("Failed to submit render task");
             }
             self.swapchain.queue_present(queue, &present_ci);
@@ -472,6 +576,7 @@ impl RealtimeRenderer {
     }
 }
 
+/// Draws all objects belonging to the loaded VulkanScene.
 unsafe fn draw_objects(
     scene: &VulkanScene,
     ar: f32,
@@ -520,6 +625,7 @@ unsafe fn draw_objects(
     }
 }
 
+/// Creates the sampler used to copy the forward pass color attachment into the swapchain image.
 fn create_copy_sampler(device: &ash::Device) -> vk::Sampler {
     let ci = vk::SamplerCreateInfo {
         s_type: vk::StructureType::SAMPLER_CREATE_INFO,
@@ -548,6 +654,7 @@ fn create_copy_sampler(device: &ash::Device) -> vk::Sampler {
     }
 }
 
+/// Creates the pipeline used to copy the forward pass color attachment into the swapchain image.
 fn create_copy_pipeline(
     device: &ash::Device,
     extent: vk::Extent2D,
@@ -568,6 +675,7 @@ fn create_copy_pipeline(
     builder.build(device, renderpass, extent, dset_layout)
 }
 
+/// Copies the renderpass color attachment into the swapchain image.
 fn copy_renderpass_to_swapchain(
     device: &ash::Device,
     cmd: vk::CommandBuffer,

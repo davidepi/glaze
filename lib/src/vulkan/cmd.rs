@@ -1,18 +1,24 @@
+use ash::vk;
 use std::ptr;
 use std::sync::Arc;
 
-use ash::vk;
-
+/// Initial number of command pools.
 const POOL_NO: usize = 15;
+/// Number of command buffers per command pool.
 const BUFFERS_PER_POOL: u8 = 30;
 
+/// Manages a single command pool.
 struct PoolManager {
+    /// The managed command pool.
     pool: vk::CommandPool,
+    /// Command buffers in this pool.
     buffers: Vec<vk::CommandBuffer>,
+    /// Number of served command buffers.
     used: u8,
 }
 
 impl PoolManager {
+    /// Creates a new command pool for a given device and queue family
     fn create(device: &ash::Device, queue_family_index: u32) -> PoolManager {
         let pool_ci = vk::CommandPoolCreateInfo {
             s_type: vk::StructureType::COMMAND_POOL_CREATE_INFO,
@@ -44,6 +50,7 @@ impl PoolManager {
         }
     }
 
+    /// Returns a command buffer from the pool if there is one available. None otherwise.
     fn get(&mut self) -> Option<vk::CommandBuffer> {
         if self.used == BUFFERS_PER_POOL {
             None
@@ -54,6 +61,7 @@ impl PoolManager {
         }
     }
 
+    /// Resets the pool and invalidates all command buffers.
     #[must_use]
     fn reset(mut self, device: &ash::Device) -> PoolManager {
         unsafe {
@@ -72,15 +80,22 @@ impl PoolManager {
     }
 }
 
+/// Manages a set of command pools.
 pub struct CommandManager {
+    /// The current pool being used to distribute buffers around.
     current_pool: Option<PoolManager>,
+    /// List of pools not completely used yet (likely empty).
     free_pools: Vec<PoolManager>,
+    /// List of pools completely used.
     used_pools: Vec<PoolManager>,
+    /// Device being used.
     device: Arc<ash::Device>,
+    /// Queue family for which the command pools are allocated.
     queue_family_index: u32,
 }
 
 impl CommandManager {
+    /// Creates a new command manager for a given device and queue family.
     pub fn new(device: Arc<ash::Device>, queue_family_index: u32) -> CommandManager {
         let mut free_pools = (0..POOL_NO)
             .into_iter()
@@ -96,6 +111,7 @@ impl CommandManager {
         }
     }
 
+    /// Returns a command buffer from the pool. Changes and resets pools if necessary.
     pub fn get_cmd_buffer(&mut self) -> vk::CommandBuffer {
         if let Some(pool) = &mut self.current_pool {
             // a pool is available
@@ -131,6 +147,12 @@ impl CommandManager {
         }
     }
 
+    /// Lends a manager to another thread. The vulkan specification says that each pool must
+    /// be exclusive to a single thread.
+    ///
+    /// This manager SHOULD be returned with the [CommandManager::merge] call even though it is not
+    /// strictly necessary to do so (but it is better, in order to ensure that all commands are
+    /// executed before deallocating them).
     pub fn thread_exclusive(&mut self) -> Self {
         CommandManager {
             current_pool: self.free_pools.pop(), // the manager will auto expand if this is none
@@ -141,6 +163,7 @@ impl CommandManager {
         }
     }
 
+    /// Consumes a command manager previously taken with [CommandManager::thread_exclusive].
     pub fn merge(&mut self, mut other: Self) {
         if let Some(other_current) = other.current_pool.take() {
             self.used_pools.push(other_current);

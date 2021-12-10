@@ -4,42 +4,66 @@ use image::{GenericImageView, GrayImage, ImageBuffer, Pixel, RgbaImage};
 #[cfg(feature = "vulkan")]
 use crate::vulkan::AllocatedImage;
 
-// when loaded on the GPU the image is discarded so also width and height are lost.
-// for this reason we are storing the values in this struct
+/// Information about the texture.
+// When loaded on the GPU the image is discarded and so width and height are lost.
+// For this reason, additional information about the image are stored in this struct.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct TextureInfo {
+    /// Name of the texture.
+    /// Unused in the engine, but may aid the user.
+    /// Not guaranteed to be the name of the texture used by the used in the original file, or the
+    /// path to the texture. Don't expect every file to follow the same convention.
     pub name: String,
+    /// Width of the texture, in pixels.
     pub width: u16,
+    /// Height of the texture, in pixels.
     pub height: u16,
+    /// Format of the texture.
     pub format: TextureFormat,
 }
 
+/// A texture that has been loaded on the GPU.
 #[cfg(feature = "vulkan")]
 #[derive(Debug)]
 pub struct TextureLoaded {
+    /// Information about the texture.
     pub info: TextureInfo,
-    pub image: AllocatedImage,
+    /// The allocated buffer in the GPU.
+    pub(crate) image: AllocatedImage,
 }
 
+/// A RGBA texture stored in memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextureRGBA {
+    /// Information about the texture.
     pub info: TextureInfo,
+    /// Data of the texture. May contain MIP maps.
     pub data: Vec<image::RgbaImage>,
 }
 
+/// A Grayscale (single channel) texture stored in memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextureGray {
+    /// Information about the texture.
     pub info: TextureInfo,
+    /// Data of the texture. May contain MIP maps.
     pub data: Vec<image::GrayImage>,
 }
 
+/// Enum listing the type of textures available.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureFormat {
+    /// A grayscale texture.
+    /// 8 bit per channel, single channel.
     Gray,
+    /// A color texture with alpha channel.
+    /// 8 bit per channel, 4 channels.
+    /// The channels are ordered as Red, Green, Blue, Alpha.
     Rgba,
 }
 
 impl TextureFormat {
+    /// Returns the color type of the texture.
     pub fn to_color_type(self) -> image::ColorType {
         match self {
             TextureFormat::Gray => image::ColorType::L8,
@@ -48,6 +72,7 @@ impl TextureFormat {
     }
 }
 
+/// A texture stored in memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Texture {
     Rgba(TextureRGBA),
@@ -55,6 +80,7 @@ pub enum Texture {
 }
 
 impl Texture {
+    /// Creates a new grayscale texture from the given info and image.
     pub fn new_gray(info: TextureInfo, data: image::GrayImage) -> Self {
         Texture::Gray(TextureGray {
             info,
@@ -62,10 +88,12 @@ impl Texture {
         })
     }
 
+    /// Creates a new grayscale texture from the given info and MIP maps chain.
     pub fn new_gray_with_mipmaps(info: TextureInfo, data: Vec<image::GrayImage>) -> Self {
         Texture::Gray(TextureGray { info, data })
     }
 
+    /// Creates a new color texture from the given ingo and image.
     pub fn new_rgba(info: TextureInfo, data: image::RgbaImage) -> Self {
         Texture::Rgba(TextureRGBA {
             info,
@@ -73,10 +101,12 @@ impl Texture {
         })
     }
 
+    /// Creates a new color texture from the given ingo and MIP maps chain.
     pub fn new_rgba_with_mipmaps(info: TextureInfo, data: Vec<image::RgbaImage>) -> Self {
         Texture::Rgba(TextureRGBA { info, data })
     }
 
+    /// Returns the information about the texture.
     pub fn to_info(self) -> TextureInfo {
         match self {
             Texture::Rgba(img) => img.info,
@@ -84,6 +114,7 @@ impl Texture {
         }
     }
 
+    /// Returns the name of the texture.
     pub fn name(&self) -> &str {
         match self {
             Texture::Rgba(t) => &t.info.name,
@@ -91,6 +122,7 @@ impl Texture {
         }
     }
 
+    /// Returns the raw bytes of a specific MIP map level, given the level index.
     pub fn raw(&self, level: usize) -> &[u8] {
         match self {
             Texture::Rgba(t) => t.data[level].as_raw(),
@@ -98,6 +130,7 @@ impl Texture {
         }
     }
 
+    /// Returns the pointer to the raw bytes of a specific MIP map level, given the level index.
     pub fn ptr(&self, level: usize) -> *const u8 {
         match self {
             Texture::Rgba(t) => t.data[level].as_ptr(),
@@ -105,6 +138,9 @@ impl Texture {
         }
     }
 
+    /// Returns (width, height) of the texture in pixel.
+    ///
+    /// Only the first MIP map is considered (level 0).
     pub fn dimensions(&self) -> (u16, u16) {
         match self {
             Texture::Rgba(t) => (t.info.width, t.info.height),
@@ -112,6 +148,7 @@ impl Texture {
         }
     }
 
+    /// Returns the format of the texture.
     pub const fn format(&self) -> TextureFormat {
         match self {
             Texture::Rgba(_) => TextureFormat::Rgba,
@@ -119,6 +156,9 @@ impl Texture {
         }
     }
 
+    /// Returns the number of MIP map levels contained in the texture.
+    ///
+    /// Note, this is *not* the number of possible MIP maps.
     pub fn mipmap_levels(&self) -> usize {
         match self {
             Texture::Rgba(img) => img.data.len(),
@@ -126,13 +166,15 @@ impl Texture {
         }
     }
 
-    pub fn bytes(&self, level: usize) -> usize {
+    /// Returns the size in bytes of a specific MIP map level.
+    pub fn size_bytes(&self, level: usize) -> usize {
         match self {
             Texture::Rgba(t) => t.data[level].len(), // len already returns the bytes
             Texture::Gray(t) => t.data[level].len(),
         }
     }
 
+    /// Returns the number of bytes per pixel in the texture.
     pub const fn bytes_per_pixel(&self) -> usize {
         match self {
             Texture::Gray(_) => 1,
@@ -140,6 +182,9 @@ impl Texture {
         }
     }
 
+    /// Returns true if the texture contains MIP maps.
+    ///
+    /// This method is equivalent to `[Texture::levels()] > 1`.
     pub fn has_mipmaps(&self) -> bool {
         match self {
             Texture::Rgba(img) => img.data.len() > 1,
@@ -147,6 +192,9 @@ impl Texture {
         }
     }
 
+    /// Generates the MIP maps for this texture.
+    ///
+    /// A Catmull-Rom filtering is used.
     pub fn gen_mipmaps(&mut self) {
         if !self.has_mipmaps() {
             match self {
@@ -176,6 +224,7 @@ impl Default for Texture {
     }
 }
 
+/// generate the mip maps for the texture
 fn gen_mipmaps<I: GenericImageView>(
     img: ImageBuffer<I::Pixel, Vec<<I::Pixel as Pixel>::Subpixel>>,
 ) -> Vec<ImageBuffer<I::Pixel, Vec<<I::Pixel as Pixel>::Subpixel>>>
@@ -202,10 +251,11 @@ where
     mipmaps
 }
 
+/// Calculates the log2 of a integer.
+/// Works only if the input is known to be a power of 2
+/// Implemented because the rust variant is currently unstable.
 fn ilog2(x: u32) -> u32 {
     // from https://graphics.stanford.edu/~seander/bithacks.html#IntegerLog
-    // because the rust variant is currently unstable
-    // works only if the input is known to be a power of 2
     const B: [u32; 5] = [0xAAAAAAAA, 0xCCCCCCCC, 0xF0F0F0F0, 0xFF00FF00, 0xFFFF0000];
     let mut r = ((x & B[0]) != 0) as u32;
     r |= (((x & B[4]) != 0) as u32) << 4;

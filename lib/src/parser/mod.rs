@@ -27,12 +27,7 @@ pub enum ParserVersion {
 }
 
 impl ParserVersion {
-    fn to_byte(&self) -> u8 {
-        match self {
-            ParserVersion::V1 => 1,
-        }
-    }
-
+    /// Converts the ParserVersion to a number.
     fn from_byte(byte: u8) -> Result<Self, Error> {
         match byte {
             1 => Ok(ParserVersion::V1),
@@ -43,6 +38,7 @@ impl ParserVersion {
         }
     }
 
+    /// Converts the ParserVersion to a string.
     pub fn to_str(&self) -> &'static str {
         match self {
             ParserVersion::V1 => "V1",

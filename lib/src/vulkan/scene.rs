@@ -1,9 +1,5 @@
-use std::ffi::c_void;
-use std::ptr;
-use std::sync::mpsc::Sender;
-
 use super::cmd::CommandManager;
-use super::descriptor::{Descriptor, DescriptorSetCreator};
+use super::descriptor::{Descriptor, DescriptorSetManager};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::Pipeline;
@@ -13,41 +9,66 @@ use ash::vk;
 use cgmath::Vector3 as Vec3;
 use fnv::FnvHashMap;
 use gpu_allocator::MemoryLocation;
+use std::ffi::c_void;
+use std::ptr;
+use std::sync::mpsc::Sender;
 
+/// A scene optimized to be rendered using this crates vulkan implementation.
 pub struct VulkanScene {
+    /// The camera for the current scene.
     pub current_cam: Camera,
-    pub vertex_buffer: AllocatedBuffer,
-    pub index_buffer: AllocatedBuffer,
-    // buffer used during a material update, as a transfer buffer to the GPU
+    /// The buffer containing all vertices for the current scene.
+    pub(super) vertex_buffer: AllocatedBuffer,
+    /// The buffer containing all indices for the current scene.
+    pub(super) index_buffer: AllocatedBuffer,
+    /// Buffer used during a single material update, as a transfer buffer to the GPU
     update_buffer: AllocatedBuffer,
-    pub params_buffer: AllocatedBuffer,
-    pub meshes: Vec<VulkanMesh>,
+    /// GPU buffer containing all parameters for all materials in the scene
+    params_buffer: AllocatedBuffer,
+    /// All the meshes in the scene
+    pub(super) meshes: Vec<VulkanMesh>,
+    /// Generic sampler used for all textures
     sampler: vk::Sampler,
-    //
-    pub dflt_tex: TextureLoaded,
+    /// Default texture used when a texture is required but missing. This is a 1x1 white texture.
+    dflt_tex: TextureLoaded,
+    //TODO: exposing the field (and exposing the mutable scene) is not a good idea considered that
+    //      extra steps are needed in order to update materials in the scene.
+    /// Map of all materials in the scene with their descriptor.
     pub materials: FnvHashMap<u16, (Material, Descriptor)>,
-    pub pipelines: FnvHashMap<ShaderMat, Pipeline>,
+    /// Map of all shaders in the scene with their pipeline.
+    pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
+    /// Map of all textures in the scene.
     pub textures: FnvHashMap<u16, TextureLoaded>,
 }
 
+/// A mesh optimized to be rendered using this crates renderer.
 pub struct VulkanMesh {
+    /// Offset of the mesh in the scene index buffer.
     pub index_offset: u32,
+    /// Number of indices of this mesh in the index buffer.
     pub index_count: u32,
+    /// Material id of this mesh.
     pub material: u16,
 }
 
+/// Contains the fences for commands run at load time. All these fences are waited on at the end
+/// of the scene loading.
 struct UnfinishedExecutions {
+    /// Fences to be waited on.
     fences: Vec<vk::Fence>,
+    /// Buffers that are to be freed after waiting on the fences.
     buffers_to_free: Vec<AllocatedBuffer>,
 }
 
 impl VulkanScene {
-    pub fn load<T: Device>(
+    /// Converts a parsed scene into a vulkan scene.
+    /// wchan is used to send feedbacks about the current loading status.
+    pub(super) fn load<T: Device>(
         device: &T,
         mut scene: Box<dyn ReadParsed>,
         mm: &mut MemoryManager,
         cmdm: &mut CommandManager,
-        dm: &mut DescriptorSetCreator,
+        dm: &mut DescriptorSetManager,
         wchan: Sender<String>,
     ) -> Result<Self, std::io::Error> {
         let mut unf = UnfinishedExecutions {
@@ -124,13 +145,14 @@ impl VulkanScene {
         })
     }
 
-    pub(crate) fn update_material<T: Device>(
+    /// Updates (changes) a single material in the scene.
+    pub(super) fn update_material<T: Device>(
         &mut self,
         device: &T,
         old: u16,
         new: Material,
         cmdm: &mut CommandManager,
-        dm: &mut DescriptorSetCreator,
+        dm: &mut DescriptorSetManager,
         rpass: vk::RenderPass,
         frame_desc_layout: vk::DescriptorSetLayout,
         render_size: vk::Extent2D,
@@ -211,7 +233,8 @@ impl VulkanScene {
         sort_meshes(&mut self.meshes, &self.materials);
     }
 
-    pub fn init_pipelines(
+    /// Initializes the scene's pipelines.
+    pub(super) fn init_pipelines(
         &mut self,
         render_size: vk::Extent2D,
         device: &ash::Device,
@@ -232,13 +255,15 @@ impl VulkanScene {
         }
     }
 
-    pub fn deinit_pipelines(&mut self, device: &ash::Device) {
+    /// Destroys the scene's pipelines.
+    pub(super) fn deinit_pipelines(&mut self, device: &ash::Device) {
         for (_, pipeline) in self.pipelines.drain() {
             pipeline.destroy(device);
         }
     }
 
-    pub fn unload<T: Device>(self, device: &T, mm: &mut MemoryManager) {
+    /// Unloads the scene from the GPU memory
+    pub(super) fn unload<T: Device>(self, device: &T, mm: &mut MemoryManager) {
         self.textures
             .into_iter()
             .chain([(u16::MAX, self.dflt_tex)])
@@ -251,6 +276,8 @@ impl VulkanScene {
     }
 }
 
+/// Creates the default sampler for this scene.
+/// Uses anisotropic filtering with the max anisotropy supported by the GPU.
 fn create_sampler<T: Device>(device: &T) -> vk::Sampler {
     let max_anisotropy = device.physical().properties.limits.max_sampler_anisotropy;
     let ci = vk::SamplerCreateInfo {
@@ -281,6 +308,8 @@ fn create_sampler<T: Device>(device: &T) -> vk::Sampler {
     }
 }
 
+/// Loads all vertices to GPU.
+/// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
 fn load_vertices_to_gpu<T: Device>(
     device: &T,
     mm: &mut MemoryManager,
@@ -326,6 +355,9 @@ fn load_vertices_to_gpu<T: Device>(
     gpu_buffer
 }
 
+/// Loads all indices to GPU.
+/// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
+/// Returns the list of meshes and the index buffer.
 fn load_indices_to_gpu<T: Device>(
     device: &T,
     mm: &mut MemoryManager,
@@ -385,6 +417,7 @@ fn load_indices_to_gpu<T: Device>(
     (converted_meshes, gpu_buffer)
 }
 
+/// Builds a single material descriptor set.
 fn build_mat_desc_set<T: Device>(
     device: &T,
     (textures, dflt_tex): (&FnvHashMap<u16, TextureLoaded>, &TextureLoaded),
@@ -392,7 +425,7 @@ fn build_mat_desc_set<T: Device>(
     sampler: vk::Sampler,
     id: u16,
     material: &Material,
-    dm: &mut DescriptorSetCreator,
+    dm: &mut DescriptorSetManager,
 ) -> Descriptor {
     let diffuse = if let Some(diff_id) = material.diffuse {
         textures.get(&diff_id).unwrap_or(dflt_tex)
@@ -447,6 +480,8 @@ fn build_mat_desc_set<T: Device>(
     descriptor
 }
 
+/// Loads all materials parameters to GPU.
+/// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
 fn load_materials_parameters<T: Device>(
     device: &T,
     materials: &[(u16, Material)],
@@ -504,6 +539,8 @@ fn load_materials_parameters<T: Device>(
     gpu_buffer
 }
 
+/// Loads all textures to the GPU with optimal layout.
+/// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
 fn load_texture_to_gpu<T: Device>(
     device: &T,
     mm: &mut MemoryManager,
@@ -513,7 +550,9 @@ fn load_texture_to_gpu<T: Device>(
 ) -> TextureLoaded {
     let (width, height) = texture.dimensions();
     let mip_levels = texture.mipmap_levels();
-    let full_size = (0..mip_levels).map(|x| texture.bytes(x)).sum::<usize>();
+    let full_size = (0..mip_levels)
+        .map(|x| texture.size_bytes(x))
+        .sum::<usize>();
     let extent = vk::Extent2D {
         width: width as u32,
         height: height as u32,
@@ -543,7 +582,7 @@ fn load_texture_to_gpu<T: Device>(
         .cast()
         .as_ptr();
     for level in 0..mip_levels {
-        let size = texture.bytes(level);
+        let size = texture.size_bytes(level);
         unsafe {
             std::ptr::copy_nonoverlapping(texture.ptr(level), mapped, size);
             mapped = mapped.add(size);
@@ -603,7 +642,7 @@ fn load_texture_to_gpu<T: Device>(
             },
         };
         regions.push(copy_region);
-        buffer_offset += texture.bytes(level) as u64;
+        buffer_offset += texture.size_bytes(level) as u64;
         width >>= 1;
         height >>= 1;
     }
@@ -659,11 +698,14 @@ fn sort_meshes(meshes: &mut Vec<VulkanMesh>, materials: &FnvHashMap<u16, (Materi
     });
 }
 
+/// Material paramters representation used by the shaders.
 #[repr(C)]
 struct MaterialParams {
+    /// Multiplier for the diffuse color.
     diffuse_mul: Vec3<f32>,
 }
 
+/// Size of the material parameters struct.
 const PARAMS_SIZE: u64 = std::mem::size_of::<MaterialParams>() as u64;
 
 impl From<&Material> for MaterialParams {
@@ -678,7 +720,7 @@ impl From<&Material> for MaterialParams {
     }
 }
 
-// how many bytes are required for `n` to be aligned to `align` boundary
+/// How many bytes are required for `n` to be aligned to `align` boundary
 fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
     ((!n.into()).wrapping_add(1)) & (align.into().wrapping_sub(1))
 }

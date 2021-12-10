@@ -1,31 +1,48 @@
 use cgmath::{ortho, perspective, InnerSpace, Matrix3, Matrix4, Point3, Rad, Vector3 as Vec3};
 
+/// A camera exhibiting a perspective projection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PerspectiveCam {
+    /// Position of the camera.
     pub position: Point3<f32>,
+    /// Target (focus) of the camera.
     pub target: Point3<f32>,
+    /// Vector pointing upwards.
     pub up: Vec3<f32>,
-    pub fovx: f32, // in radians
+    /// Horizontal field of view in radians.
+    pub fovx: f32,
+    /// Near clippling plane.
     pub near: f32,
+    /// Far clipping plane.
     pub far: f32,
 }
 
 impl PerspectiveCam {
+    /// Returns the vertical field of view in radians.
     pub fn fovy(&self, aspect_ratio: f32) -> f32 {
         2.0 * f32::atan(f32::tan(self.fovx * 0.5) / aspect_ratio)
     }
 }
 
+/// A camera exhibiting an orthographic projection.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OrthographicCam {
+    /// Position of the camera.
     pub position: Point3<f32>,
+    /// Target (focus) of the camera.
     pub target: Point3<f32>,
+    /// Vector pointing upwards.
     pub up: Vec3<f32>,
+    /// Left/Right/Top/Bottom absolute values of the clipping plane.
+    /// Sign will be adjusted accordingly.
     pub scale: f32,
+    /// Near clippling plane.
     pub near: f32,
+    /// Far clipping plane.
     pub far: f32,
 }
 
+/// A projective camera in 3D space.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Camera {
     Perspective(PerspectiveCam),
@@ -33,18 +50,23 @@ pub enum Camera {
 }
 
 impl Camera {
+    /// Returns the position of the camera.
     pub fn position(&self) -> Point3<f32> {
         match self {
             Camera::Perspective(cam) => cam.position,
             Camera::Orthographic(cam) => cam.position,
         }
     }
+
+    /// Returns the target of the camera.
     pub fn target(&self) -> Point3<f32> {
         match self {
             Camera::Perspective(cam) => cam.target,
             Camera::Orthographic(cam) => cam.target,
         }
     }
+
+    /// Returns the `up` vector of the camera.
     pub fn up(&self) -> Vec3<f32> {
         match self {
             Camera::Perspective(cam) => cam.up,
@@ -52,6 +74,7 @@ impl Camera {
         }
     }
 
+    /// Returns the value of the camera near clipping plane.
     pub fn near_plane(&self) -> f32 {
         match self {
             Camera::Perspective(cam) => cam.near,
@@ -59,6 +82,7 @@ impl Camera {
         }
     }
 
+    /// Returns the value of the camera far clipping plane.
     pub fn far_plane(&self) -> f32 {
         match self {
             Camera::Perspective(cam) => cam.far,
@@ -66,6 +90,7 @@ impl Camera {
         }
     }
 
+    /// Returns the right handed (i.e. OpenGL style) view matrix for the current camera.
     pub fn look_at_rh(&self) -> Matrix4<f32> {
         match self {
             Camera::Perspective(cam) => Matrix4::look_at_rh(cam.position, cam.target, cam.up),
@@ -73,6 +98,7 @@ impl Camera {
         }
     }
 
+    /// Returns the projection matrix for the current camera.
     pub fn projection(&self, aspect_ratio: f32) -> Matrix4<f32> {
         match self {
             Camera::Perspective(cam) => {
@@ -85,6 +111,9 @@ impl Camera {
         }
     }
 
+    /// Moves the camera by strafing left/right by the given magnitude.
+    ///
+    /// The left/right direction is determined by the magnitude sign.
     pub fn strafe(&mut self, magnitude: f32) {
         let position;
         let target;
@@ -109,6 +138,9 @@ impl Camera {
         *target += mov_vec;
     }
 
+    /// Advance the camera towards its target by the given magnitude.
+    ///
+    /// If the magnitude is negative, the camera will move away from the target.
     pub fn advance(&mut self, magnitude: f32) {
         let position;
         let target;
@@ -131,6 +163,7 @@ impl Camera {
         *target += mov_vec * magnitude;
     }
 
+    /// Move the camera along its vertical axis.
     pub fn elevate(&mut self, magnitude: f32) {
         let position;
         let target;
@@ -152,6 +185,9 @@ impl Camera {
         *target += magnitude * *up;
     }
 
+    /// Move the camera target while keeping the same camera position.
+    /// The horizontal angle of movement is `theta`, and the vertical angle is `phi`.
+    /// Both angles are expressed in radians.
     pub fn look_around(&mut self, theta: f32, phi: f32) {
         let position;
         let target;
