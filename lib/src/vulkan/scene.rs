@@ -31,14 +31,12 @@ pub struct VulkanScene {
     sampler: vk::Sampler,
     /// Default texture used when a texture is required but missing. This is a 1x1 white texture.
     dflt_tex: TextureLoaded,
-    //TODO: exposing the field (and exposing the mutable scene) is not a good idea considered that
-    //      extra steps are needed in order to update materials in the scene.
     /// Map of all materials in the scene with their descriptor.
-    pub materials: FnvHashMap<u16, (Material, Descriptor)>,
+    pub(super) materials: FnvHashMap<u16, (Material, Descriptor)>,
     /// Map of all shaders in the scene with their pipeline.
     pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
     /// Map of all textures in the scene.
-    pub textures: FnvHashMap<u16, TextureLoaded>,
+    pub(super) textures: FnvHashMap<u16, TextureLoaded>,
 }
 
 /// A mesh optimized to be rendered using this crates renderer.
@@ -273,6 +271,35 @@ impl VulkanScene {
         mm.free_buffer(self.index_buffer);
         mm.free_buffer(self.params_buffer);
         mm.free_buffer(self.update_buffer);
+    }
+
+    /// Returns a material in the scene, given its ID.
+    /// Returns None if the material does not exist.
+    pub fn single_material(&self, id: u16) -> Option<&Material> {
+        self.materials.get(&id).map(|(mat, _)| mat)
+    }
+
+    /// Returns all the materials in the scene.
+    /// Each returned material is a tuple containing the material ID and the material itself.
+    /// The order of the materials is not guaranteed.
+    pub fn materials(&self) -> Vec<(u16, &Material)> {
+        self.materials
+            .iter()
+            .map(|(id, (mat, _))| (*id, mat))
+            .collect()
+    }
+
+    //// Returns a texture in the scene, given its ID.
+    /// Returns None if the texture does not exists.
+    pub fn single_texture(&self, id: u16) -> Option<&TextureLoaded> {
+        self.textures.get(&id)
+    }
+
+    /// Returns all the textures in the scene.
+    /// Each returned texture is a tuple containing the texture ID and the texture itself.
+    /// The order of the textures is not guaranteed.
+    pub fn textures(&self) -> Vec<(u16, &TextureLoaded)> {
+        self.textures.iter().map(|(id, tex)| (*id, tex)).collect()
     }
 }
 

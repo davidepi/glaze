@@ -247,7 +247,7 @@ fn window_textures(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut 
     let scene = renderer.scene();
     let preview = match (&selected, scene) {
         (Some(id), Some(scene)) => {
-            let texture = scene.textures.get(id).unwrap();
+            let texture = scene.single_texture(*id).unwrap();
             &texture.info.name
         }
         _ => "",
@@ -261,18 +261,18 @@ fn window_textures(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut 
                 .preview_value(preview)
                 .build(ui, || {
                     if let Some(scene) = scene {
-                        let mut all_textures = scene.textures.iter().collect::<Vec<_>>();
-                        all_textures.sort_by_key(|(&id, _)| id);
+                        let mut all_textures = scene.textures().into_iter().collect::<Vec<_>>();
+                        all_textures.sort_by_key(|(id, _)| *id);
                         all_textures.into_iter().for_each(|(id, texture)| {
                             if Selectable::new(&texture.info.name).build(ui) {
-                                *selected = Some(*id);
+                                *selected = Some(id);
                             }
                         });
                     }
                 });
             if let Some(selected) = selected {
                 ui.separator();
-                let info = &scene.unwrap().textures.get(selected).unwrap().info;
+                let info = &scene.unwrap().single_texture(*selected).unwrap().info;
                 ui.text(format!("Resolution {}x{}", info.width, info.height));
                 ui.text(format!("Format {}", channels_to_string(info.format)));
                 let tex_w = 512.0;
@@ -319,7 +319,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut
     let scene = renderer.scene();
     let preview = match (&selected, scene) {
         (Some(id), Some(scene)) => {
-            let (material, _) = scene.materials.get(id).unwrap();
+            let material = scene.single_material(*id).unwrap();
             &material.name
         }
         _ => "",
@@ -335,11 +335,11 @@ fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut
             .begin(ui)
         {
             if let Some(scene) = scene {
-                let mut all_mats = scene.materials.iter().collect::<Vec<_>>();
-                all_mats.sort_by_key(|(&id, _)| id);
-                all_mats.into_iter().for_each(|(id, (mat, _))| {
+                let mut all_mats = scene.materials();
+                all_mats.sort_by_key(|(id, _)| *id);
+                all_mats.into_iter().for_each(|(id, mat)| {
                     if Selectable::new(&mat.name).build(ui) {
-                        *selected = Some(*id);
+                        *selected = Some(id);
                     }
                 });
             }
@@ -352,7 +352,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut
             let mut new_diff_mul = None;
             let mut new_opacity = None;
             ui.separator();
-            let current = &scene.materials.get(selected).unwrap().0;
+            let current = scene.single_material(*selected).unwrap();
             if let Some(shader_combo) = ComboBox::new("Type")
                 .preview_value(current.shader.name())
                 .begin(ui)
@@ -425,7 +425,7 @@ fn texture_selector(
 ) -> (Option<u16>, bool) {
     let mut clicked_on_preview = false;
     let name = if let Some(id) = selected {
-        &scene.textures.get(&id).unwrap().info.name
+        &scene.single_texture(id).unwrap().info.name
     } else {
         ""
     };
@@ -433,9 +433,9 @@ fn texture_selector(
         if Selectable::new("").build(ui) {
             selected = None;
         }
-        for (id, texture) in scene.textures.iter() {
+        for (id, texture) in scene.textures().into_iter() {
             if Selectable::new(&texture.info.name).build(ui) {
-                selected = Some(*id);
+                selected = Some(id);
             }
         }
         cb.end();

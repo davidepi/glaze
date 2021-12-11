@@ -8,7 +8,10 @@ mod parser;
 mod vulkan;
 
 pub use geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
-pub use materials::{Material, ShaderMat, Texture, TextureFormat, TextureInfo};
+pub use materials::{
+    Material, ShaderMat, Texture, TextureFormat, TextureGray, TextureInfo, TextureLoaded,
+    TextureRGBA,
+};
 pub use parser::{converted_file, parse, serialize, ParserVersion, ReadParsed};
 #[cfg(feature = "vulkan")]
 pub use vulkan::{Pipeline, PipelineBuilder, PresentInstance, RealtimeRenderer, VulkanScene};
