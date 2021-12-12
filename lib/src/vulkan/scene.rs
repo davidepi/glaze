@@ -106,14 +106,14 @@ impl VulkanScene {
         wchan.send("[4/4] Loading materials...".to_string()).ok();
         let materials = parsed_mats
             .into_iter()
-            .map(|(id, mat)| {
+            .map(|(id, mut mat)| {
                 let descriptor = build_mat_desc_set(
                     device,
                     (&textures, &dflt_tex),
                     &params_buffer,
                     sampler,
                     id,
-                    &mat,
+                    &mut mat,
                     dm,
                 );
                 (id, (mat, descriptor))
@@ -147,24 +147,16 @@ impl VulkanScene {
     pub(super) fn update_material<T: Device>(
         &mut self,
         device: &T,
-        old: u16,
-        new: Material,
+        mat_id: u16,
+        mut new: Material,
         cmdm: &mut CommandManager,
         dm: &mut DescriptorSetManager,
         rpass: vk::RenderPass,
         frame_desc_layout: vk::DescriptorSetLayout,
         render_size: vk::Extent2D,
     ) {
-        let new_shader = new.shader;
-        let already_has_new_shader = self
-            .materials
-            .iter()
-            .any(|(_, (mat, _))| mat.shader == new_shader);
-
-        let (mat, desc) = self.materials.get_mut(&old).unwrap();
-        let old_shader = mat.shader;
-        *mat = new;
-        let params = MaterialParams::from(&*mat);
+        // setup the new descriptor
+        let params = MaterialParams::from(&new);
         let mapped = self
             .update_buffer
             .allocation
@@ -183,7 +175,7 @@ impl VulkanScene {
         let padding = padding(PARAMS_SIZE, align);
         let copy_region = vk::BufferCopy {
             src_offset: 0,
-            dst_offset: (PARAMS_SIZE + padding) * old as u64,
+            dst_offset: (PARAMS_SIZE + padding) * mat_id as u64,
             size: PARAMS_SIZE,
         };
         let command = unsafe {
@@ -199,35 +191,48 @@ impl VulkanScene {
         let cmd = cmdm.get_cmd_buffer();
         let fence = device.immediate_execute(cmd, command);
         device.wait_completion(&[fence]);
-        *desc = build_mat_desc_set(
+        let new_desc = build_mat_desc_set(
             device,
             (&self.textures, &self.dflt_tex),
             &self.params_buffer,
             self.sampler,
-            old,
-            mat,
+            mat_id,
+            &mut new,
             dm,
         );
-        if !already_has_new_shader {
-            let new_pipeline = new_shader.build_pipeline().build(
-                device.logical(),
-                rpass,
-                render_size,
-                &[frame_desc_layout, desc.layout],
-            );
-            self.pipelines.insert(new_shader, new_pipeline);
+        // remove the old material
+        let (old, _) = self.materials.remove(&mat_id).unwrap();
+        // modify pipelines if the materials are different
+        if old.shader != new.shader {
+            // check the presence of new/old shaders in the existing pipelines
+            let already_has_new_shader = self
+                .materials
+                .iter()
+                .any(|(_, (mat, _))| mat.shader == new.shader);
+            let old_shader_remains = self
+                .materials
+                .iter()
+                .any(|(_, (mat, _))| mat.shader == old.shader);
+            // update the pipelines accordingly
+            if !already_has_new_shader {
+                let new_pipeline = new.shader.build_pipeline().build(
+                    device.logical(),
+                    rpass,
+                    render_size,
+                    &[frame_desc_layout, new_desc.layout],
+                );
+                self.pipelines.insert(new.shader, new_pipeline);
+            }
+            if !old_shader_remains {
+                self.pipelines
+                    .remove(&old.shader)
+                    .unwrap()
+                    .destroy(device.logical());
+            }
         }
-        if !self
-            .materials
-            .iter()
-            .any(|(_, (mat, _))| mat.shader == old_shader)
-        {
-            // possible to delete the pipeline
-            self.pipelines
-                .remove(&old_shader)
-                .unwrap()
-                .destroy(device.logical());
-        }
+        // insert the new material
+        self.materials.insert(mat_id, (new, new_desc));
+        // sort the meshes to minimize bindings
         sort_meshes(&mut self.meshes, &self.materials);
     }
 
@@ -451,7 +456,7 @@ fn build_mat_desc_set<T: Device>(
     params: &AllocatedBuffer,
     sampler: vk::Sampler,
     id: u16,
-    material: &Material,
+    material: &mut Material,
     dm: &mut DescriptorSetManager,
 ) -> Descriptor {
     let diffuse = if let Some(diff_id) = material.diffuse {
@@ -459,19 +464,9 @@ fn build_mat_desc_set<T: Device>(
     } else {
         dflt_tex
     };
-    let opacity = if let Some(op_id) = material.opacity {
-        textures.get(&op_id).unwrap_or(dflt_tex)
-    } else {
-        dflt_tex
-    };
     let diffuse_image_info = vk::DescriptorImageInfo {
         sampler,
         image_view: diffuse.image.image_view,
-        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-    };
-    let opacity_image_info = vk::DescriptorImageInfo {
-        sampler,
-        image_view: opacity.image.image_view,
         image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
     };
     let align = device
@@ -486,7 +481,7 @@ fn build_mat_desc_set<T: Device>(
         range: PARAMS_SIZE,
     };
     // TODO: merge materials with the same textures to avoid extra bindings
-    let descriptor = dm
+    let mut descriptor = dm
         .new_set()
         .bind_buffer(
             buf_info,
@@ -497,14 +492,22 @@ fn build_mat_desc_set<T: Device>(
             diffuse_image_info,
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             vk::ShaderStageFlags::FRAGMENT,
-        )
-        .bind_image(
+        );
+    if let Some(op_id) = material.opacity {
+        material.shader = material.shader.two_sided(); // use a two-sided shader
+        let opacity = textures.get(&op_id).unwrap_or(dflt_tex);
+        let opacity_image_info = vk::DescriptorImageInfo {
+            sampler,
+            image_view: opacity.image.image_view,
+            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        };
+        descriptor = descriptor.bind_image(
             opacity_image_info,
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             vk::ShaderStageFlags::FRAGMENT,
-        )
-        .build();
-    descriptor
+        );
+    }
+    descriptor.build()
 }
 
 /// Loads all materials parameters to GPU.
