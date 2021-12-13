@@ -1,3 +1,4 @@
+#![allow(clippy::type_complexity)]
 use cgmath::{Point3, Vector2 as Vec2, Vector3 as Vec3};
 use clap::{App, Arg};
 use console::style;
@@ -139,7 +140,7 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
     let cameras = camera_thread.join().unwrap();
     let (materials, textures) = material_thread.join().unwrap()?;
     let mm_pb = mpb.add(ProgressBar::new(1));
-    mm_pb.set_style(style.clone());
+    mm_pb.set_style(style);
     let tex_mm_thread = thread::spawn(move || gen_mipmaps(textures, mm_pb));
     let (vertices, meshes) = mesh_thread.join().unwrap()?;
     let textures = tex_mm_thread.join().unwrap();
@@ -277,7 +278,7 @@ fn convert_materials(
             match texture_type {
                 russimp::texture::TextureType::Diffuse => {
                     convert_texture(
-                        &tex_name,
+                        tex_name,
                         path,
                         &mut used_textures,
                         TextureFormat::Rgba,
@@ -286,7 +287,7 @@ fn convert_materials(
                 }
                 russimp::texture::TextureType::Opacity => {
                     convert_texture(
-                        &tex_name,
+                        tex_name,
                         path,
                         &mut used_textures,
                         TextureFormat::Gray,
@@ -343,7 +344,7 @@ fn convert_texture(
             };
             let id = ret.len() as u16;
             ret.push((id, texture));
-            used.insert(used_name.to_string(), id);
+            used.insert(used_name, id);
             Ok(())
         } else {
             Err(std::io::Error::new(
@@ -364,7 +365,12 @@ fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, 
             "$clr.diffuse" => retval.diffuse_mul = fcol_to_ucol(matprop_to_fvec(property)),
             "$tex.file" => {
                 let prop_name = matprop_to_str(property);
-                let tex_name = used_name(&prop_name, TextureFormat::Rgba);
+                let format = match property.semantic {
+                    russimp::texture::TextureType::Diffuse => TextureFormat::Rgba,
+                    russimp::texture::TextureType::Opacity => TextureFormat::Gray,
+                    _ => TextureFormat::Rgba,
+                };
+                let tex_name = used_name(&prop_name, format);
                 let texture = used_textures.get(&tex_name);
                 match property.semantic {
                     russimp::texture::TextureType::Diffuse => retval.diffuse = texture.copied(),
