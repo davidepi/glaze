@@ -5,8 +5,8 @@ use glaze::{
     VulkanScene,
 };
 use imgui::{
-    CollapsingHeader, ColorEdit, ColorEditFlags, ColorPicker, ComboBox, Condition, Image,
-    ImageButton, MenuItem, PopupModal, Selectable, SelectableFlags, Slider, TextureId, Ui,
+    CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
+    Selectable, SelectableFlags, Slider, SliderFlags, TextureId, Ui,
 };
 use nfd2::Response;
 use winit::window::Window;
@@ -153,8 +153,8 @@ fn window_settings(
                 }
                 ui.separator();
                 let mut color = renderer.get_clear_color();
-                if ColorPicker::new("Background color", &mut color)
-                    .flags(ColorEditFlags::NO_ALPHA)
+                if ColorEdit::new("Background color", &mut color)
+                    .inputs(false)
                     .build(ui)
                 {
                     renderer.set_clear_color(color);
@@ -209,15 +209,23 @@ fn window_settings(
                     });
                 match renderer.camera_mut() {
                     Some(Camera::Perspective(cam)) => {
-                        Slider::new("Near clipping plane", 0.01, 1.0).build(ui, &mut cam.near);
-                        Slider::new("Far clipping plane", 100.0, 10000.0).build(ui, &mut cam.far);
+                        Slider::new("Near clipping plane", 0.01, 1.0)
+                            .flags(SliderFlags::ALWAYS_CLAMP)
+                            .build(ui, &mut cam.near);
+                        Slider::new("Far clipping plane", 100.0, 10000.0)
+                            .flags(SliderFlags::ALWAYS_CLAMP)
+                            .build(ui, &mut cam.far);
                         let mut fovx = cam.fovx.to_degrees();
                         Slider::new("Field of View", 1.0, 150.0).build(ui, &mut fovx);
                         cam.fovx = fovx.to_radians();
                     }
                     Some(Camera::Orthographic(cam)) => {
-                        Slider::new("Near clipping plane", 0.01, 1.0).build(ui, &mut cam.near);
-                        Slider::new("Far clipping plane", 100.0, 10000.0).build(ui, &mut cam.far);
+                        Slider::new("Near clipping plane", 0.01, 1.0)
+                            .flags(SliderFlags::ALWAYS_CLAMP)
+                            .build(ui, &mut cam.near);
+                        Slider::new("Far clipping plane", 100.0, 10000.0)
+                            .flags(SliderFlags::ALWAYS_CLAMP)
+                            .build(ui, &mut cam.far);
                         Slider::new("Scale", 1.0, 10.0).build(ui, &mut cam.scale);
                     }
                     _ => {}
