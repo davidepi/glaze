@@ -578,7 +578,7 @@ fn load_texture_to_gpu<T: Device>(
     unfinished: &mut UnfinishedExecutions,
     texture: Texture,
 ) -> TextureLoaded {
-    let (width, height) = texture.dimensions();
+    let (width, height) = texture.dimensions(0);
     let mip_levels = texture.mipmap_levels();
     let full_size = (0..mip_levels)
         .map(|x| texture.size_bytes(x))
@@ -651,8 +651,8 @@ fn load_texture_to_gpu<T: Device>(
     };
     let mut regions = Vec::with_capacity(mip_levels);
     let mut buffer_offset = 0;
-    let (mut width, mut height) = (width, height);
     for level in 0..mip_levels {
+        let (mip_w, mip_h) = texture.dimensions(level);
         let image_subresource = vk::ImageSubresourceLayers {
             aspect_mask: vk::ImageAspectFlags::COLOR,
             mip_level: level as u32,
@@ -666,15 +666,13 @@ fn load_texture_to_gpu<T: Device>(
             image_subresource,
             image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
             image_extent: vk::Extent3D {
-                width: width as u32,
-                height: height as u32,
+                width: mip_w as u32,
+                height: mip_h as u32,
                 depth: 1,
             },
         };
         regions.push(copy_region);
         buffer_offset += texture.size_bytes(level) as u64;
-        width >>= 1;
-        height >>= 1;
     }
     let command = unsafe {
         |device: &ash::Device, cmd: vk::CommandBuffer| {

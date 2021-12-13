@@ -786,12 +786,11 @@ fn texture_to_bytes((index, texture): &(u16, Texture)) -> Vec<u8> {
     let name = texture.name();
     let str_len = name.bytes().len();
     assert!(str_len < 256);
-    let (width, height) = texture.dimensions();
     let miplvls = texture.mipmap_levels();
-    let (mut w_mip, mut h_mip) = (width, height);
     let mut tex_data = Vec::new();
     for level in 0..miplvls {
         let mut mip_data = Vec::new();
+        let (w_mip, h_mip) = texture.dimensions(level);
         let mip = texture.raw(level);
         // ad-hoc compression surely better than general purpose one
         PngEncoder::new_with_quality(
@@ -806,8 +805,6 @@ fn texture_to_bytes((index, texture): &(u16, Texture)) -> Vec<u8> {
             texture.format().to_color_type(),
         )
         .expect("Failed to encode texture");
-        w_mip >>= 1;
-        h_mip >>= 1;
         tex_data.extend((mip_data.len() as u32).to_le_bytes());
         tex_data.extend(mip_data);
     }

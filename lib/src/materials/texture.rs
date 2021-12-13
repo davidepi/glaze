@@ -140,12 +140,13 @@ impl Texture {
 
     /// Returns (width, height) of the texture in pixel.
     ///
-    /// Only the first MIP map is considered (level 0).
-    pub fn dimensions(&self) -> (u16, u16) {
-        match self {
+    /// The parameter level refers to the specific MIP map level.
+    pub fn dimensions(&self, level: usize) -> (u16, u16) {
+        let (w, h) = match self {
             Texture::Rgba(t) => (t.info.width, t.info.height),
             Texture::Gray(t) => (t.info.width, t.info.height),
-        }
+        };
+        (std::cmp::max(1, w >> level), std::cmp::max(1, h >> level))
     }
 
     /// Returns the format of the texture.
@@ -234,17 +235,14 @@ where
 {
     let mut w = img.width();
     let mut h = img.height();
-    debug_assert!(w == h, "the texture must be square");
-    debug_assert!(
-        (w & (w - 1)) == 0,
-        "texture dimensions must be a power of 2"
-    );
-    let mip_levels = ilog2(w) as usize;
+    debug_assert!((w & (w - 1)) == 0, "texture width must be a power of 2");
+    debug_assert!((h & (h - 1)) == 0, "texture height must be a power of 2");
+    let mip_levels = 1 + ilog2(std::cmp::max(w, h)) as usize;
     let mut mipmaps = Vec::with_capacity(mip_levels);
     mipmaps.push(img);
-    for level in 1..=mip_levels {
-        w >>= 1;
-        h >>= 1;
+    for level in 1..mip_levels {
+        w = std::cmp::max(1, w >> 1);
+        h = std::cmp::max(1, h >> 1);
         let mipmap = resize(&mipmaps[level - 1], w, h, FilterType::CatmullRom);
         mipmaps.push(mipmap);
     }
@@ -298,5 +296,38 @@ mod tests {
         assert_eq!(mipmaps[7].width(), 4);
         assert_eq!(mipmaps[8].width(), 2);
         assert_eq!(mipmaps[9].width(), 1);
+    }
+
+    #[test]
+    fn mipmaps_nonuniform() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("resources")
+            .join("checker_nu.jpg");
+        let img = image::open(path).unwrap().to_rgba8();
+        let mipmaps = super::gen_mipmaps::<image::RgbaImage>(img);
+        assert_eq!(mipmaps.len(), 10);
+        assert_eq!(mipmaps[0].width(), 64);
+        assert_eq!(mipmaps[1].width(), 32);
+        assert_eq!(mipmaps[2].width(), 16);
+        assert_eq!(mipmaps[3].width(), 8);
+        assert_eq!(mipmaps[4].width(), 4);
+        assert_eq!(mipmaps[5].width(), 2);
+        assert_eq!(mipmaps[6].width(), 1);
+        assert_eq!(mipmaps[7].width(), 1);
+        assert_eq!(mipmaps[8].width(), 1);
+        assert_eq!(mipmaps[9].width(), 1);
+
+        assert_eq!(mipmaps[0].height(), 512);
+        assert_eq!(mipmaps[1].height(), 256);
+        assert_eq!(mipmaps[2].height(), 128);
+        assert_eq!(mipmaps[3].height(), 64);
+        assert_eq!(mipmaps[4].height(), 32);
+        assert_eq!(mipmaps[5].height(), 16);
+        assert_eq!(mipmaps[6].height(), 8);
+        assert_eq!(mipmaps[7].height(), 4);
+        assert_eq!(mipmaps[8].height(), 2);
+        assert_eq!(mipmaps[9].height(), 1);
     }
 }
