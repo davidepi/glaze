@@ -6,7 +6,7 @@ use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderer::InternalStats;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
-use crate::include_shader;
+use crate::{include_shader, TextureFormat};
 use ash::vk;
 use cgmath::Vector2 as Vec2;
 use fnv::FnvHashMap;
@@ -43,6 +43,8 @@ pub struct ImguiRenderer {
     font: AllocatedImage,
     font_descriptor: Descriptor,
     pipeline: Pipeline,
+    // pipeline for single_channel images (sampler takes .rrr instead of .rgb)
+    pipeline_bw: Pipeline,
     sampler: vk::Sampler,
     tex_descs: FnvHashMap<u16, Descriptor>,
 }
@@ -146,7 +148,8 @@ impl ImguiRenderer {
         // assign tex_id AFTER building the font atlas or it gets reset
         let mut fonts = context.fonts();
         fonts.tex_id = FONT_ATLAS_TEXTURE_ID;
-        let pipeline = build_imgui_pipeline(device.logical(), swapchain, &font_descriptor);
+        let pipeline = build_imgui_pipeline(device.logical(), swapchain, &font_descriptor, false);
+        let pipeline_bw = build_imgui_pipeline(device.logical(), swapchain, &font_descriptor, true);
         Self {
             vertex_size,
             vertex_buf,
@@ -154,6 +157,7 @@ impl ImguiRenderer {
             index_buf,
             font: fonts_gpu_buf,
             pipeline,
+            pipeline_bw,
             sampler,
             font_descriptor,
             tex_descs: FnvHashMap::default(),
@@ -162,14 +166,18 @@ impl ImguiRenderer {
 
     /// Updates the underlying swapchain (and therefore the imgui render size)
     pub(super) fn update_swapchain(&mut self, device: &ash::Device, swapchain: &Swapchain) {
-        let mut pipeline = build_imgui_pipeline(device, swapchain, &self.font_descriptor);
+        let mut pipeline = build_imgui_pipeline(device, swapchain, &self.font_descriptor, false);
+        let mut pipeline_bw = build_imgui_pipeline(device, swapchain, &self.font_descriptor, true);
         std::mem::swap(&mut self.pipeline, &mut pipeline);
+        std::mem::swap(&mut self.pipeline_bw, &mut pipeline_bw);
         pipeline.destroy(device);
+        pipeline_bw.destroy(device);
     }
 
     /// destroy the imgui renderer
     pub(super) fn destroy(self, device: &ash::Device, mm: &mut MemoryManager) {
         self.pipeline.destroy(device);
+        self.pipeline_bw.destroy(device);
         unsafe { device.destroy_sampler(self.sampler, None) };
         mm.free_buffer(self.vertex_buf);
         mm.free_buffer(self.index_buf);
@@ -246,6 +254,7 @@ impl ImguiRenderer {
             );
         }
         let mut bound_texture = FONT_ATLAS_TEXTURE_ID;
+        let mut pipeline_bw = false;
         let mut vert_offset = 0;
         let mut idx_offset = 0;
         let clip_offset = draw_data.display_pos;
@@ -319,6 +328,24 @@ impl ImguiRenderer {
                         // change pipeline if needed + create descriptor for texture if needed
                         if texture_id != bound_texture {
                             if texture_id == FONT_ATLAS_TEXTURE_ID {
+                                if pipeline_bw {
+                                    // set default pipeline
+                                    pipeline_bw = false;
+                                    unsafe {
+                                        device.cmd_bind_pipeline(
+                                            cmd,
+                                            vk::PipelineBindPoint::GRAPHICS,
+                                            self.pipeline.pipeline,
+                                        );
+                                        device.cmd_push_constants(
+                                            cmd,
+                                            self.pipeline.layout,
+                                            vk::ShaderStageFlags::VERTEX,
+                                            0,
+                                            as_u8_slice(&imguipc),
+                                        );
+                                    }
+                                }
                                 unsafe {
                                     device.cmd_bind_descriptor_sets(
                                         cmd,
@@ -332,10 +359,10 @@ impl ImguiRenderer {
                             } else if let Some(scene) = scene {
                                 // texture_id != FONT_ATLAS_TEXTURE_ID implicitly assumed
                                 let tid_u16 = texture_id.id() as u16;
+                                // this should never fail
+                                let texture = scene.textures.get(&tid_u16).unwrap();
                                 let descriptor =
                                     self.tex_descs.entry(tid_u16).or_insert_with(|| {
-                                        // this should never fail unless I render textures outside engine
-                                        let texture = scene.textures.get(&tid_u16).unwrap();
                                         let info = vk::DescriptorImageInfo {
                                             sampler: self.sampler,
                                             image_view: texture.image.image_view,
@@ -349,6 +376,42 @@ impl ImguiRenderer {
                                             )
                                             .build()
                                     });
+                                if texture.info.format == TextureFormat::Rgba && pipeline_bw {
+                                    // set default pipeline
+                                    pipeline_bw = false;
+                                    unsafe {
+                                        device.cmd_bind_pipeline(
+                                            cmd,
+                                            vk::PipelineBindPoint::GRAPHICS,
+                                            self.pipeline.pipeline,
+                                        );
+                                        device.cmd_push_constants(
+                                            cmd,
+                                            self.pipeline.layout,
+                                            vk::ShaderStageFlags::VERTEX,
+                                            0,
+                                            as_u8_slice(&imguipc),
+                                        );
+                                    }
+                                } else if texture.info.format == TextureFormat::Gray && !pipeline_bw
+                                {
+                                    // set bw pipeline
+                                    pipeline_bw = true;
+                                    unsafe {
+                                        device.cmd_bind_pipeline(
+                                            cmd,
+                                            vk::PipelineBindPoint::GRAPHICS,
+                                            self.pipeline_bw.pipeline,
+                                        );
+                                        device.cmd_push_constants(
+                                            cmd,
+                                            self.pipeline_bw.layout,
+                                            vk::ShaderStageFlags::VERTEX,
+                                            0,
+                                            as_u8_slice(&imguipc),
+                                        );
+                                    }
+                                }
                                 unsafe {
                                     device.cmd_bind_descriptor_sets(
                                         cmd,
@@ -385,10 +448,13 @@ impl ImguiRenderer {
 }
 
 /// Builds the imgui pipeline. font_descriptor is the descriptor set containing the font texture.
+/// bw indicates that the pipeline uses a grayscale texture (uses .rrr instead of .rgb to avoid
+/// having red tint on single channel textures).
 fn build_imgui_pipeline(
     device: &ash::Device,
     swapchain: &Swapchain,
     font_descriptor: &Descriptor,
+    bw: bool,
 ) -> Pipeline {
     let mut builder = PipelineBuilder {
         binding_descriptions: vec![vk::VertexInputBindingDescription {
@@ -425,11 +491,19 @@ fn build_imgui_pipeline(
         "main",
         vk::ShaderStageFlags::VERTEX,
     );
-    builder.push_shader(
-        include_shader!("imgui.frag"),
-        "main",
-        vk::ShaderStageFlags::FRAGMENT,
-    );
+    if bw {
+        builder.push_shader(
+            include_shader!("imgui_bw.frag"),
+            "main",
+            vk::ShaderStageFlags::FRAGMENT,
+        );
+    } else {
+        builder.push_shader(
+            include_shader!("imgui.frag"),
+            "main",
+            vk::ShaderStageFlags::FRAGMENT,
+        );
+    };
     builder.dynamic_states = vec![vk::DynamicState::SCISSOR];
     builder.push_constants(std::mem::size_of::<ImguiPC>(), vk::ShaderStageFlags::VERTEX);
     builder.blending_settings = vec![vk::PipelineColorBlendAttachmentState {

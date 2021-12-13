@@ -5,5 +5,6 @@ layout(location = 0) in struct { vec4 col; vec2 uv; } In;
 
 void main()
 {
-    col = In.col * texture(fonts, In.uv.st);
+    // used for single channel textures, to avoid the color red
+    col = In.col * vec4(texture(fonts, In.uv.st).rrr, 1.0);
 }
