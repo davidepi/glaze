@@ -65,7 +65,6 @@ impl UiState {
 }
 
 pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
-    ui.show_demo_window(&mut state.stats_window);
     ui.main_menu_bar(|| {
         ui.menu("File", || {
             if MenuItem::new("Open").build(ui) {
@@ -242,7 +241,7 @@ fn window_settings(
 }
 
 fn window_textures(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut RealtimeRenderer) {
-    let mut closed = &mut state.textures_window;
+    let closed = &mut state.textures_window;
     let selected = &mut state.textures_selected;
     let scene = renderer.scene();
     let preview = match (&selected, scene) {
@@ -253,7 +252,7 @@ fn window_textures(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut 
         _ => "",
     };
     imgui::Window::new("Textures")
-        .opened(&mut closed)
+        .opened(closed)
         .size([300.0, 300.0], Condition::Appearing)
         .save_settings(false)
         .build(ui, || {
@@ -314,7 +313,7 @@ fn channels_to_string(colortype: TextureFormat) -> &'static str {
 }
 
 fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut RealtimeRenderer) {
-    let mut closed = &mut state.materials_window;
+    let closed = &mut state.materials_window;
     let selected = &mut state.materials_selected;
     let scene = renderer.scene();
     let preview = match (&selected, scene) {
@@ -325,7 +324,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut
         _ => "",
     };
     if let Some(window) = imgui::Window::new("Materials")
-        .opened(&mut closed)
+        .opened(closed)
         .size([400.0, 400.0], Condition::Appearing)
         .save_settings(false)
         .begin(ui)
@@ -436,6 +435,11 @@ fn texture_selector(
         for (id, texture) in scene.textures().into_iter() {
             if Selectable::new(&texture.info.name).build(ui) {
                 selected = Some(id);
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip(|| {
+                    Image::new(TextureId::new(id as usize), [128.0, 128.0]).build(ui);
+                });
             }
         }
         cb.end();
