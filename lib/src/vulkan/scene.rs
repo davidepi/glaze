@@ -189,7 +189,8 @@ impl VulkanScene {
             }
         };
         let cmd = cmdm.get_cmd_buffer();
-        let fence = device.immediate_execute(cmd, command);
+        let queue = device.graphic_queue();
+        let fence = device.immediate_execute(cmd, queue, command);
         device.wait_completion(&[fence]);
         let new_desc = build_mat_desc_set(
             device,
@@ -381,7 +382,8 @@ fn load_vertices_to_gpu<T: Device>(
         }
     };
     let cmd = cmdm.get_cmd_buffer();
-    let fence = device.immediate_execute(cmd, command);
+    let transfer_queue = device.transfer_queue();
+    let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.fences.push(fence);
     unfinished.buffers_to_free.push(cpu_buffer);
     gpu_buffer
@@ -443,7 +445,8 @@ fn load_indices_to_gpu<T: Device>(
         }
     };
     let cmd = cmdm.get_cmd_buffer();
-    let fence = device.immediate_execute(cmd, command);
+    let transfer_queue = device.transfer_queue();
+    let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.fences.push(fence);
     unfinished.buffers_to_free.push(cpu_buffer);
     (converted_meshes, gpu_buffer)
@@ -563,7 +566,8 @@ fn load_materials_parameters<T: Device>(
         }
     };
     let cmd = cmdm.get_cmd_buffer();
-    let fence = device.immediate_execute(cmd, command);
+    let transfer_queue = device.transfer_queue();
+    let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.fences.push(fence);
     unfinished.buffers_to_free.push(cpu_buffer);
     gpu_buffer
@@ -704,7 +708,8 @@ fn load_texture_to_gpu<T: Device>(
         }
     };
     let cmd = cmdm.get_cmd_buffer();
-    let fence = device.immediate_execute(cmd, command);
+    let transfer_queue = device.transfer_queue();
+    let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.fences.push(fence);
     unfinished.buffers_to_free.push(buffer);
     TextureLoaded {

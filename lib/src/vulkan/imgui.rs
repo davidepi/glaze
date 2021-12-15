@@ -629,7 +629,8 @@ fn upload_image<T: Device>(
         }
     };
     let cmd = cmdm.get_cmd_buffer();
-    let fence = device.immediate_execute(cmd, command);
+    let graphic_queue = device.graphic_queue();
+    let fence = device.immediate_execute(cmd, graphic_queue, command);
     device.wait_completion(&[fence]);
 }
 

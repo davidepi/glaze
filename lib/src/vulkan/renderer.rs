@@ -143,7 +143,7 @@ impl RealtimeRenderer {
         );
         let mut cmdm = CommandManager::new(
             instance.device().logical_clone(),
-            instance.present_device().graphic_index(),
+            instance.present_device().graphic_queue().idx,
         );
         let swapchain = Swapchain::create(instance.clone(), window_width, window_height);
         let render_size = vk::Extent2D {
@@ -563,10 +563,10 @@ impl RealtimeRenderer {
             let queue = self.instance.device().graphic_queue();
             unsafe {
                 device
-                    .queue_submit(queue, &[submit_ci], frame_sync.acquire)
+                    .queue_submit(queue.queue, &[submit_ci], frame_sync.acquire)
                     .expect("Failed to submit render task");
             }
-            self.swapchain.queue_present(queue, &present_ci);
+            self.swapchain.queue_present(queue.queue, &present_ci);
             self.mm.frame_end_clean();
             self.frame_no += 1;
             self.stats.done_frame();
