@@ -10,8 +10,11 @@ use crate::{include_shader, TextureFormat};
 use ash::vk;
 use cgmath::Vector2 as Vec2;
 use fnv::FnvHashMap;
+use font_kit::family_name::FamilyName;
+use font_kit::properties::Properties;
+use font_kit::source::SystemSource;
 use gpu_allocator::MemoryLocation;
-use imgui::{DrawCmdParams, TextureId};
+use imgui::{DrawCmdParams, FontSource, TextureId};
 use std::ptr;
 
 /// initial buffer size for the imgui vertex buffer
@@ -63,7 +66,22 @@ impl ImguiRenderer {
         let index_size = INITIAL_INDEX_SIZE;
         let fonts_gpu_buf;
         {
+            // if we can reliably get a system font
             let mut fonts_ref = context.fonts();
+            if let Ok(handle) =
+                SystemSource::new().select_best_match(&[FamilyName::SansSerif], &Properties::new())
+            {
+                if let Ok(loaded) = handle.load() {
+                    if let Some(raw) = loaded.copy_font_data() {
+                        fonts_ref.clear_fonts();
+                        fonts_ref.add_font(&[FontSource::TtfData {
+                            data: &raw,
+                            size_pixels: 13.0,
+                            config: None,
+                        }]);
+                    }
+                }
+            }
             // Outside the range of engine-assignable texture ids. So if it is not in the map,
             // it is definetly the texture atlas.
             let fonts = fonts_ref.build_rgba32_texture();
