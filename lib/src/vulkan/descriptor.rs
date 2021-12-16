@@ -1,4 +1,3 @@
-// this entire file WAS based on https://vkguide.dev/docs/extra-chapter/abstracting_descriptors/
 use ash::vk;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -87,51 +86,6 @@ impl DescriptorAllocator {
             }
             _ => panic!("Failed to allocate descriptor set"),
         }
-    }
-
-    /// Lends a manager to another thread. The vulkan specification says that each pool must
-    /// be exclusive to a single thread.
-    ///
-    /// This manager SHOULD be returned with the [DesciptorAllocator::merge] call even though it is
-    /// not strictly necessary to do so (but it is better, in order to minimize wasted memory).
-    fn thread_exclusive(&mut self) -> Self {
-        DescriptorAllocator {
-            current_pool: self.free_pools.pop(),
-            pool_sizes: self.pool_sizes.clone(),
-            free_pools: Vec::new(),
-            used_pools: Vec::new(),
-            device: self.device.clone(),
-        }
-    }
-
-    /// Resets all the descriptor pools.
-    fn reset_pools(&mut self, reset_current: bool) {
-        self.used_pools.iter().for_each(|pool| {
-            unsafe {
-                self.device
-                    .reset_descriptor_pool(*pool, vk::DescriptorPoolResetFlags::empty())
-            }
-            .expect("Failed to reset descriptor pool")
-        });
-        self.free_pools.append(&mut self.used_pools);
-        if reset_current {
-            if let Some(pool) = self.current_pool.take() {
-                unsafe {
-                    self.device
-                        .reset_descriptor_pool(pool, vk::DescriptorPoolResetFlags::empty())
-                }
-                .expect("Failed to reset descriptor pool");
-            }
-        }
-    }
-
-    /// Consumes a descriptor manager previously taken with [DescriptorAllocator::thread_exclusive].
-    fn merge(&mut self, mut other: Self) {
-        if let Some(other_current) = other.current_pool.take() {
-            self.used_pools.push(other_current);
-        }
-        self.used_pools.append(&mut other.used_pools);
-        self.free_pools.append(&mut other.free_pools);
     }
 }
 
@@ -229,7 +183,7 @@ enum BufOrImgInfo {
 }
 
 /// Cache for descriptor set layouts
-struct DescriptorSetLayoutCache {
+pub struct DescriptorSetLayoutCache {
     cache: HashMap<Vec<DescriptorSetLayoutBindingWrapper>, vk::DescriptorSetLayout>,
     device: Arc<ash::Device>,
 }
@@ -279,9 +233,12 @@ impl Drop for DescriptorSetLayoutCache {
     }
 }
 
+/// Application-wide cache for sharing descriptor set layouts.
+pub type DLayoutCache = Arc<Mutex<DescriptorSetLayoutCache>>;
+
 /// Manages the allocation and reuse of descriptor sets and layouts.
 pub struct DescriptorSetManager {
-    cache: Arc<Mutex<DescriptorSetLayoutCache>>,
+    cache: DLayoutCache,
     alloc: DescriptorAllocator,
 }
 
@@ -296,6 +253,23 @@ impl DescriptorSetManager {
         DescriptorSetManager { cache, alloc }
     }
 
+    /// Creates a new empty descriptor set manager, sharing an existing cache.
+    /// The cache can be obtained from an existing manager with the [DescriptorSetManager::cache]
+    /// function.
+    pub fn with_cache(
+        device: Arc<ash::Device>,
+        avg_desc: &[(vk::DescriptorType, f32)],
+        cache: DLayoutCache,
+    ) -> DescriptorSetManager {
+        let alloc = DescriptorAllocator::new(device.clone(), avg_desc);
+        DescriptorSetManager { cache, alloc }
+    }
+
+    /// Returns the descriptor set layout cache used by this descriptor set manager
+    pub fn cache(&self) -> Arc<Mutex<DescriptorSetLayoutCache>> {
+        self.cache.clone()
+    }
+
     /// Creates a new descriptor set
     pub fn new_set(&mut self) -> DescriptorSetBuilder {
         DescriptorSetBuilder {
@@ -305,32 +279,13 @@ impl DescriptorSetManager {
             info: Vec::new(),
         }
     }
-
-    /// Clones this manager to be used in another thread.
-    /// The descriptor set layout cache is shared between the two threads, but each thread possess
-    /// its own allocator.
-    /// [DescriptorSetManager::merge] should be called when the child thread ends, if the child
-    /// thread descriptor sets outlives the child thread lifetime.
-    pub fn thread_exclusive(&mut self) -> Self {
-        DescriptorSetManager {
-            cache: self.cache.clone(),
-            alloc: self.alloc.thread_exclusive(),
-        }
-    }
-
-    /// Merges another descriptor set manager into this one. Given that the cache is shared, between
-    /// all descriptor set managers, only the allocator is merged. This operation is redundant
-    /// if the other manager descriptors are not used anymore, but necessary otherwise.
-    pub fn merge(&mut self, other: Self) {
-        self.alloc.merge(other.alloc);
-    }
 }
 
 /// Builder for a descriptor set.
 ///
 /// Creates a descriptor set with a builder pattern.
 pub struct DescriptorSetBuilder<'a> {
-    cache: Arc<Mutex<DescriptorSetLayoutCache>>,
+    cache: DLayoutCache,
     alloc: &'a mut DescriptorAllocator,
     bindings: Vec<vk::DescriptorSetLayoutBinding>,
     info: Vec<BufOrImgInfo>,

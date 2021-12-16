@@ -18,8 +18,6 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Average descriptor set usage.
-const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::UNIFORM_BUFFER, 1.0)];
 /// Number of frames prepared by the CPU while waiting for the GPU.
 const FRAMES_IN_FLIGHT: usize = 2;
 
@@ -63,12 +61,7 @@ struct SceneLoad {
     /// Last message received from the channel.
     last_message: String,
     /// Thread join handle.
-    join_handle: std::thread::JoinHandle<(
-        MemoryManager,
-        DescriptorSetManager,
-        CommandManager,
-        Result<VulkanScene, std::io::Error>,
-    )>,
+    join_handle: std::thread::JoinHandle<(MemoryManager, Result<VulkanScene, std::io::Error>)>,
 }
 
 /// Realtime renderer capable of rendering a scene to a presentation surface.
@@ -134,16 +127,21 @@ impl RealtimeRenderer {
         window_height: u32,
         render_scale: f32,
     ) -> Self {
-        let mut dm = DescriptorSetManager::new(instance.device().logical_clone(), &AVG_DESC);
+        let avg_desc = [
+            (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
+            (vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0),
+        ];
+        let mut dm = DescriptorSetManager::new(instance.device().logical_clone(), &avg_desc);
         let mut mm = MemoryManager::new(
             instance.instance(),
             instance.device().logical_clone(),
             instance.device().physical().device,
             FRAMES_IN_FLIGHT as u8,
         );
-        let mut cmdm = CommandManager::new(
+        let cmdm = CommandManager::new(
             instance.device().logical_clone(),
             instance.present_device().graphic_queue().idx,
+            15,
         );
         let swapchain = Swapchain::create(instance.clone(), window_width, window_height);
         let render_size = vk::Extent2D {
@@ -192,14 +190,8 @@ impl RealtimeRenderer {
             render_size,
         );
         forward_pass.clear_color[0].color.float32 = clear_color;
-        let imgui_renderer = ImguiRenderer::new(
-            imgui,
-            instance.device(),
-            &mut mm,
-            &mut cmdm,
-            &mut dm,
-            &swapchain,
-        );
+        let imgui_renderer =
+            ImguiRenderer::new(imgui, instance.device(), &mut mm, dm.cache(), &swapchain);
         let copy_pipeline = create_copy_pipeline(
             instance.device().logical(),
             swapchain.extent(),
@@ -367,24 +359,16 @@ impl RealtimeRenderer {
             scene.deinit_pipelines(self.instance.device().logical());
             scene.unload(self.instance.device(), &mut self.mm);
         }
-        let mut send_dm = self.dm.thread_exclusive();
         let mut send_mm = self.mm.thread_exclusive();
-        let mut send_cmdm = self.cmdm.thread_exclusive();
+        let send_cache = self.dm.cache();
         let device_clone = self.instance.device().clone();
         let is_alive = Arc::new(false);
         let token_thread = is_alive.clone();
         let (wchan, rchan) = mpsc::channel();
         let load_tid = std::thread::spawn(move || {
             let _is_alive = is_alive;
-            let scene = VulkanScene::load(
-                &device_clone,
-                parsed,
-                &mut send_mm,
-                &mut send_cmdm,
-                &mut send_dm,
-                wchan,
-            );
-            (send_mm, send_dm, send_cmdm, scene)
+            let scene = VulkanScene::load(&device_clone, parsed, &mut send_mm, send_cache, wchan);
+            (send_mm, scene)
         });
         self.scene_loading = Some(SceneLoad {
             reader: rchan,
@@ -401,10 +385,7 @@ impl RealtimeRenderer {
             if Arc::strong_count(&scene_loading.is_alive) == 1 {
                 // loading finished, swap scene
                 let scene_loading = self.scene_loading.take().unwrap();
-                let (send_mm, send_dm, send_cmdm, scene) =
-                    scene_loading.join_handle.join().unwrap();
-                self.dm.merge(send_dm);
-                self.cmdm.merge(send_cmdm);
+                let (send_mm, scene) = scene_loading.join_handle.join().unwrap();
                 self.mm.merge(send_mm);
                 if let Ok(mut new) = scene {
                     let render_size = vk::Extent2D {
@@ -445,7 +426,6 @@ impl RealtimeRenderer {
                 old,
                 new,
                 &mut self.cmdm,
-                &mut self.dm,
                 self.forward_pass.renderpass,
                 self.frame_data[0].descriptor.layout,
                 render_size,
@@ -525,7 +505,6 @@ impl RealtimeRenderer {
                             cmd,
                             dd,
                             &mut self.mm,
-                            &mut self.dm,
                             self.scene.as_ref(),
                             &mut self.stats,
                         );

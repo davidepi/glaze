@@ -1,5 +1,5 @@
 use super::cmd::CommandManager;
-use super::descriptor::{Descriptor, DescriptorSetManager};
+use super::descriptor::{DLayoutCache, Descriptor, DescriptorSetManager};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
 use super::pipeline::{Pipeline, PipelineBuilder};
@@ -49,6 +49,7 @@ pub struct ImguiRenderer {
     // pipeline for single_channel images (sampler takes .rrr instead of .rgb)
     pipeline_bw: Pipeline,
     sampler: vk::Sampler,
+    dm: DescriptorSetManager,
     tex_descs: FnvHashMap<u16, Descriptor>,
 }
 
@@ -58,16 +59,19 @@ impl ImguiRenderer {
         context: &mut imgui::Context,
         device: &T,
         mm: &mut MemoryManager,
-        cmdm: &mut CommandManager,
-        descriptor_creator: &mut DescriptorSetManager,
+        layout_cache: DLayoutCache,
         swapchain: &Swapchain,
     ) -> Self {
         let vertex_size = INITIAL_VERTEX_SIZE;
         let index_size = INITIAL_INDEX_SIZE;
+        let avg_sizes = [(vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0)];
+        let mut dm =
+            DescriptorSetManager::with_cache(device.logical_clone(), &avg_sizes, layout_cache);
+        let mut cmdm = CommandManager::new(device.logical_clone(), device.graphic_queue().idx, 3);
         let fonts_gpu_buf;
         {
-            // if we can reliably get a system font
             let mut fonts_ref = context.fonts();
+            // use a system font if possible (otherwise the default one is okay I guess)
             if let Ok(handle) =
                 SystemSource::new().select_best_match(&[FamilyName::SansSerif], &Properties::new())
             {
@@ -113,7 +117,13 @@ impl ImguiRenderer {
             unsafe {
                 std::ptr::copy_nonoverlapping(fonts.data.as_ptr(), mapped, fonts_size as usize);
             }
-            upload_image(device, cmdm, &fonts_cpu_buf, &fonts_gpu_buf, fonts_extent);
+            upload_image(
+                device,
+                &mut cmdm,
+                &fonts_cpu_buf,
+                &fonts_gpu_buf,
+                fonts_extent,
+            );
             mm.free_buffer(fonts_cpu_buf);
         }
         let vertex_buf = mm.create_buffer(
@@ -155,7 +165,7 @@ impl ImguiRenderer {
             image_view: fonts_gpu_buf.image_view,
             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
         };
-        let font_descriptor = descriptor_creator
+        let font_descriptor = dm
             .new_set()
             .bind_image(
                 texture_binding,
@@ -178,6 +188,7 @@ impl ImguiRenderer {
             pipeline_bw,
             sampler,
             font_descriptor,
+            dm,
             tex_descs: FnvHashMap::default(),
         }
     }
@@ -209,7 +220,6 @@ impl ImguiRenderer {
         cmd: vk::CommandBuffer,
         draw_data: &imgui::DrawData,
         mm: &mut MemoryManager,
-        dm: &mut DescriptorSetManager,
         scene: Option<&VulkanScene>,
         stats: &mut InternalStats,
     ) {
@@ -386,7 +396,8 @@ impl ImguiRenderer {
                                             image_view: texture.image.image_view,
                                             image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                                         };
-                                        dm.new_set()
+                                        self.dm
+                                            .new_set()
                                             .bind_image(
                                                 info,
                                                 vk::DescriptorType::COMBINED_IMAGE_SAMPLER,

@@ -2,8 +2,9 @@ use ash::vk;
 use std::ptr;
 use std::sync::Arc;
 
-/// Initial number of command pools.
-const POOL_NO: usize = 15;
+/// Minimum number of command pools before the reset happens.
+/// Pools are never resets if the manager has less than this amount of USED pools.
+const MIN_POOLS: usize = 15;
 /// Number of command buffers per command pool.
 const BUFFERS_PER_POOL: u8 = 30;
 
@@ -96,8 +97,10 @@ pub struct CommandManager {
 
 impl CommandManager {
     /// Creates a new command manager for a given device and queue family.
-    pub fn new(device: Arc<ash::Device>, queue_family_index: u32) -> CommandManager {
-        let mut free_pools = (0..POOL_NO)
+    /// Pre-allocates the given number of command pools.
+    /// Additional pools are allocated on demand.
+    pub fn new(device: Arc<ash::Device>, queue_family_index: u32, num_pools: usize) -> Self {
+        let mut free_pools = (0..num_pools)
             .into_iter()
             .map(|_| PoolManager::create(&device, queue_family_index))
             .collect::<Vec<_>>();
@@ -105,7 +108,7 @@ impl CommandManager {
         CommandManager {
             free_pools,
             current_pool,
-            used_pools: Vec::with_capacity(POOL_NO),
+            used_pools: Vec::with_capacity(num_pools),
             device,
             queue_family_index,
         }
@@ -127,12 +130,12 @@ impl CommandManager {
             // there is a free pool available
             self.current_pool = Some(next_pool);
             self.get_cmd_buffer()
-        } else if self.used_pools.len() > POOL_NO / 2 {
+        } else if self.used_pools.len() > MIN_POOLS / 2 {
             // no free pools, but there are a decent amount of used one. Resets half of them
             // half -> so the most recent ones have time to complete
             let half = self
                 .used_pools
-                .drain(..POOL_NO / 2)
+                .drain(..MIN_POOLS / 2)
                 .map(|pool| pool.reset(&self.device))
                 .collect::<Vec<_>>();
             self.free_pools.extend(half);
@@ -145,31 +148,6 @@ impl CommandManager {
                 .push(PoolManager::create(&self.device, self.queue_family_index));
             self.get_cmd_buffer()
         }
-    }
-
-    /// Lends a manager to another thread. The vulkan specification says that each pool must
-    /// be exclusive to a single thread.
-    ///
-    /// This manager SHOULD be returned with the [CommandManager::merge] call even though it is not
-    /// strictly necessary to do so (but it is better, in order to ensure that all commands are
-    /// executed before deallocating them).
-    pub fn thread_exclusive(&mut self) -> Self {
-        CommandManager {
-            current_pool: self.free_pools.pop(), // the manager will auto expand if this is none
-            free_pools: Vec::new(),
-            used_pools: Vec::new(),
-            device: self.device.clone(),
-            queue_family_index: self.queue_family_index,
-        }
-    }
-
-    /// Consumes a command manager previously taken with [CommandManager::thread_exclusive].
-    pub fn merge(&mut self, mut other: Self) {
-        if let Some(other_current) = other.current_pool.take() {
-            self.used_pools.push(other_current);
-        }
-        self.used_pools.append(&mut other.used_pools);
-        self.free_pools.append(&mut other.free_pools);
     }
 }
 

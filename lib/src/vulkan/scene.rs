@@ -1,5 +1,5 @@
 use super::cmd::CommandManager;
-use super::descriptor::{Descriptor, DescriptorSetManager};
+use super::descriptor::{DLayoutCache, Descriptor, DescriptorSetManager};
 use super::device::Device;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::Pipeline;
@@ -31,6 +31,8 @@ pub struct VulkanScene {
     sampler: vk::Sampler,
     /// Default texture used when a texture is required but missing. This is a 1x1 white texture.
     dflt_tex: TextureLoaded,
+    /// Manages descriptors in the current scene.
+    dm: DescriptorSetManager,
     /// Map of all materials in the scene with their descriptor.
     pub(super) materials: FnvHashMap<u16, (Material, Descriptor)>,
     /// Map of all shaders in the scene with their pipeline.
@@ -65,19 +67,20 @@ impl VulkanScene {
         device: &T,
         mut scene: Box<dyn ReadParsed>,
         mm: &mut MemoryManager,
-        cmdm: &mut CommandManager,
-        dm: &mut DescriptorSetManager,
+        desc_cache: DLayoutCache,
         wchan: Sender<String>,
     ) -> Result<Self, std::io::Error> {
         let mut unf = UnfinishedExecutions {
             fences: Vec::new(),
             buffers_to_free: Vec::new(),
         };
+        let mut cmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 5);
         wchan.send("[1/4] Loading vertices...".to_string()).ok();
-        let vertex_buffer = load_vertices_to_gpu(device, mm, cmdm, &mut unf, &scene.vertices()?);
+        let vertex_buffer =
+            load_vertices_to_gpu(device, mm, &mut cmdm, &mut unf, &scene.vertices()?);
         wchan.send("[2/4] Loading meshes...".to_string()).ok();
         let (mut meshes, index_buffer) =
-            load_indices_to_gpu(device, mm, cmdm, &mut unf, &scene.meshes()?);
+            load_indices_to_gpu(device, mm, &mut cmdm, &mut unf, &scene.meshes()?);
         let sampler = create_sampler(device);
         wchan.send("[3/4] Loading textures...".to_string()).ok();
         let scene_textures = scene.textures()?;
@@ -93,17 +96,27 @@ impl VulkanScene {
                         textures_no
                     ))
                     .ok();
-                (id, load_texture_to_gpu(device, mm, cmdm, &mut unf, tex))
+                (
+                    id,
+                    load_texture_to_gpu(device, mm, &mut cmdm, &mut unf, tex),
+                )
             })
             .collect();
-        let dflt_tex = load_texture_to_gpu(device, mm, cmdm, &mut unf, Texture::default());
+        let dflt_tex = load_texture_to_gpu(device, mm, &mut cmdm, &mut unf, Texture::default());
         let parsed_mats = scene.materials()?;
-        let params_buffer = load_materials_parameters(device, &parsed_mats, mm, cmdm, &mut unf);
+        let params_buffer =
+            load_materials_parameters(device, &parsed_mats, mm, &mut cmdm, &mut unf);
         device.wait_completion(&unf.fences);
         unf.buffers_to_free
             .into_iter()
             .for_each(|b| mm.free_buffer(b));
         wchan.send("[4/4] Loading materials...".to_string()).ok();
+        let avg_desc = [
+            (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
+            (vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.5),
+        ];
+        let mut dm =
+            DescriptorSetManager::with_cache(device.logical_clone(), &avg_desc, desc_cache);
         let materials = parsed_mats
             .into_iter()
             .map(|(id, mut mat)| {
@@ -114,7 +127,7 @@ impl VulkanScene {
                     sampler,
                     id,
                     &mut mat,
-                    dm,
+                    &mut dm,
                 );
                 (id, (mat, descriptor))
             })
@@ -137,6 +150,7 @@ impl VulkanScene {
             meshes,
             sampler,
             dflt_tex,
+            dm,
             materials,
             pipelines,
             textures,
@@ -150,7 +164,6 @@ impl VulkanScene {
         mat_id: u16,
         mut new: Material,
         cmdm: &mut CommandManager,
-        dm: &mut DescriptorSetManager,
         rpass: vk::RenderPass,
         frame_desc_layout: vk::DescriptorSetLayout,
         render_size: vk::Extent2D,
@@ -199,7 +212,7 @@ impl VulkanScene {
             self.sampler,
             mat_id,
             &mut new,
-            dm,
+            &mut self.dm,
         );
         // remove the old material
         let (old, _) = self.materials.remove(&mat_id).unwrap();
