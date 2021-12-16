@@ -86,6 +86,10 @@ fn main() {
             }
             Err(e) => error!("Failed to preprocess input", e),
         }
+    } else {
+        if let Err(error) = benchmark(input, version) {
+            error!("Failed to benchmark scene", error);
+        };
     }
 }
 
@@ -439,7 +443,7 @@ fn write_output<P: AsRef<Path>>(
     )?)
 }
 
-pub fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std::error::Error>> {
+fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std::error::Error>> {
     // the benchmark is simple on purpose. This method will take seconds if not minutes to run.
     let dir = tempdir()?;
     let file;
@@ -479,16 +483,18 @@ pub fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std:
     let vert_start = Instant::now();
     let vertices = parsed.vertices()?;
     let vert_end = Instant::now();
-    let _ = parsed.meshes()?;
+    let meshes = parsed.meshes()?;
     let mesh_end = Instant::now();
     let textures = parsed.textures()?;
     let texture_end = Instant::now();
-    let _ = parsed.materials()?;
+    let materials = parsed.materials()?;
     let material_end = Instant::now();
     //  Results //
     println!("Reading and writing results for {}", input);
     println!("Total vertices: {}", vertices.len());
+    println!("Total meshes: {}", meshes.len());
     println!("Total textures: {}", textures.len());
+    println!("Total materials: {}", materials.len());
     if let Some(results) = conversion_time {
         println!("{}", results);
     }

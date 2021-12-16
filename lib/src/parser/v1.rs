@@ -5,6 +5,8 @@ use crate::{Material, Texture};
 use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
 use image::png::{PngDecoder, PngEncoder};
 use image::{GrayImage, ImageDecoder, RgbaImage};
+use rayon::iter::ParallelIterator;
+use rayon::prelude::IntoParallelIterator;
 use std::convert::TryInto;
 use std::hash::Hasher;
 use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
@@ -515,16 +517,17 @@ impl ParsedChunk for MeshChunk {
     fn elements(self) -> Result<Vec<Self::Item>, Error> {
         let decompressed = decompress(&self.data);
         let len = u32::from_le_bytes(decompressed[0..4].try_into().unwrap());
-        let mut retval = Vec::with_capacity(len as usize);
+        let mut mesh_bytes = Vec::with_capacity(len as usize);
         let mut index = 4;
         while index < decompressed.len() {
             let encoded_len =
                 u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap()) as usize;
             index += 4;
-            let mesh = bytes_to_mesh(&decompressed[index..index + encoded_len]);
+            let mesh = &decompressed[index..index + encoded_len];
             index += encoded_len;
-            retval.push(mesh);
+            mesh_bytes.push(mesh);
         }
+        let retval = mesh_bytes.into_par_iter().map(bytes_to_mesh).collect();
         Ok(retval)
     }
 
@@ -763,16 +766,20 @@ impl ParsedChunk for TextureChunk {
 
     fn elements(self) -> Result<Vec<Self::Item>, Error> {
         let len = u16::from_le_bytes(self.data[0..2].try_into().unwrap());
-        let mut retval = Vec::with_capacity(len as usize);
+        let mut tex_bytes = Vec::with_capacity(len as usize);
         let mut index = std::mem::size_of::<u16>();
         while index < self.size_bytes() {
             let encoded_len =
                 u32::from_le_bytes(self.data[index..index + 4].try_into().unwrap()) as usize;
             index += std::mem::size_of::<u32>();
-            let texture = bytes_to_texture(&self.data[index..index + encoded_len])?;
+            let bytes = &self.data[index..index + encoded_len];
             index += encoded_len;
-            retval.push(texture);
+            tex_bytes.push(bytes);
         }
+        let retval = tex_bytes
+            .into_par_iter()
+            .map(bytes_to_texture)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(retval)
     }
 
