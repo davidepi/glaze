@@ -261,7 +261,7 @@ impl DescriptorSetManager {
         avg_desc: &[(vk::DescriptorType, f32)],
         cache: DLayoutCache,
     ) -> DescriptorSetManager {
-        let alloc = DescriptorAllocator::new(device.clone(), avg_desc);
+        let alloc = DescriptorAllocator::new(device, avg_desc);
         DescriptorSetManager { cache, alloc }
     }
 

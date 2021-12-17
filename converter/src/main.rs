@@ -86,11 +86,9 @@ fn main() {
             }
             Err(e) => error!("Failed to preprocess input", e),
         }
-    } else {
-        if let Err(error) = benchmark(input, version) {
-            error!("Failed to benchmark scene", error);
-        };
-    }
+    } else if let Err(error) = benchmark(input, version) {
+        error!("Failed to benchmark scene", error);
+    };
 }
 
 fn preprocess_input<S: AsRef<str>>(input: S) -> Result<RussimpScene, Box<dyn Error>> {
@@ -319,6 +317,7 @@ fn convert_texture(
     ret: &mut Vec<(u16, Texture)>,
 ) -> Result<(), std::io::Error> {
     let used_name = used_name(name, format);
+    #[allow(clippy::map_entry)] // this block is very long, I don't want to have a single `match`
     if !used.contains_key(&used_name) {
         let data = ImageReader::open(path)?.decode();
         if let Ok(data) = data {
@@ -410,13 +409,6 @@ fn matprop_to_str(property: &MaterialProperty) -> String {
     match &property.data {
         PropertyTypeInfo::String(s) => s.clone(),
         _ => "".to_string(),
-    }
-}
-
-fn matprop_to_ivec(property: &MaterialProperty) -> [i32; 3] {
-    match &property.data {
-        PropertyTypeInfo::IntegerArray(a) => [a[0], a[1], a[2]],
-        _ => [0, 0, 0],
     }
 }
 
