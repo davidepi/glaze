@@ -10,10 +10,22 @@ const MAX_POOLS: usize = 4;
 const MAX_SETS: usize = 512;
 
 /// Wraps a descriptor set and a descriptor set layout in a single struct.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Descriptor {
     pub set: vk::DescriptorSet,
     pub layout: vk::DescriptorSetLayout,
+}
+
+impl PartialOrd for Descriptor {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.set.partial_cmp(&other.set)
+    }
+}
+
+impl Ord for Descriptor {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.set.cmp(&other.set)
+    }
 }
 
 /// Allocator manager for descriptor pools and sets.

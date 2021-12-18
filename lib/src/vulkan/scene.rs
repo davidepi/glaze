@@ -33,8 +33,8 @@ pub struct VulkanScene {
     dflt_tex: TextureLoaded,
     /// Manages descriptors in the current scene.
     dm: DescriptorSetManager,
-    /// Map of all materials in the scene with their descriptor.
-    pub(super) materials: FnvHashMap<u16, (Material, Descriptor)>,
+    /// Map of all materials in the scene.
+    pub(super) materials: FnvHashMap<u16, (Material, ShaderMat, Descriptor)>,
     /// Map of all shaders in the scene with their pipeline.
     pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
     /// Map of all textures in the scene.
@@ -119,17 +119,17 @@ impl VulkanScene {
             DescriptorSetManager::with_cache(device.logical_clone(), &avg_desc, desc_cache);
         let materials = parsed_mats
             .into_iter()
-            .map(|(id, mut mat)| {
-                let descriptor = build_mat_desc_set(
+            .map(|(id, mat)| {
+                let (shader, desc) = build_mat_desc_set(
                     device,
                     (&textures, &dflt_tex),
                     &params_buffer,
                     sampler,
                     id,
-                    &mut mat,
+                    &mat,
                     &mut dm,
                 );
-                (id, (mat, descriptor))
+                (id, (mat, shader, desc))
             })
             .collect();
         let current_cam = scene.cameras()?[0].clone(); // parser automatically adds a default cam
@@ -162,7 +162,7 @@ impl VulkanScene {
         &mut self,
         device: &T,
         mat_id: u16,
-        mut new: Material,
+        new: Material,
         cmdm: &mut CommandManager,
         rpass: vk::RenderPass,
         frame_desc_layout: vk::DescriptorSetLayout,
@@ -205,47 +205,26 @@ impl VulkanScene {
         let queue = device.graphic_queue();
         let fence = device.immediate_execute(cmd, queue, command);
         device.wait_completion(&[fence]);
-        let new_desc = build_mat_desc_set(
+        let (new_shader, new_desc) = build_mat_desc_set(
             device,
             (&self.textures, &self.dflt_tex),
             &self.params_buffer,
             self.sampler,
             mat_id,
-            &mut new,
+            &new,
             &mut self.dm,
         );
-        // remove the old material
-        let (old, _) = self.materials.remove(&mat_id).unwrap();
-        // modify pipelines if the materials are different
-        if old.shader != new.shader {
-            // check the presence of new/old shaders in the existing pipelines
-            let already_has_new_shader = self
-                .materials
-                .iter()
-                .any(|(_, (mat, _))| mat.shader == new.shader);
-            let old_shader_remains = self
-                .materials
-                .iter()
-                .any(|(_, (mat, _))| mat.shader == old.shader);
-            // update the pipelines accordingly
-            if !already_has_new_shader {
-                let new_pipeline = new.shader.build_pipeline().build(
-                    device.logical(),
-                    rpass,
-                    render_size,
-                    &[frame_desc_layout, new_desc.layout],
-                );
-                self.pipelines.insert(new.shader, new_pipeline);
-            }
-            if !old_shader_remains {
-                self.pipelines
-                    .remove(&old.shader)
-                    .unwrap()
-                    .destroy(device.logical());
-            }
-        }
+        // build the new shader if not existing
+        self.pipelines.entry(new_shader).or_insert_with(|| {
+            new.shader.build_pipeline().build(
+                device.logical(),
+                rpass,
+                render_size,
+                &[frame_desc_layout, new_desc.layout],
+            )
+        });
         // insert the new material
-        self.materials.insert(mat_id, (new, new_desc));
+        self.materials.insert(mat_id, (new, new_shader, new_desc));
         // sort the meshes to minimize bindings
         sort_meshes(&mut self.meshes, &self.materials);
     }
@@ -259,9 +238,8 @@ impl VulkanScene {
         frame_desc_layout: vk::DescriptorSetLayout,
     ) {
         self.pipelines = FnvHashMap::default();
-        for (mat, desc) in self.materials.values() {
-            let shader = mat.shader;
-            self.pipelines.entry(shader).or_insert_with(|| {
+        for (_, shader, desc) in self.materials.values() {
+            self.pipelines.entry(*shader).or_insert_with(|| {
                 shader.build_pipeline().build(
                     device,
                     renderpass,
@@ -295,7 +273,7 @@ impl VulkanScene {
     /// Returns a material in the scene, given its ID.
     /// Returns None if the material does not exist.
     pub fn single_material(&self, id: u16) -> Option<&Material> {
-        self.materials.get(&id).map(|(mat, _)| mat)
+        self.materials.get(&id).map(|(mat, _, _)| mat)
     }
 
     /// Returns all the materials in the scene.
@@ -304,7 +282,7 @@ impl VulkanScene {
     pub fn materials(&self) -> Vec<(u16, &Material)> {
         self.materials
             .iter()
-            .map(|(id, (mat, _))| (*id, mat))
+            .map(|(id, (mat, _, _))| (*id, mat))
             .collect()
     }
 
@@ -472,9 +450,10 @@ fn build_mat_desc_set<T: Device>(
     params: &AllocatedBuffer,
     sampler: vk::Sampler,
     id: u16,
-    material: &mut Material,
+    material: &Material,
     dm: &mut DescriptorSetManager,
-) -> Descriptor {
+) -> (ShaderMat, Descriptor) {
+    let mut shader = material.shader;
     let diffuse = if let Some(diff_id) = material.diffuse {
         textures.get(&diff_id).unwrap_or(dflt_tex)
     } else {
@@ -510,7 +489,7 @@ fn build_mat_desc_set<T: Device>(
             vk::ShaderStageFlags::FRAGMENT,
         );
     if let Some(op_id) = material.opacity {
-        material.shader = material.shader.two_sided(); // use a two-sided shader
+        shader = material.shader.two_sided(); // use a two-sided shader
         let opacity = textures.get(&op_id).unwrap_or(dflt_tex);
         let opacity_image_info = vk::DescriptorImageInfo {
             sampler,
@@ -523,7 +502,7 @@ fn build_mat_desc_set<T: Device>(
             vk::ShaderStageFlags::FRAGMENT,
         );
     }
-    descriptor.build()
+    (shader, descriptor.build())
 }
 
 /// Loads all materials parameters to GPU.
@@ -732,19 +711,22 @@ fn load_texture_to_gpu<T: Device>(
 }
 
 // sort mehses by shader id (first) and then material id (second) to minimize binding changes
-fn sort_meshes(meshes: &mut Vec<VulkanMesh>, materials: &FnvHashMap<u16, (Material, Descriptor)>) {
-    meshes.sort_unstable_by(|a, b| match a.material.cmp(&b.material) {
-        std::cmp::Ordering::Less => std::cmp::Ordering::Less,
-        std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
-        std::cmp::Ordering::Equal => {
-            let (mat_a, _) = materials.get(&a.material).unwrap();
-            let (mat_b, _) = materials.get(&b.material).unwrap();
-            mat_a.shader.cmp(&mat_b.shader)
+fn sort_meshes(
+    meshes: &mut Vec<VulkanMesh>,
+    mats: &FnvHashMap<u16, (Material, ShaderMat, Descriptor)>,
+) {
+    meshes.sort_unstable_by(|a, b| {
+        let (_, _, desc_a) = mats.get(&a.material).unwrap();
+        let (_, _, desc_b) = mats.get(&b.material).unwrap();
+        match desc_a.cmp(desc_b) {
+            std::cmp::Ordering::Less => std::cmp::Ordering::Less,
+            std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+            std::cmp::Ordering::Equal => a.material.cmp(&b.material),
         }
     });
 }
 
-/// Material paramters representation used by the shaders.
+/// Material parameters representation used by the shaders.
 #[repr(C)]
 struct MaterialParams {
     /// Multiplier for the diffuse color.

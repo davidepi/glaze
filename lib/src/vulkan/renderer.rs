@@ -582,13 +582,13 @@ unsafe fn draw_objects(
     device.cmd_bind_vertex_buffers(cmd, 0, &[scene.vertex_buffer.buffer], &[0]);
     device.cmd_bind_index_buffer(cmd, scene.index_buffer.buffer, 0, vk::IndexType::UINT32); //bind once, use firts_index as offset
     for obj in &scene.meshes {
-        let (material, mat_descriptor) = scene
+        let (_, shader, desc) = scene
             .materials
             .get(&obj.material)
             .expect("Failed to find material"); // hard error, material should be created by the converter
-        let pipeline = scene.pipelines.get(&material.shader).unwrap(); // this definitely exists
-        if current_shader.is_none() || material.shader != current_shader.unwrap() {
-            current_shader = Some(material.shader);
+        let pipeline = scene.pipelines.get(shader).unwrap(); // this definitely exists
+        if current_shader.is_none() || shader != current_shader.unwrap() {
+            current_shader = Some(shader);
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
         }
         device.cmd_bind_descriptor_sets(
@@ -596,7 +596,7 @@ unsafe fn draw_objects(
             vk::PipelineBindPoint::GRAPHICS,
             pipeline.layout,
             0,
-            &[frame_data.descriptor.set, mat_descriptor.set],
+            &[frame_data.descriptor.set, desc.set],
             &[],
         );
         device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
