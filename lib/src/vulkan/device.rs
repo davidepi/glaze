@@ -501,20 +501,20 @@ fn create_logical_device(
         .collect::<BTreeSet<_>>();
     let mut queue_create_infos = Vec::with_capacity(unique_families.len());
     let mut queue_priorities = vec![Vec::new(); unique_families.len()];
-    for queue_family_index in unique_families {
+    for (unique_index, queue_family_index) in unique_families.into_iter().enumerate() {
         let count = queues
             .iter()
             .filter(|(f, _)| *f == queue_family_index)
             .count();
         // this is to avoid dropping the pointed address before creating the device
-        queue_priorities[queue_family_index as usize] = vec![1.0; count];
+        queue_priorities[unique_index] = vec![1.0; count];
         let queue_create_info = vk::DeviceQueueCreateInfo {
             s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::DeviceQueueCreateFlags::empty(),
             queue_family_index,
             queue_count: count as u32,
-            p_queue_priorities: queue_priorities[queue_family_index as usize].as_ptr(),
+            p_queue_priorities: queue_priorities[unique_index].as_ptr(),
         };
         queue_create_infos.push(queue_create_info);
     }
