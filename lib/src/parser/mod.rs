@@ -9,8 +9,8 @@ use std::str::FromStr;
 
 // DO NOT CHANGE THESE TWO! Any changes should be made with a new ParserVersion, changing the inner
 // content of the file, but the header must not change to retain backward compatibility.
-const MAGIC_NUMBER: [u8; 5] = [0x67, 0x6C, 0x61, 0x7A, 0x65];
-const HEADER_LEN: usize = 16;
+pub const MAGIC_NUMBER: [u8; 5] = [0x67, 0x6C, 0x61, 0x7A, 0x65];
+pub const HEADER_LEN: usize = 16;
 
 /// The version of the parser.
 ///
@@ -194,6 +194,12 @@ pub trait ReadParsed {
     fn textures(&mut self) -> Result<Vec<(u16, Texture)>, Error>;
     /// Retrieve only the [Material]s contained in the file.
     fn materials(&mut self) -> Result<Vec<(u16, Material)>, Error>;
+}
+
+/// Trait used for writing and updating the content of the parsed file.
+pub trait WriteParsed {
+    /// Updates the current parsed scene.
+    fn update(&mut self, cameras: Vec<Camera>, materials: Vec<(u16, Material)>);
 }
 
 mod v1;

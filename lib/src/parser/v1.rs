@@ -9,7 +9,7 @@ use rayon::iter::ParallelIterator;
 use rayon::prelude::IntoParallelIterator;
 use std::convert::TryInto;
 use std::hash::Hasher;
-use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use twox_hash::XxHash64;
 use xz2::read::{XzDecoder, XzEncoder};
 
@@ -202,94 +202,113 @@ impl<R: Read + Seek> ContentV1<R> {
         vertices: &[Vertex],
         meshes: &[Mesh],
         cameras: &[Camera],
-        texture: &[(u16, Texture)],
+        textures: &[(u16, Texture)],
         materials: &[(u16, Material)],
     ) -> Result<(), Error> {
-        let base_offset = HEADER_LEN + HASH_SIZE + OFFSET_SIZE;
-        fout.seek(SeekFrom::Start(base_offset as u64))?;
-        // vertices
-        let mut hasher = get_hasher();
-        let chunk = VertexChunk::encode(vertices);
-        let vert_size = chunk.size_bytes();
-        let data = chunk.data();
-        hasher.write(&data);
-        #[allow(clippy::erasing_op)] // yes, I want to multiply by 0 for consistency
-        let vert_offset = base_offset + 0 * HASH_SIZE;
-        let vert_hash = hasher.finish();
-        fout.write_all(vert_hash.to_le_bytes().as_ref())?;
-        fout.write_all(&data)?;
-        // meshes
-        let mut hasher = get_hasher();
-        let chunk = MeshChunk::encode(meshes);
-        let mesh_size = chunk.size_bytes();
-        let data = chunk.data();
-        hasher.write(&data);
-        #[allow(clippy::identity_op)] // shut up clippy, it helps me when I need to modify it
-        let mesh_offset = base_offset + vert_size + 1 * HASH_SIZE;
-        let mesh_hash = hasher.finish();
-        fout.write_all(mesh_hash.to_le_bytes().as_ref())?;
-        fout.write_all(&data)?;
-        // cameras
-        let mut hasher = get_hasher();
-        let chunk = CameraChunk::encode(cameras);
-        let cam_size = chunk.size_bytes();
-        let data = chunk.data();
-        hasher.write(&data);
-        let cam_offset = base_offset + vert_size + mesh_size + 2 * HASH_SIZE;
-        let cam_hash = hasher.finish();
-        fout.write_all(cam_hash.to_le_bytes().as_ref())?;
-        fout.write_all(&data)?;
-        // textures
-        let mut hasher = get_hasher();
-        let chunk = TextureChunk::encode(texture);
-        let tex_size = chunk.size_bytes();
-        let data = chunk.data();
-        hasher.write(&data);
-        let tex_offset = base_offset + vert_size + mesh_size + cam_size + 3 * HASH_SIZE;
-        let tex_hash = hasher.finish();
-        fout.write_all(tex_hash.to_le_bytes().as_ref())?;
-        fout.write_all(&data)?;
-        // materials
-        let mut hasher = get_hasher();
-        let chunk = MaterialChunk::encode(materials);
-        let mat_size = chunk.size_bytes();
-        let data = chunk.data();
-        hasher.write(&data);
-        let mat_offset = base_offset + vert_size + mesh_size + cam_size + tex_size + 4 * HASH_SIZE;
-        let mat_hash = hasher.finish();
-        fout.write_all(mat_hash.to_le_bytes().as_ref())?;
-        fout.write_all(&data)?;
-        // offsets
-        let mut hasher = get_hasher();
-        let offsets = Offsets {
-            vert_off: vert_offset as u64,
-            vert_len: vert_size as u64,
-            vert_hash,
-            mesh_off: mesh_offset as u64,
-            mesh_len: mesh_size as u64,
-            mesh_hash,
-            cam_off: cam_offset as u64,
-            cam_len: cam_size as u64,
-            cam_hash,
-            tex_off: tex_offset as u64,
-            tex_len: tex_size as u64,
-            tex_hash,
-            mat_off: mat_offset as u64,
-            mat_len: mat_size as u64,
-            mat_hash,
-            _light_len: 0,
-            _light_off: 0,
-            _light_hash: 0,
-            _next: 0,
-        }
-        .as_bytes();
-        hasher.write(&offsets);
-        let off_hash = hasher.finish();
+        let vert = VertexChunk::encode(vertices);
+        let mesh = MeshChunk::encode(meshes);
+        let cams = CameraChunk::encode(cameras);
+        let texs = TextureChunk::encode(textures);
+        let mats = MaterialChunk::encode(materials);
+        let bytes = all_to_bytes(vert, mesh, cams, texs, mats)?;
         fout.seek(SeekFrom::Start(HEADER_LEN as u64))?;
-        fout.write_all(off_hash.to_le_bytes().as_ref())?;
-        fout.write_all(&offsets)?;
+        fout.write_all(&bytes)?;
         Ok(())
     }
+}
+
+fn all_to_bytes(
+    vert: VertexChunk,
+    mesh: MeshChunk,
+    cam: CameraChunk,
+    tex: TextureChunk,
+    mat: MaterialChunk,
+) -> Result<Vec<u8>, Error> {
+    let mut fout = Cursor::new(Vec::new());
+    let base_offset = HASH_SIZE + OFFSET_SIZE;
+    fout.seek(SeekFrom::Start(base_offset as u64))?;
+    // vertices
+    let mut hasher = get_hasher();
+    let chunk = vert;
+    let vert_size = chunk.size_bytes();
+    let data = chunk.data();
+    hasher.write(&data);
+    #[allow(clippy::erasing_op)] // yes, I want to multiply by 0 for consistency
+    let vert_offset = base_offset + 0 * HASH_SIZE;
+    let vert_hash = hasher.finish();
+    fout.write_all(vert_hash.to_le_bytes().as_ref())?;
+    fout.write_all(&data)?;
+    // meshes
+    let mut hasher = get_hasher();
+    let chunk = mesh;
+    let mesh_size = chunk.size_bytes();
+    let data = chunk.data();
+    hasher.write(&data);
+    #[allow(clippy::identity_op)] // shut up clippy, it helps me when I need to modify it
+    let mesh_offset = base_offset + vert_size + 1 * HASH_SIZE;
+    let mesh_hash = hasher.finish();
+    fout.write_all(mesh_hash.to_le_bytes().as_ref())?;
+    fout.write_all(&data)?;
+    // cameras
+    let mut hasher = get_hasher();
+    let chunk = cam;
+    let cam_size = chunk.size_bytes();
+    let data = chunk.data();
+    hasher.write(&data);
+    let cam_offset = base_offset + vert_size + mesh_size + 2 * HASH_SIZE;
+    let cam_hash = hasher.finish();
+    fout.write_all(cam_hash.to_le_bytes().as_ref())?;
+    fout.write_all(&data)?;
+    // textures
+    let mut hasher = get_hasher();
+    let chunk = tex;
+    let tex_size = chunk.size_bytes();
+    let data = chunk.data();
+    hasher.write(&data);
+    let tex_offset = base_offset + vert_size + mesh_size + cam_size + 3 * HASH_SIZE;
+    let tex_hash = hasher.finish();
+    fout.write_all(tex_hash.to_le_bytes().as_ref())?;
+    fout.write_all(&data)?;
+    // materials
+    let mut hasher = get_hasher();
+    let chunk = mat;
+    let mat_size = chunk.size_bytes();
+    let data = chunk.data();
+    hasher.write(&data);
+    let mat_offset = base_offset + vert_size + mesh_size + cam_size + tex_size + 4 * HASH_SIZE;
+    let mat_hash = hasher.finish();
+    fout.write_all(mat_hash.to_le_bytes().as_ref())?;
+    fout.write_all(&data)?;
+    // offsets
+    let mut hasher = get_hasher();
+    let offsets = Offsets {
+        vert_off: (HEADER_LEN + vert_offset) as u64,
+        vert_len: vert_size as u64,
+        vert_hash,
+        mesh_off: (HEADER_LEN + mesh_offset) as u64,
+        mesh_len: mesh_size as u64,
+        mesh_hash,
+        cam_off: (HEADER_LEN + cam_offset) as u64,
+        cam_len: cam_size as u64,
+        cam_hash,
+        tex_off: (HEADER_LEN + tex_offset) as u64,
+        tex_len: tex_size as u64,
+        tex_hash,
+        mat_off: (HEADER_LEN + mat_offset) as u64,
+        mat_len: mat_size as u64,
+        mat_hash,
+        _light_len: 0,
+        _light_off: 0,
+        _light_hash: 0,
+        _next: 0,
+    }
+    .as_bytes();
+    hasher.write(&offsets);
+    let off_hash = hasher.finish();
+    fout.rewind()?;
+    fout.write_all(off_hash.to_le_bytes().as_ref())?;
+    fout.write_all(&offsets)?;
+    Ok(fout.into_inner())
 }
 
 impl<R: Read + Seek> ReadParsed for ContentV1<R> {
@@ -1413,7 +1432,7 @@ mod tests {
                 .write(true)
                 .open(file.as_path())?;
             file.seek(SeekFrom::Start((HEADER_LEN + HASH_SIZE + 4) as u64))?;
-            file.write(&[0xFF, 0xFF, 0xFF, 0xFF])?;
+            file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
         let read_corrupted = parse(file.as_path());
         remove_file(file.as_path())?;
