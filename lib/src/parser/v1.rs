@@ -1,35 +1,41 @@
-use super::{ReadParsed, HEADER_LEN};
+use super::{ParsedScene, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
 use crate::materials::{TextureFormat, TextureInfo};
 use crate::{Material, Texture};
 use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
+use fnv::FnvHashMap;
 use image::png::{CompressionType, FilterType, PngDecoder, PngEncoder};
 use image::{GrayImage, ImageDecoder, RgbaImage};
 use rayon::iter::ParallelIterator;
 use rayon::prelude::IntoParallelIterator;
 use std::convert::TryInto;
 use std::hash::Hasher;
-use std::io::{Cursor, Error, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use twox_hash::XxHash64;
 use xz2::read::{XzDecoder, XzEncoder};
 
 /*-------------------------------------- FILE STRUCTURE ----------------------------------------.
 | The initial header is handled by the parse() function and ignored by this module.             |
-| After the header, a HASH_SIZE byte hash is read. This is the hash of the Offsets structure.   |
-| The Offsets structure has a fixed size so it must be read and compared against this hash.     |
-| If everything is fine, the Offsets structure can be parsed to discover offsets, length and    |
-| hash value of every other chunk. Each chunk can then be read independently.                   |
-| Each chunk can be found at the offset specified in the Offsets structure. The offset is       |
-| relative to the beginning of the file, including the initial header. The offset points to the |
-| fixed size expected hash for the chunk, after which the actual chunk data can be found.       |
-\.--------------------------------------------------------------------------------------------*/
+| After the header, a HASH_SIZE byte hash is read. This is the hash of the OffsetsTable         |
+| structure.                                                                                    |
+|                                                                                               |
+| The OffsetsTable structure has a dynamic size. After its hash of HASH_SIZE bytes, there is a  |
+| single byte stating how many chunks there are in the file. Then for each chunk in the file    |
+| 17 bytes shows its position in the file. The first byte is the ChunkID. Then 8 bytes for its  |
+| offset from the beginning of the file, then 8 bytes for its length (in bytes).                |
+| This concludes the OffsetsTable.                                                              |
+|                                                                                               |
+| Now, each chunk can then be read independently. The offset found for this specific chunk      |
+| points to the beginning of the chunk. Each chunk is composed of HASH_SIZE bytes of hash       |
+| followed by the chunk data itself. The HASH_SIZE bytes are included in the chunk len count    |
+|                                                                                               |
+| If an unrecognized chunk is encountered, no error is emitted. This is the expected behaviour  |
+\.---------------------------------------------------------------------------------------------*/
 
 /// Seed for the hasher used in this file format.
 const HASHER_SEED: u64 = 0x368262AAA1DEB64D;
 /// Length of each hash used in this file format.
 const HASH_SIZE: usize = std::mem::size_of::<u64>();
-/// Size of the offsets structure.
-const OFFSET_SIZE: usize = std::mem::size_of::<Offsets>();
 
 /// Returns the hasher used by this file format.
 fn get_hasher() -> impl Hasher {
@@ -37,7 +43,7 @@ fn get_hasher() -> impl Hasher {
 }
 
 /// Compress some data using lzma with compression level 9
-fn compress(data: &[u8]) -> Vec<u8> {
+fn compress<R: Read>(data: R) -> Vec<u8> {
     let mut compressed = Vec::new();
     let mut encoder = XzEncoder::new(data, 9);
     encoder
@@ -47,7 +53,7 @@ fn compress(data: &[u8]) -> Vec<u8> {
 }
 
 /// Decompress some data using lzma
-fn decompress(data: &[u8]) -> Vec<u8> {
+fn decompress<R: Read>(data: R) -> Vec<u8> {
     let mut decoder = XzDecoder::new(data);
     let mut decompressed = Vec::new();
     decoder
@@ -56,82 +62,129 @@ fn decompress(data: &[u8]) -> Vec<u8> {
     decompressed
 }
 
-/// All the Offsets used by this file format.
-/// Expressed in bytes from the very beginning of the file (including the common header).
-/// Each offset points to the expected hash of the chunk.
-/// Following the hash (which has a fixed size) there is the chunk data for chunk length bytes.
-struct Offsets {
-    /// Vertices block offset.
-    vert_off: u64,
-    /// Vertices block length.
-    vert_len: u64,
-    /// Meshes block offset.
-    mesh_off: u64,
-    /// Meshes block length.
-    mesh_len: u64,
-    /// Cameras block offset.
-    cam_off: u64,
-    /// Cameras block length.
-    cam_len: u64,
-    /// Textures block offset.
-    tex_off: u64,
-    /// Textures block length.
-    tex_len: u64,
-    /// Materials block offset.
-    mat_off: u64,
-    /// Materials block length.
-    mat_len: u64,
-    /// Currently unused.
-    _light_len: u64,
-    /// Currently unused.
-    _light_off: u64,
-    /// Reserved to point to another structure yet to be defined.
-    _next: u64,
+/// Assigns an unique ID to the chunk contained in the OffsetsTable
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum ChunkID {
+    Vertex = 0,
+    Mesh = 1,
+    Camera = 2,
+    Texture = 3,
+    Material = 4,
 }
 
-impl Offsets {
-    /// Reads the offsets structure from the file and parse it.
-    fn seek_and_parse<R: Read + Seek>(file: &mut R) -> Result<Offsets, Error> {
-        file.seek(SeekFrom::Start((HEADER_LEN + HASH_SIZE) as u64))?;
-        let mut cl_data = [0; OFFSET_SIZE];
-        file.read_exact(&mut cl_data)?;
-        let params_no = OFFSET_SIZE / std::mem::size_of::<u64>();
-        let mut off_params = Vec::with_capacity(params_no);
-        for i in 0..params_no {
-            let param = u64::from_le_bytes(cl_data[i * 8..(i + 1) * 8].try_into().unwrap());
-            off_params.push(param);
+impl TryFrom<u8> for ChunkID {
+    type Error = Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(ChunkID::Vertex),
+            1 => Ok(ChunkID::Mesh),
+            2 => Ok(ChunkID::Camera),
+            3 => Ok(ChunkID::Texture),
+            4 => Ok(ChunkID::Material),
+            _ => Err(Error::new(ErrorKind::Unsupported, "Unsupported chunk")),
         }
-        Ok(Offsets {
-            vert_off: off_params[0],
-            vert_len: off_params[1],
-            mesh_off: off_params[2],
-            mesh_len: off_params[3],
-            cam_off: off_params[4],
-            cam_len: off_params[5],
-            tex_off: off_params[6],
-            tex_len: off_params[7],
-            mat_off: off_params[8],
-            mat_len: off_params[9],
-            _light_len: off_params[10],
-            _light_off: off_params[11],
-            _next: off_params[12],
-        })
+    }
+}
+
+impl From<ChunkID> for u8 {
+    fn from(ci: ChunkID) -> Self {
+        match ci {
+            ChunkID::Vertex => 0,
+            ChunkID::Mesh => 1,
+            ChunkID::Camera => 2,
+            ChunkID::Texture => 3,
+            ChunkID::Material => 4,
+        }
+    }
+}
+
+/// Stores the list of chunks contained in this file, along with their position in the file.
+///WARNING: offsets in this structure are relative to the offset table position. Their actual
+///WARNING: offset is adjusted and made absolute in the file upon calling OffsetsTable::as_bytes()
+#[derive(Default)]
+struct OffsetsTable {
+    /// Next available offset in the file
+    next_chunk: u64,
+    /// Chunks in the file <ChunkID, (Offset relative to the end of this struct, length in bytes)>
+    chunks: FnvHashMap<ChunkID, (u64, u64)>,
+}
+
+impl OffsetsTable {
+    /// Amount of bytes for each serialized chunk
+    const SERIALIZED_CHUNK_LEN: usize = 17;
+
+    /// Reads the offsets structure from the file and parse it.
+    fn seek_and_parse<R: Read + Seek>(file: &mut R) -> Result<OffsetsTable, Error> {
+        file.seek(SeekFrom::Start(HEADER_LEN as u64))?;
+        let mut expected_hash = [0; HASH_SIZE];
+        file.read_exact(&mut expected_hash)?;
+        let expected_hash = u64::from_le_bytes(expected_hash);
+        let mut chunks_no = [0];
+        file.read_exact(&mut chunks_no[..])?;
+        let chunks_no = chunks_no[0] as usize;
+        file.seek(SeekFrom::Current(-1))?;
+        let bytes_size = 1 + chunks_no * Self::SERIALIZED_CHUNK_LEN; // chunkid(1) + offset(8) + len(8)
+        let mut buffer = Vec::with_capacity(bytes_size);
+        file.take(bytes_size as u64).read_to_end(&mut buffer)?;
+        let mut hasher = get_hasher();
+        hasher.write(&buffer);
+        let actual_hash = hasher.finish();
+        if expected_hash == actual_hash {
+            let mut map = FnvHashMap::with_capacity_and_hasher(chunks_no, Default::default());
+            let mut next_chunk = 0;
+            for chunk in buffer[1..].chunks_exact(Self::SERIALIZED_CHUNK_LEN) {
+                if let Ok(id) = ChunkID::try_from(chunk[0]) {
+                    let offset = u64::from_le_bytes(chunk[1..9].try_into().unwrap());
+                    let len = u64::from_le_bytes(chunk[9..].try_into().unwrap());
+                    //TODO: what to do in case of duplicates? :thinking_emoji:
+                    next_chunk = offset + len;
+                    map.insert(id, (offset, len));
+                } else {
+                    log::warn!("Found an unsupported chunk. ID was {}.", chunk[0]);
+                }
+            }
+            let retval = OffsetsTable {
+                next_chunk,
+                chunks: map,
+            };
+            Ok(retval)
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                "Corrupted file structure",
+            ))
+        }
     }
 
     /// Converts the offsets structure into an array of bytes.
     fn as_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(120);
-        bytes.extend(&self.vert_off.to_le_bytes());
-        bytes.extend(&self.vert_len.to_le_bytes());
-        bytes.extend(&self.mesh_off.to_le_bytes());
-        bytes.extend(&self.mesh_len.to_le_bytes());
-        bytes.extend(&self.cam_off.to_le_bytes());
-        bytes.extend(&self.cam_len.to_le_bytes());
-        bytes.extend(&self.tex_off.to_le_bytes());
-        bytes.extend(&self.tex_len.to_le_bytes());
-        bytes.extend(&self.mat_off.to_le_bytes());
-        bytes.extend(&self.mat_len.to_le_bytes());
+        let chunks_no = self.chunks.len();
+        let mylen = (HASH_SIZE + 1 + chunks_no * Self::SERIALIZED_CHUNK_LEN) as u64;
+        let mut bytes = Vec::with_capacity(mylen as usize);
+        bytes.extend([0; HASH_SIZE]);
+        bytes.push(chunks_no as u8);
+        for (id, (offset, len)) in self.chunks.iter() {
+            bytes.push(u8::from(*id));
+            let adjusted_offset = HEADER_LEN as u64 + mylen + *offset;
+            bytes.extend(u64::to_le_bytes(adjusted_offset));
+            bytes.extend(u64::to_le_bytes(*len));
+        }
+        let mut hasher = get_hasher();
+        hasher.write(&bytes[HASH_SIZE..]);
+        let hash = hasher.finish();
+        bytes.splice(..HASH_SIZE, hash.to_le_bytes());
         bytes
+    }
+
+    /// Writes the offset of a chunk WITHOUT considering the offset table len
+    fn set_offset(&mut self, id: ChunkID, len: u64) {
+        if len > 0 {
+            let offset = self.next_chunk;
+            self.chunks.insert(id, (offset, len));
+            self.next_chunk = offset + len;
+        }
     }
 }
 
@@ -140,28 +193,14 @@ pub(super) struct ContentV1<R: Read + Seek> {
     /// Handle to the Reader
     file: R,
     /// Offsets of this particular file.
-    offsets: Offsets,
+    offsets: OffsetsTable,
 }
 
 impl<R: Read + Seek> ContentV1<R> {
     /// Initializes the parser for this particular file format.
     pub(super) fn parse(mut file: R) -> Result<Self, Error> {
-        let mut offset_hash = [0; HASH_SIZE];
-        file.read_exact(&mut offset_hash)?;
-        let expected_hash = u64::from_le_bytes(offset_hash);
-        let mut hasher = get_hasher();
-        let offsets = Offsets::seek_and_parse(&mut file)?;
-        hasher.write(&offsets.as_bytes());
-        let actual_hash = hasher.finish();
-        if expected_hash == actual_hash {
-            let offsets = Offsets::seek_and_parse(&mut file)?;
-            Ok(ContentV1 { file, offsets })
-        } else {
-            Err(Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Corrupted file structure",
-            ))
-        }
+        let offsets = OffsetsTable::seek_and_parse(&mut file)?;
+        Ok(ContentV1 { file, offsets })
     }
 
     /// Writes the scene structures into the file handled by this parser.
@@ -173,264 +212,322 @@ impl<R: Read + Seek> ContentV1<R> {
         textures: &[(u16, Texture)],
         materials: &[(u16, Material)],
     ) -> Result<(), Error> {
-        let vert = VertexChunk::encode(vertices);
-        let mesh = MeshChunk::encode(meshes);
-        let cams = CameraChunk::encode(cameras);
-        let texs = TextureChunk::encode(textures);
-        let mats = MaterialChunk::encode(materials);
-        let bytes = all_to_bytes(vert, mesh, cams, texs, mats)?;
+        let vert = Chunk::from_vertices(vertices);
+        let mesh = Chunk::from_meshes(meshes);
+        let cams = Chunk::from_cameras(cameras);
+        let texs = Chunk::from_textures(textures);
+        let mats = Chunk::from_materials(materials);
+        let mut offsets = OffsetsTable::default();
+        offsets.set_offset(ChunkID::Vertex, vert.data.len() as u64);
+        offsets.set_offset(ChunkID::Mesh, mesh.data.len() as u64);
+        offsets.set_offset(ChunkID::Camera, cams.data.len() as u64);
+        offsets.set_offset(ChunkID::Texture, texs.data.len() as u64);
+        offsets.set_offset(ChunkID::Material, mats.data.len() as u64);
         fout.seek(SeekFrom::Start(HEADER_LEN as u64))?;
-        fout.write_all(&bytes)?;
+        fout.write_all(&offsets.as_bytes())?;
+        fout.write_all(&vert.data)?;
+        fout.write_all(&mesh.data)?;
+        fout.write_all(&cams.data)?;
+        fout.write_all(&texs.data)?;
+        fout.write_all(&mats.data)?;
         Ok(())
     }
-}
 
-fn all_to_bytes(
-    vert: VertexChunk,
-    mesh: MeshChunk,
-    cam: CameraChunk,
-    tex: TextureChunk,
-    mat: MaterialChunk,
-) -> Result<Vec<u8>, Error> {
-    let mut fout = Cursor::new(Vec::new());
-    let base_offset = HASH_SIZE + OFFSET_SIZE;
-    fout.seek(SeekFrom::Start(base_offset as u64))?;
-    // vertices
-    let mut hasher = get_hasher();
-    let chunk = vert;
-    let vert_size = chunk.size_bytes();
-    let data = chunk.data();
-    hasher.write(&data);
-    #[allow(clippy::erasing_op)] // yes, I want to multiply by 0 for consistency
-    let vert_offset = base_offset + 0 * HASH_SIZE;
-    let vert_hash = hasher.finish();
-    fout.write_all(vert_hash.to_le_bytes().as_ref())?;
-    fout.write_all(&data)?;
-    // meshes
-    let mut hasher = get_hasher();
-    let chunk = mesh;
-    let mesh_size = chunk.size_bytes();
-    let data = chunk.data();
-    hasher.write(&data);
-    #[allow(clippy::identity_op)] // shut up clippy, it helps me when I need to modify it
-    let mesh_offset = base_offset + vert_size + 1 * HASH_SIZE;
-    let mesh_hash = hasher.finish();
-    fout.write_all(mesh_hash.to_le_bytes().as_ref())?;
-    fout.write_all(&data)?;
-    // cameras
-    let mut hasher = get_hasher();
-    let chunk = cam;
-    let cam_size = chunk.size_bytes();
-    let data = chunk.data();
-    hasher.write(&data);
-    let cam_offset = base_offset + vert_size + mesh_size + 2 * HASH_SIZE;
-    let cam_hash = hasher.finish();
-    fout.write_all(cam_hash.to_le_bytes().as_ref())?;
-    fout.write_all(&data)?;
-    // textures
-    let mut hasher = get_hasher();
-    let chunk = tex;
-    let tex_size = chunk.size_bytes();
-    let data = chunk.data();
-    hasher.write(&data);
-    let tex_offset = base_offset + vert_size + mesh_size + cam_size + 3 * HASH_SIZE;
-    let tex_hash = hasher.finish();
-    fout.write_all(tex_hash.to_le_bytes().as_ref())?;
-    fout.write_all(&data)?;
-    // materials
-    let mut hasher = get_hasher();
-    let chunk = mat;
-    let mat_size = chunk.size_bytes();
-    let data = chunk.data();
-    hasher.write(&data);
-    let mat_offset = base_offset + vert_size + mesh_size + cam_size + tex_size + 4 * HASH_SIZE;
-    let mat_hash = hasher.finish();
-    fout.write_all(mat_hash.to_le_bytes().as_ref())?;
-    fout.write_all(&data)?;
-    // offsets
-    let mut hasher = get_hasher();
-    let offsets = Offsets {
-        vert_off: (HEADER_LEN + vert_offset) as u64,
-        vert_len: vert_size as u64,
-        mesh_off: (HEADER_LEN + mesh_offset) as u64,
-        mesh_len: mesh_size as u64,
-        cam_off: (HEADER_LEN + cam_offset) as u64,
-        cam_len: cam_size as u64,
-        tex_off: (HEADER_LEN + tex_offset) as u64,
-        tex_len: tex_size as u64,
-        mat_off: (HEADER_LEN + mat_offset) as u64,
-        mat_len: mat_size as u64,
-        _light_len: 0,
-        _light_off: 0,
-        _next: 0,
-    }
-    .as_bytes();
-    hasher.write(&offsets);
-    let off_hash = hasher.finish();
-    fout.rewind()?;
-    fout.write_all(off_hash.to_le_bytes().as_ref())?;
-    fout.write_all(&offsets)?;
-    Ok(fout.into_inner())
-}
-
-impl<R: Read + Seek> ReadParsed for ContentV1<R> {
-    fn vertices(&mut self) -> Result<Vec<Vertex>, Error> {
-        let mut read_hash = [0; HASH_SIZE];
-        let mut vert_data = Vec::with_capacity(self.offsets.vert_len as usize);
-        self.file.seek(SeekFrom::Start(self.offsets.vert_off))?;
-        self.file.read_exact(&mut read_hash)?;
-        (&mut self.file)
-            .take(self.offsets.vert_len)
-            .read_to_end(&mut vert_data)?;
-        let mut hasher = get_hasher();
-        hasher.write(&vert_data);
-        let expected_hash = u64::from_le_bytes(read_hash);
-        let actual_hash = hasher.finish();
-        if expected_hash == actual_hash {
-            Ok(VertexChunk::decode(vert_data).elements()?)
+    /// Reads a chunk with a given ID from the file.
+    fn read_chunk(&mut self, id: ChunkID) -> Result<Chunk, Error> {
+        let chunk = if let Some((offset, len)) = self.offsets.chunks.get(&id) {
+            self.file.seek(SeekFrom::Start(*offset))?;
+            let mut read = Vec::with_capacity(*len as usize);
+            (&mut self.file).take(*len).read_to_end(&mut read)?;
+            Chunk { data: read }
         } else {
-            Err(Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Corrupted vertices",
-            ))
-        }
+            Chunk {
+                data: Vec::with_capacity(0),
+            }
+        };
+        Ok(chunk)
+    }
+}
+
+impl<R: Read + Seek> ParsedScene for ContentV1<R> {
+    fn vertices(&mut self) -> Result<Vec<Vertex>, Error> {
+        self.read_chunk(ChunkID::Vertex)?.to_vertices()
     }
 
     fn meshes(&mut self) -> Result<Vec<Mesh>, Error> {
-        let mut read_hash = [0; HASH_SIZE];
-        let mut mesh_data = Vec::with_capacity(self.offsets.mesh_len as usize);
-        self.file.seek(SeekFrom::Start(self.offsets.mesh_off))?;
-        self.file.read_exact(&mut read_hash)?;
-        (&mut self.file)
-            .take(self.offsets.mesh_len)
-            .read_to_end(&mut mesh_data)?;
-        let mut hasher = get_hasher();
-        hasher.write(&mesh_data);
-        let expected_hash = u64::from_le_bytes(read_hash);
-        let actual_hash = hasher.finish();
-        if expected_hash == actual_hash {
-            Ok(MeshChunk::decode(mesh_data).elements()?)
-        } else {
-            Err(Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Corrupted meshes",
-            ))
-        }
+        self.read_chunk(ChunkID::Mesh)?.to_meshes()
     }
 
     fn cameras(&mut self) -> Result<Vec<Camera>, Error> {
-        let mut read_hash = [0; HASH_SIZE];
-        let mut cam_data = Vec::with_capacity(self.offsets.cam_len as usize);
-        self.file.seek(SeekFrom::Start(self.offsets.cam_off))?;
-        self.file.read_exact(&mut read_hash)?;
-        (&mut self.file)
-            .take(self.offsets.cam_len)
-            .read_to_end(&mut cam_data)?;
-        let mut hasher = get_hasher();
-        hasher.write(&cam_data);
-        let expected_hash = u64::from_le_bytes(read_hash);
-        let actual_hash = hasher.finish();
-        if expected_hash == actual_hash {
-            Ok(CameraChunk::decode(cam_data).elements()?)
-        } else {
-            Err(Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Corrupted cameras",
-            ))
-        }
+        self.read_chunk(ChunkID::Camera)?.to_cameras()
     }
 
     fn textures(&mut self) -> Result<Vec<(u16, Texture)>, Error> {
-        let mut read_hash = [0; HASH_SIZE];
-        let mut tex_data = Vec::with_capacity(self.offsets.tex_len as usize);
-        self.file.seek(SeekFrom::Start(self.offsets.tex_off))?;
-        self.file.read_exact(&mut read_hash)?;
-        (&mut self.file)
-            .take(self.offsets.tex_len)
-            .read_to_end(&mut tex_data)?;
-        let mut hasher = get_hasher();
-        hasher.write(&tex_data);
-        let expected_hash = u64::from_le_bytes(read_hash);
-        let actual_hash = hasher.finish();
-        if expected_hash == actual_hash {
-            Ok(TextureChunk::decode(tex_data).elements()?)
-        } else {
-            Err(Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Corrupted textures",
-            ))
-        }
+        self.read_chunk(ChunkID::Texture)?.to_textures()
     }
 
     fn materials(&mut self) -> Result<Vec<(u16, Material)>, Error> {
-        let mut read_hash = [0; HASH_SIZE];
-        let mut mat_data = Vec::with_capacity(self.offsets.mat_len as usize);
-        self.file.seek(SeekFrom::Start(self.offsets.mat_off))?;
-        self.file.read_exact(&mut read_hash)?;
-        (&mut self.file)
-            .take(self.offsets.mat_len)
-            .read_to_end(&mut mat_data)?;
-        let mut hasher = get_hasher();
-        hasher.write(&mat_data);
-        let expected_hash = u64::from_le_bytes(read_hash);
-        let actual_hash = hasher.finish();
-        if expected_hash == actual_hash {
-            Ok(MaterialChunk::decode(mat_data).elements()?)
-        } else {
-            Err(Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Corrupted materials",
-            ))
-        }
+        self.read_chunk(ChunkID::Material)?.to_materials()
     }
 }
 
-/// Trait for parsed chunks of data.
-/// This does *NOT* include the hash.
-trait ParsedChunk {
-    /// Item contained in the chunk.
-    type Item;
-    /// Encodes several items into a chunk.
-    fn encode(item: &[Self::Item]) -> Self;
-    /// Copies an array of bytes into this chunk.
-    fn decode(data: Vec<u8>) -> Self;
-    /// Gets the amount of bytes composing a chunk
-    fn size_bytes(&self) -> usize;
-    /// Decodes the array of bytes composing this chunk and returns the items.
-    fn elements(self) -> Result<Vec<Self::Item>, Error>;
-    /// Gets the array of bytes composing this chunk.
-    fn data(self) -> Vec<u8>;
+/// Calculates the hash of a given amount of bytes and preprends to them.
+fn prepend_hash(mut input_data: Vec<u8>) -> Vec<u8> {
+    let mut hasher = get_hasher();
+    hasher.write(&input_data);
+    let hash = hasher.finish();
+    input_data.splice(..0, hash.to_le_bytes());
+    input_data
 }
 
-struct VertexChunk {
+/// Verifies that the first HASH_SIZE bytes of the given input data correspond to the hash of the
+/// remaining data.
+/// If this is true, returns the input data WITHOUT the hash, otherwise returns None.
+fn verify_hash(input_data: Vec<u8>) -> Option<Vec<u8>> {
+    let bytes = input_data[0..HASH_SIZE].try_into().unwrap();
+    let remaining = &input_data[HASH_SIZE..];
+    let expected_hash = u64::from_le_bytes(bytes);
+    let mut hasher = get_hasher();
+    hasher.write(remaining);
+    let actual_hash = hasher.finish();
+    if expected_hash == actual_hash {
+        Some(remaining.to_vec())
+    } else {
+        None
+    }
+}
+
+/// A Chunk containing some data (may be vertices, meshes, cameras, who knows).
+struct Chunk {
     data: Vec<u8>,
 }
 
-impl ParsedChunk for VertexChunk {
-    type Item = Vertex;
-
-    fn encode(item: &[Self::Item]) -> Self {
-        let data = item.iter().flat_map(vertex_to_bytes).collect::<Vec<_>>();
-        VertexChunk {
-            data: compress(&data),
+impl Chunk {
+    /// Creates a chunk from a slice of vertices.
+    fn from_vertices(items: &[Vertex]) -> Self {
+        if !items.is_empty() {
+            let uncompressed = items.iter().flat_map(vertex_to_bytes).collect::<Vec<u8>>();
+            let compressed = compress(&uncompressed[..]);
+            Chunk {
+                data: prepend_hash(compressed),
+            }
+        } else {
+            Chunk {
+                data: Vec::with_capacity(0),
+            }
         }
     }
 
-    fn decode(data: Vec<u8>) -> Self {
-        VertexChunk { data }
+    /// Reinterprets the bytes of this chunks as a vector of vertices.
+    #[allow(clippy::wrong_self_convention)] // this is private, who cares
+    fn to_vertices(self) -> Result<Vec<Vertex>, Error> {
+        if !self.data.is_empty() {
+            if let Some(verified_data) = verify_hash(self.data) {
+                let decompressed = decompress(&verified_data[..]);
+                Ok(decompressed.chunks_exact(32).map(bytes_to_vertex).collect())
+            } else {
+                Err(Error::new(ErrorKind::InvalidData, "Corrupted vertices"))
+            }
+        } else {
+            Ok(Vec::with_capacity(0))
+        }
     }
 
-    fn size_bytes(&self) -> usize {
-        self.data.len()
+    /// Creates a chunk from a slice of meshes.
+    fn from_meshes(items: &[Mesh]) -> Self {
+        if !items.is_empty() {
+            let len = items.len() as u32;
+            let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
+            for mesh in items {
+                let encoded = mesh_to_bytes(mesh);
+                let encoded_len = encoded.len() as u32;
+                uncompressed.extend(encoded_len.to_le_bytes().iter());
+                uncompressed.extend(encoded);
+            }
+            let compressed = compress(&uncompressed[..]);
+            Chunk {
+                data: prepend_hash(compressed),
+            }
+        } else {
+            Chunk {
+                data: Vec::with_capacity(0),
+            }
+        }
     }
 
-    fn elements(self) -> Result<Vec<Self::Item>, Error> {
-        let decompressed = decompress(&self.data);
-        Ok(decompressed.chunks_exact(32).map(bytes_to_vertex).collect())
+    /// Reinterprets the bytes of this chunks as a vector of meshes.
+    #[allow(clippy::wrong_self_convention)] // this is private, who cares
+    fn to_meshes(self) -> Result<Vec<Mesh>, Error> {
+        if !self.data.is_empty() {
+            if let Some(verified_data) = verify_hash(self.data) {
+                let decompressed = decompress(&verified_data[..]);
+                let len = u32::from_le_bytes(decompressed[0..4].try_into().unwrap());
+                let mut mesh_bytes = Vec::with_capacity(len as usize);
+                let mut index = 4;
+                while index < decompressed.len() {
+                    let encoded_len =
+                        u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap())
+                            as usize;
+                    index += 4;
+                    let mesh = &decompressed[index..index + encoded_len];
+                    index += encoded_len;
+                    mesh_bytes.push(mesh);
+                }
+                let retval = mesh_bytes.into_par_iter().map(bytes_to_mesh).collect();
+                Ok(retval)
+            } else {
+                Err(Error::new(ErrorKind::InvalidData, "Corrupted meshes"))
+            }
+        } else {
+            Ok(Vec::with_capacity(0))
+        }
     }
 
-    fn data(self) -> Vec<u8> {
-        self.data
+    /// Creates a chunk from a slice of cameras.
+    fn from_cameras(items: &[Camera]) -> Self {
+        if !items.is_empty() {
+            let mut uncompressed = Vec::with_capacity(items.len());
+            uncompressed.push(items.len() as u8);
+            for camera in items {
+                let encoded = camera_to_bytes(camera);
+                let encoded_len = encoded.len() as u8;
+                uncompressed.push(encoded_len);
+                uncompressed.extend(encoded);
+            }
+            let compressed = compress(&uncompressed[..]);
+            Chunk {
+                data: prepend_hash(compressed),
+            }
+        } else {
+            Chunk {
+                data: Vec::with_capacity(0),
+            }
+        }
+    }
+
+    /// Reinterprets the bytes of this chunks as a vector of cameras.
+    #[allow(clippy::wrong_self_convention)] // this is private, who cares
+    fn to_cameras(self) -> Result<Vec<Camera>, Error> {
+        if !self.data.is_empty() {
+            if let Some(verified) = verify_hash(self.data) {
+                let decompressed = decompress(&verified[..]);
+                let len = decompressed[0];
+                let mut retval = Vec::with_capacity(len as usize);
+                let mut index = 1;
+                while index < decompressed.len() {
+                    let encoded_len = decompressed[index] as usize;
+                    index += 1;
+                    let camera = bytes_to_camera(&decompressed[index..(index + encoded_len)]);
+                    index += encoded_len;
+                    retval.push(camera);
+                }
+                Ok(retval)
+            } else {
+                Err(Error::new(ErrorKind::InvalidData, "Corrupted cameras"))
+            }
+        } else {
+            Ok(Vec::with_capacity(0))
+        }
+    }
+
+    /// Creates a chunk from a slice of textures.
+    fn from_textures(items: &[(u16, Texture)]) -> Self {
+        if !items.is_empty() {
+            let len = items.len() as u16;
+            let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
+            for texture in items {
+                let encoded = texture_to_bytes(texture);
+                let encoded_len = encoded.len() as u32;
+                uncompressed.extend(encoded_len.to_le_bytes().iter());
+                uncompressed.extend(encoded);
+            }
+            // textures are already compressed as part of the texture_to_bytes procedure
+            Chunk {
+                data: prepend_hash(uncompressed),
+            }
+        } else {
+            Chunk {
+                data: Vec::with_capacity(0),
+            }
+        }
+    }
+
+    /// Reinterprets the bytes of this chunks as a vector of textures.
+    #[allow(clippy::wrong_self_convention)] // this is private, who cares
+    fn to_textures(self) -> Result<Vec<(u16, Texture)>, Error> {
+        if !self.data.is_empty() {
+            if let Some(verified) = verify_hash(self.data) {
+                let len = u16::from_le_bytes(verified[0..2].try_into().unwrap());
+                let mut tex_bytes = Vec::with_capacity(len as usize);
+                let mut index = std::mem::size_of::<u16>();
+                while index < verified.len() {
+                    let encoded_len =
+                        u32::from_le_bytes(verified[index..index + 4].try_into().unwrap()) as usize;
+                    index += std::mem::size_of::<u32>();
+                    let bytes = &verified[index..index + encoded_len];
+                    index += encoded_len;
+                    tex_bytes.push(bytes);
+                }
+                let retval = tex_bytes
+                    .into_par_iter()
+                    .map(bytes_to_texture)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(retval)
+            } else {
+                Err(Error::new(ErrorKind::InvalidData, "Corrupted textures"))
+            }
+        } else {
+            Ok(Vec::with_capacity(0))
+        }
+    }
+
+    /// Creates a chunk from a slice of materials.
+    fn from_materials(items: &[(u16, Material)]) -> Self {
+        if !items.is_empty() {
+            let len = items.len() as u16;
+            let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
+            for material in items {
+                let encoded = material_to_bytes(material);
+                let encoded_len = encoded.len() as u32;
+                uncompressed.extend(encoded_len.to_le_bytes().iter());
+                uncompressed.extend(encoded);
+            }
+            let compressed = compress(&uncompressed[..]);
+            Chunk {
+                data: prepend_hash(compressed),
+            }
+        } else {
+            Chunk {
+                data: Vec::with_capacity(0),
+            }
+        }
+    }
+
+    /// Reinterprets the bytes of this chunks as a vector of materials.
+    #[allow(clippy::wrong_self_convention)] // this is private, who cares
+    fn to_materials(self) -> Result<Vec<(u16, Material)>, Error> {
+        if !self.data.is_empty() {
+            if let Some(verified) = verify_hash(self.data) {
+                let decompressed = decompress(&verified[..]);
+                let len = u16::from_le_bytes(decompressed[0..2].try_into().unwrap());
+                let mut retval = Vec::with_capacity(len as usize);
+                let mut index = std::mem::size_of::<u16>();
+                while index < decompressed.len() {
+                    let encoded_len =
+                        u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap())
+                            as usize;
+                    index += std::mem::size_of::<u32>();
+                    let material = bytes_to_material(&decompressed[index..index + encoded_len]);
+                    index += encoded_len;
+                    retval.push(material);
+                }
+                Ok(retval)
+            } else {
+                Err(Error::new(ErrorKind::InvalidData, "Corrupted materials"))
+            }
+        } else {
+            Ok(Vec::with_capacity(0))
+        }
     }
 }
 
@@ -464,57 +561,6 @@ fn bytes_to_vertex(data: &[u8]) -> Vertex {
         f32::from_le_bytes(data[28..32].try_into().unwrap()),
     );
     Vertex { vv, vn, vt }
-}
-
-struct MeshChunk {
-    data: Vec<u8>,
-}
-
-impl ParsedChunk for MeshChunk {
-    type Item = Mesh;
-
-    fn encode(item: &[Self::Item]) -> Self {
-        let len = item.len() as u32;
-        let mut data = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
-        for mesh in item {
-            let encoded = mesh_to_bytes(mesh);
-            let encoded_len = encoded.len() as u32;
-            data.extend(encoded_len.to_le_bytes().iter());
-            data.extend(encoded);
-        }
-        MeshChunk {
-            data: compress(&data),
-        }
-    }
-
-    fn decode(data: Vec<u8>) -> Self {
-        MeshChunk { data }
-    }
-
-    fn size_bytes(&self) -> usize {
-        self.data.len()
-    }
-
-    fn elements(self) -> Result<Vec<Self::Item>, Error> {
-        let decompressed = decompress(&self.data);
-        let len = u32::from_le_bytes(decompressed[0..4].try_into().unwrap());
-        let mut mesh_bytes = Vec::with_capacity(len as usize);
-        let mut index = 4;
-        while index < decompressed.len() {
-            let encoded_len =
-                u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap()) as usize;
-            index += 4;
-            let mesh = &decompressed[index..index + encoded_len];
-            index += encoded_len;
-            mesh_bytes.push(mesh);
-        }
-        let retval = mesh_bytes.into_par_iter().map(bytes_to_mesh).collect();
-        Ok(retval)
-    }
-
-    fn data(self) -> Vec<u8> {
-        self.data
-    }
 }
 
 /// Converts a Mesh to a vector of bytes.
@@ -576,54 +622,6 @@ fn bytes_to_mesh(data: &[u8]) -> Mesh {
         indices,
         material,
         instances,
-    }
-}
-
-struct CameraChunk {
-    data: Vec<u8>,
-}
-
-impl ParsedChunk for CameraChunk {
-    type Item = Camera;
-
-    fn encode(item: &[Self::Item]) -> Self {
-        let mut data = vec![item.len() as u8];
-        for camera in item {
-            let encoded = camera_to_bytes(camera);
-            let encoded_len = encoded.len() as u8;
-            data.push(encoded_len);
-            data.extend(encoded);
-        }
-        CameraChunk {
-            data: compress(&data),
-        }
-    }
-
-    fn decode(data: Vec<u8>) -> Self {
-        CameraChunk { data }
-    }
-
-    fn size_bytes(&self) -> usize {
-        self.data.len()
-    }
-
-    fn elements(self) -> Result<Vec<Self::Item>, Error> {
-        let decompressed = decompress(&self.data);
-        let len = decompressed[0];
-        let mut retval = Vec::with_capacity(len as usize);
-        let mut index = 1;
-        while index < decompressed.len() {
-            let encoded_len = decompressed[index] as usize;
-            index += 1;
-            let camera = bytes_to_camera(&decompressed[index..index + encoded_len]);
-            index += encoded_len;
-            retval.push(camera);
-        }
-        Ok(retval)
-    }
-
-    fn data(self) -> Vec<u8> {
-        self.data
     }
 }
 
@@ -715,57 +713,6 @@ fn bytes_to_camera(data: &[u8]) -> Camera {
         _ => {
             panic!("Unexpected cam type")
         }
-    }
-}
-
-struct TextureChunk {
-    data: Vec<u8>,
-}
-
-impl ParsedChunk for TextureChunk {
-    type Item = (u16, Texture);
-
-    fn encode(item: &[Self::Item]) -> Self {
-        let len = item.len() as u16;
-        let mut data = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
-        for texture in item {
-            let encoded = texture_to_bytes(texture);
-            let encoded_len = encoded.len() as u32;
-            data.extend(encoded_len.to_le_bytes().iter());
-            data.extend(encoded);
-        }
-        TextureChunk { data }
-    }
-
-    fn decode(data: Vec<u8>) -> Self {
-        TextureChunk { data }
-    }
-
-    fn size_bytes(&self) -> usize {
-        self.data.len()
-    }
-
-    fn elements(self) -> Result<Vec<Self::Item>, Error> {
-        let len = u16::from_le_bytes(self.data[0..2].try_into().unwrap());
-        let mut tex_bytes = Vec::with_capacity(len as usize);
-        let mut index = std::mem::size_of::<u16>();
-        while index < self.size_bytes() {
-            let encoded_len =
-                u32::from_le_bytes(self.data[index..index + 4].try_into().unwrap()) as usize;
-            index += std::mem::size_of::<u32>();
-            let bytes = &self.data[index..index + encoded_len];
-            index += encoded_len;
-            tex_bytes.push(bytes);
-        }
-        let retval = tex_bytes
-            .into_par_iter()
-            .map(bytes_to_texture)
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(retval)
-    }
-
-    fn data(self) -> Vec<u8> {
-        self.data
     }
 }
 
@@ -876,56 +823,6 @@ fn bytes_to_texture(data: &[u8]) -> Result<(u16, Texture), Error> {
         }
     };
     Ok((tex_index, texture))
-}
-
-struct MaterialChunk {
-    data: Vec<u8>,
-}
-
-impl ParsedChunk for MaterialChunk {
-    type Item = (u16, Material);
-
-    fn encode(item: &[Self::Item]) -> Self {
-        let len = item.len() as u16;
-        let mut data = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
-        for material in item {
-            let encoded = material_to_bytes(material);
-            let encoded_len = encoded.len() as u32;
-            data.extend(encoded_len.to_le_bytes().iter());
-            data.extend(encoded);
-        }
-        MaterialChunk {
-            data: compress(&data),
-        }
-    }
-
-    fn decode(data: Vec<u8>) -> Self {
-        MaterialChunk { data }
-    }
-
-    fn size_bytes(&self) -> usize {
-        self.data.len()
-    }
-
-    fn elements(self) -> Result<Vec<Self::Item>, Error> {
-        let decompressed = decompress(&self.data);
-        let len = u16::from_le_bytes(decompressed[0..2].try_into().unwrap());
-        let mut retval = Vec::with_capacity(len as usize);
-        let mut index = std::mem::size_of::<u16>();
-        while index < decompressed.len() {
-            let encoded_len =
-                u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap()) as usize;
-            index += std::mem::size_of::<u32>();
-            let material = bytes_to_material(&decompressed[index..index + encoded_len]);
-            index += encoded_len;
-            retval.push(material);
-        }
-        Ok(retval)
-    }
-
-    fn data(self) -> Vec<u8> {
-        self.data
-    }
 }
 
 /// Converts a Material to a vector of bytes.
@@ -1369,10 +1266,77 @@ mod tests {
     }
 
     #[test]
+    fn write_and_read_everything() -> Result<(), std::io::Error> {
+        let vertices = gen_vertices(100, 0x98DA1392A52639C2);
+        let meshes = gen_meshes(100, 0xEFB101FDF7F185FB);
+        let cameras = gen_cameras(100, 0x9B20F550F7EDF740);
+        let textures = gen_textures(4, 0x122C4C9E1A51AC4B);
+        let materials = gen_materials(100, 0x76D7971188303D82);
+        let dir = tempdir()?;
+        let file = dir.path().join("write_and_read_everything.bin");
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &vertices,
+            &meshes,
+            &cameras,
+            &textures,
+            &materials,
+        )?;
+        let mut read = parse(file.as_path())?;
+        remove_file(file.as_path())?;
+        let read_vertices = read.vertices()?;
+        let read_meshes = read.meshes()?;
+        let read_cameras = read.cameras()?;
+        let read_textures = read.textures()?;
+        let read_materials = read.materials()?;
+        assert_eq!(read_vertices.len(), vertices.len());
+        assert_eq!(read_meshes.len(), meshes.len());
+        assert_eq!(read_cameras.len(), cameras.len());
+        assert_eq!(read_textures.len(), textures.len());
+        assert_eq!(read_materials.len(), materials.len());
+        for i in 0..read_vertices.len() {
+            let val = &read_vertices.get(i).unwrap();
+            let expected = &vertices.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_meshes.len() {
+            let val = &read_meshes.get(i).unwrap();
+            let expected = &meshes.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_cameras.len() {
+            let val = &read_cameras.get(i).unwrap();
+            let expected = &cameras.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_textures.len() {
+            let val = &read_textures.get(i).unwrap();
+            let expected = &textures.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_materials.len() {
+            let val = &read_materials.get(i).unwrap();
+            let expected = &materials.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn corrupted_offset() -> Result<(), std::io::Error> {
+        let vertices = gen_vertices(100, 0x8794A1E593281F2F);
         let dir = tempdir()?;
         let file = dir.path().join("corrupted_off.bin");
-        serialize(file.as_path(), ParserVersion::V1, &[], &[], &[], &[], &[])?;
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &vertices,
+            &[],
+            &[],
+            &[],
+            &[],
+        )?;
         let read_ok = parse(file.as_path());
         assert!(read_ok.is_ok());
         {
@@ -1381,7 +1345,7 @@ mod tests {
                 .read(true)
                 .write(true)
                 .open(file.as_path())?;
-            file.seek(SeekFrom::Start((HEADER_LEN + HASH_SIZE + 4) as u64))?;
+            file.seek(SeekFrom::Start((HEADER_LEN + HASH_SIZE + 10) as u64))?;
             file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
         let read_corrupted = parse(file.as_path());
@@ -1549,7 +1513,7 @@ mod tests {
     fn compress_decompress() {
         let data = "The quick brown fox jumps over the lazy dog";
         let compressed = compress(data.as_bytes());
-        let decompressed = decompress(&compressed);
+        let decompressed = decompress(&compressed[..]);
         assert_ne!(&compressed, &decompressed);
         let result = String::from_utf8(decompressed).unwrap();
         assert_eq!(result, data);

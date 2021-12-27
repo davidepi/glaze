@@ -9,7 +9,7 @@ use super::renderpass::RenderPass;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
-use crate::{include_shader, Camera, Material, ReadParsed};
+use crate::{include_shader, Camera, Material, ParsedScene};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
@@ -353,7 +353,7 @@ impl RealtimeRenderer {
     /// let parsed = parse(scene_path).expect("Failed to parse scene");
     /// renderer.change_scene(parsed);
     /// ```
-    pub fn change_scene(&mut self, parsed: Box<dyn ReadParsed + Send>) {
+    pub fn change_scene(&mut self, parsed: Box<dyn ParsedScene + Send>) {
         self.wait_idle();
         if let Some(mut scene) = self.scene.take() {
             scene.deinit_pipelines(self.instance.device().logical());

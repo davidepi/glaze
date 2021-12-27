@@ -13,6 +13,6 @@ pub use materials::TextureLoaded;
 pub use materials::{
     Material, ShaderMat, Texture, TextureFormat, TextureGray, TextureInfo, TextureRGBA,
 };
-pub use parser::{converted_file, parse, serialize, ParserVersion, ReadParsed};
+pub use parser::{converted_file, parse, serialize, ParsedScene, ParserVersion};
 #[cfg(feature = "vulkan")]
 pub use vulkan::{Pipeline, PipelineBuilder, PresentInstance, RealtimeRenderer, VulkanScene};

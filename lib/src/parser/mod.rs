@@ -90,7 +90,7 @@ impl Display for ParseVersionError {
 /// let mut parsed = glaze::parse("test.bin").expect("Failed to parse file");
 /// let vertices = parsed.vertices().unwrap();
 /// ```
-pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ReadParsed + Send>, Error> {
+pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ParsedScene + Send>, Error> {
     let fin = File::open(file)?;
     let mut reader = BufReader::new(fin);
     let mut header = [0; HEADER_LEN];
@@ -183,7 +183,7 @@ pub fn converted_file<P: AsRef<Path>>(file: P) -> bool {
 ///
 /// This trait is used to access the content of the parsed file. Various parser versions may
 /// implement this trait and return a `Box<dyn ParsedContent>`.
-pub trait ReadParsed {
+pub trait ParsedScene {
     /// Retrieve only the [Vertex]s contained in the file.
     fn vertices(&mut self) -> Result<Vec<Vertex>, Error>;
     /// Retrieve only the [Mesh]es contained in the file.
@@ -194,12 +194,6 @@ pub trait ReadParsed {
     fn textures(&mut self) -> Result<Vec<(u16, Texture)>, Error>;
     /// Retrieve only the [Material]s contained in the file.
     fn materials(&mut self) -> Result<Vec<(u16, Material)>, Error>;
-}
-
-/// Trait used for writing and updating the content of the parsed file.
-pub trait WriteParsed {
-    /// Updates the current parsed scene.
-    fn update(&mut self, cameras: Vec<Camera>, materials: Vec<(u16, Material)>);
 }
 
 mod v1;

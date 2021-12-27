@@ -4,7 +4,7 @@ use super::device::Device;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::Pipeline;
 use crate::materials::{TextureFormat, TextureLoaded};
-use crate::{Camera, Material, Mesh, ReadParsed, ShaderMat, Texture, Vertex};
+use crate::{Camera, Material, Mesh, ParsedScene, ShaderMat, Texture, Vertex};
 use ash::vk;
 use cgmath::Vector3 as Vec3;
 use fnv::FnvHashMap;
@@ -65,7 +65,7 @@ impl VulkanScene {
     /// wchan is used to send feedbacks about the current loading status.
     pub(super) fn load<T: Device>(
         device: &T,
-        mut scene: Box<dyn ReadParsed>,
+        mut scene: Box<dyn ParsedScene>,
         mm: &mut MemoryManager,
         desc_cache: DLayoutCache,
         wchan: Sender<String>,
