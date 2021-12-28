@@ -70,6 +70,13 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
             if MenuItem::new("Open").build(ui) {
                 open_scene(renderer, state);
             }
+            if MenuItem::new("Save").build(ui) {
+                if let Some(scene) = renderer.scene_mut() {
+                    if let Err(error) = scene.save() {
+                        log::error!("Failed to save scene: {}", error);
+                    }
+                }
+            }
         });
         ui.menu("Window", || {
             ui.checkbox("Settings", &mut state.settings_window);
@@ -499,7 +506,7 @@ fn open_scene(renderer: &mut RealtimeRenderer, state: &mut UiState) {
                 renderer.change_scene(parsed);
                 state.change_scene();
             }
-            Err(_) => log::error!("Failed to parse scene file"),
+            Err(err) => log::error!("Failed to parse scene file: {}", err),
         },
         Ok(Response::Cancel) => (),
         _ => log::error!("Error opening file dialog"),

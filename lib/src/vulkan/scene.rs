@@ -15,6 +15,8 @@ use std::sync::mpsc::Sender;
 
 /// A scene optimized to be rendered using this crates vulkan implementation.
 pub struct VulkanScene {
+    /// The scene on disk.
+    file: Box<dyn ParsedScene + Send>,
     /// The camera for the current scene.
     pub current_cam: Camera,
     /// The buffer containing all vertices for the current scene.
@@ -39,6 +41,8 @@ pub struct VulkanScene {
     pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
     /// Map of all textures in the scene.
     pub(super) textures: FnvHashMap<u16, TextureLoaded>,
+    /// If the materials changed after loading the scene
+    mat_changed: bool,
 }
 
 /// A mesh optimized to be rendered using this crates renderer.
@@ -65,7 +69,7 @@ impl VulkanScene {
     /// wchan is used to send feedbacks about the current loading status.
     pub(super) fn load<T: Device>(
         device: &T,
-        mut scene: Box<dyn ParsedScene>,
+        mut parsed: Box<dyn ParsedScene + Send>,
         mm: &mut MemoryManager,
         desc_cache: DLayoutCache,
         wchan: Sender<String>,
@@ -77,13 +81,13 @@ impl VulkanScene {
         let mut cmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 5);
         wchan.send("[1/4] Loading vertices...".to_string()).ok();
         let vertex_buffer =
-            load_vertices_to_gpu(device, mm, &mut cmdm, &mut unf, &scene.vertices()?);
+            load_vertices_to_gpu(device, mm, &mut cmdm, &mut unf, &parsed.vertices()?);
         wchan.send("[2/4] Loading meshes...".to_string()).ok();
         let (mut meshes, index_buffer) =
-            load_indices_to_gpu(device, mm, &mut cmdm, &mut unf, &scene.meshes()?);
+            load_indices_to_gpu(device, mm, &mut cmdm, &mut unf, &parsed.meshes()?);
         let sampler = create_sampler(device);
         wchan.send("[3/4] Loading textures...".to_string()).ok();
-        let scene_textures = scene.textures()?;
+        let scene_textures = parsed.textures()?;
         let textures_no = scene_textures.len();
         let textures = scene_textures
             .into_iter()
@@ -103,7 +107,7 @@ impl VulkanScene {
             })
             .collect();
         let dflt_tex = load_texture_to_gpu(device, mm, &mut cmdm, &mut unf, Texture::default());
-        let parsed_mats = scene.materials()?;
+        let parsed_mats = parsed.materials()?;
         let params_buffer =
             load_materials_parameters(device, &parsed_mats, mm, &mut cmdm, &mut unf);
         device.wait_completion(&unf.fences);
@@ -132,7 +136,7 @@ impl VulkanScene {
                 (id, (mat, shader, desc))
             })
             .collect();
-        let current_cam = scene.cameras()?[0].clone(); // parser automatically adds a default cam
+        let current_cam = parsed.cameras()?[0].clone(); // parser automatically adds a default cam
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
             "Material update transfer buffer",
@@ -142,6 +146,7 @@ impl VulkanScene {
         );
         sort_meshes(&mut meshes, &materials);
         Ok(VulkanScene {
+            file: parsed,
             current_cam,
             vertex_buffer,
             index_buffer,
@@ -154,6 +159,7 @@ impl VulkanScene {
             materials,
             pipelines,
             textures,
+            mat_changed: false,
         })
     }
 
@@ -227,6 +233,7 @@ impl VulkanScene {
         self.materials.insert(mat_id, (new, new_shader, new_desc));
         // sort the meshes to minimize bindings
         sort_meshes(&mut self.meshes, &self.materials);
+        self.mat_changed = true;
     }
 
     /// Initializes the scene's pipelines.
@@ -297,6 +304,20 @@ impl VulkanScene {
     /// The order of the textures is not guaranteed.
     pub fn textures(&self) -> Vec<(u16, &TextureLoaded)> {
         self.textures.iter().map(|(id, tex)| (*id, tex)).collect()
+    }
+
+    pub fn save(&mut self) -> Result<(), std::io::Error> {
+        let cameras = [self.current_cam.clone()];
+        if self.mat_changed {
+            let materials = self
+                .materials
+                .iter()
+                .map(|(id, (mat, _, _))| (*id, mat.clone()))
+                .collect::<Vec<_>>();
+            self.file.update(Some(&cameras), Some(&materials))
+        } else {
+            self.file.update(Some(&cameras), None)
+        }
     }
 }
 

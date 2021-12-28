@@ -1,4 +1,4 @@
-use super::{ParsedScene, HEADER_LEN};
+use super::{write_header, ParsedScene, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
 use crate::materials::{TextureFormat, TextureInfo};
 use crate::{Material, Texture};
@@ -308,6 +308,7 @@ impl ParsedScene for ContentV1 {
             // Reopens the file in write mode (actually creates a new file, as most content will be
             // shifted).
             let mut writer = BufWriter::new(File::create(&self.filepath)?);
+            write_header(&mut writer)?;
             let chunks = [
                 (ChunkID::Vertex, vertices),
                 (ChunkID::Mesh, meshes),
@@ -1569,6 +1570,31 @@ mod tests {
         assert_ne!(&compressed, &decompressed);
         let result = String::from_utf8(decompressed).unwrap();
         assert_eq!(result, data);
+    }
+
+    #[test]
+    fn update_reopen() -> Result<(), std::io::Error> {
+        // regression test: I forgot to write the header on update
+        let vertices = gen_vertices(100, 0xBD4D59BF04981A1A);
+        let dir = tempdir()?;
+        let file = dir.path().join("update_some.bin");
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &vertices,
+            &[],
+            &[],
+            &[],
+            &[],
+        )?;
+        let mut read = parse(file.as_path())?;
+        assert_eq!(read.vertices()?.len(), vertices.len());
+        read.update(None, None)?;
+        assert_eq!(read.vertices()?.len(), vertices.len());
+        // close file and reopen it
+        let mut read = parse(file.as_path())?;
+        assert_eq!(read.vertices()?.len(), vertices.len());
+        Ok(())
     }
 
     #[test]

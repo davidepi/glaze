@@ -3,7 +3,7 @@ use crate::geometry::{Camera, Mesh, Vertex};
 use crate::{Material, Texture};
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read, Write};
+use std::io::{BufWriter, Error, ErrorKind, Read, Seek, Write};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -147,16 +147,21 @@ pub fn serialize<P: AsRef<Path>>(
     textures: &[(u16, Texture)],
     materials: &[(u16, Material)],
 ) -> Result<(), Error> {
-    let mut fout = File::create(file)?;
-    let magic = MAGIC_NUMBER;
-    fout.write_all(&magic)?;
-    fout.write_all(&[1_u8])?;
-    fout.write_all(&[0; 10])?;
+    let mut fout = BufWriter::new(File::create(file)?);
+    write_header(&mut fout)?;
     match version {
         ParserVersion::V1 => {
             ContentV1::serialize(fout, vertices, meshes, cameras, textures, materials)?
         }
     };
+    Ok(())
+}
+
+/// Writes the header of the file.
+pub(super) fn write_header<W: Write + Seek>(file: &mut W) -> Result<(), Error> {
+    let magic = MAGIC_NUMBER;
+    file.write_all(&magic)?;
+    file.write_all(&[1_u8])?;
     Ok(())
 }
 
