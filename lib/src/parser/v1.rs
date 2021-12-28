@@ -9,8 +9,10 @@ use image::{GrayImage, ImageDecoder, RgbaImage};
 use rayon::iter::ParallelIterator;
 use rayon::prelude::IntoParallelIterator;
 use std::convert::TryInto;
+use std::fs::File;
 use std::hash::Hasher;
-use std::io::{Error, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, BufWriter, Error, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use twox_hash::XxHash64;
 use xz2::read::{XzDecoder, XzEncoder};
 
@@ -189,18 +191,25 @@ impl OffsetsTable {
 }
 
 /// Parser for this file format.
-pub(super) struct ContentV1<R: Read + Seek> {
-    /// Handle to the Reader
-    file: R,
+pub(super) struct ContentV1 {
+    /// Handle to the BufferedReader
+    reader: BufReader<File>,
+    /// Path of the file contained in the reader (used for reopenings),
+    filepath: PathBuf,
     /// Offsets of this particular file.
     offsets: OffsetsTable,
 }
 
-impl<R: Read + Seek> ContentV1<R> {
+impl ContentV1 {
     /// Initializes the parser for this particular file format.
-    pub(super) fn parse(mut file: R) -> Result<Self, Error> {
-        let offsets = OffsetsTable::seek_and_parse(&mut file)?;
-        Ok(ContentV1 { file, offsets })
+    pub(super) fn parse<P: AsRef<Path>>(path: P, file: File) -> Result<Self, Error> {
+        let mut reader = BufReader::new(file);
+        let offsets = OffsetsTable::seek_and_parse(&mut reader)?;
+        Ok(ContentV1 {
+            reader,
+            filepath: PathBuf::from(path.as_ref()),
+            offsets,
+        })
     }
 
     /// Writes the scene structures into the file handled by this parser.
@@ -212,33 +221,40 @@ impl<R: Read + Seek> ContentV1<R> {
         textures: &[(u16, Texture)],
         materials: &[(u16, Material)],
     ) -> Result<(), Error> {
-        let vert = Chunk::from_vertices(vertices);
-        let mesh = Chunk::from_meshes(meshes);
-        let cams = Chunk::from_cameras(cameras);
-        let texs = Chunk::from_textures(textures);
-        let mats = Chunk::from_materials(materials);
-        let mut offsets = OffsetsTable::default();
-        offsets.set_offset(ChunkID::Vertex, vert.data.len() as u64);
-        offsets.set_offset(ChunkID::Mesh, mesh.data.len() as u64);
-        offsets.set_offset(ChunkID::Camera, cams.data.len() as u64);
-        offsets.set_offset(ChunkID::Texture, texs.data.len() as u64);
-        offsets.set_offset(ChunkID::Material, mats.data.len() as u64);
+        let chunks = [
+            (ChunkID::Vertex, Chunk::from_vertices(vertices)),
+            (ChunkID::Mesh, Chunk::from_meshes(meshes)),
+            (ChunkID::Camera, Chunk::from_cameras(cameras)),
+            (ChunkID::Texture, Chunk::from_textures(textures)),
+            (ChunkID::Material, Chunk::from_materials(materials)),
+        ];
+        ContentV1::write_chunks(&mut fout, &chunks)
+    }
+
+    /// Writes all the chunks to the file. This method **overwrites** existing chunks.
+    fn write_chunks<W: Write + Seek>(
+        fout: &mut W,
+        chunks: &[(ChunkID, Chunk)],
+    ) -> Result<(), Error> {
+        let mut tab = OffsetsTable::default();
+        chunks
+            .iter()
+            .for_each(|(id, chunk)| tab.set_offset(*id, chunk.data.len() as u64));
         fout.seek(SeekFrom::Start(HEADER_LEN as u64))?;
-        fout.write_all(&offsets.as_bytes())?;
-        fout.write_all(&vert.data)?;
-        fout.write_all(&mesh.data)?;
-        fout.write_all(&cams.data)?;
-        fout.write_all(&texs.data)?;
-        fout.write_all(&mats.data)?;
+        fout.write_all(&tab.as_bytes())?;
+        chunks
+            .iter()
+            .map(|(_, chunk)| fout.write_all(&chunk.data))
+            .collect::<Result<Vec<_>, Error>>()?;
         Ok(())
     }
 
     /// Reads a chunk with a given ID from the file.
     fn read_chunk(&mut self, id: ChunkID) -> Result<Chunk, Error> {
         let chunk = if let Some((offset, len)) = self.offsets.chunks.get(&id) {
-            self.file.seek(SeekFrom::Start(*offset))?;
+            self.reader.seek(SeekFrom::Start(*offset))?;
             let mut read = Vec::with_capacity(*len as usize);
-            (&mut self.file).take(*len).read_to_end(&mut read)?;
+            (&mut self.reader).take(*len).read_to_end(&mut read)?;
             Chunk { data: read }
         } else {
             Chunk {
@@ -249,7 +265,7 @@ impl<R: Read + Seek> ContentV1<R> {
     }
 }
 
-impl<R: Read + Seek> ParsedScene for ContentV1<R> {
+impl ParsedScene for ContentV1 {
     fn vertices(&mut self) -> Result<Vec<Vertex>, Error> {
         self.read_chunk(ChunkID::Vertex)?.to_vertices()
     }
@@ -268,6 +284,42 @@ impl<R: Read + Seek> ParsedScene for ContentV1<R> {
 
     fn materials(&mut self) -> Result<Vec<(u16, Material)>, Error> {
         self.read_chunk(ChunkID::Material)?.to_materials()
+    }
+
+    fn update(
+        &mut self,
+        cameras: Option<&[Camera]>,
+        materials: Option<&[(u16, Material)]>,
+    ) -> Result<(), Error> {
+        let vertices = self.read_chunk(ChunkID::Vertex)?;
+        let meshes = self.read_chunk(ChunkID::Mesh)?;
+        let textures = self.read_chunk(ChunkID::Texture)?;
+        let cameras = if let Some(cameras) = cameras {
+            Chunk::from_cameras(cameras)
+        } else {
+            self.read_chunk(ChunkID::Camera)?
+        };
+        let materials = if let Some(materials) = materials {
+            Chunk::from_materials(materials)
+        } else {
+            self.read_chunk(ChunkID::Material)?
+        };
+        {
+            // Reopens the file in write mode (actually creates a new file, as most content will be
+            // shifted).
+            let mut writer = BufWriter::new(File::create(&self.filepath)?);
+            let chunks = [
+                (ChunkID::Vertex, vertices),
+                (ChunkID::Mesh, meshes),
+                (ChunkID::Camera, cameras),
+                (ChunkID::Texture, textures),
+                (ChunkID::Material, materials),
+            ];
+            ContentV1::write_chunks(&mut writer, &chunks)?;
+            self.reader = BufReader::new(File::open(&self.filepath)?);
+        }
+        self.offsets = OffsetsTable::seek_and_parse(&mut self.reader)?;
+        Ok(())
     }
 }
 
@@ -1517,5 +1569,96 @@ mod tests {
         assert_ne!(&compressed, &decompressed);
         let result = String::from_utf8(decompressed).unwrap();
         assert_eq!(result, data);
+    }
+
+    #[test]
+    fn update_some() -> Result<(), std::io::Error> {
+        let vertices = gen_vertices(100, 0xBD4D59BF04981A1A);
+        let dir = tempdir()?;
+        let file = dir.path().join("update_some.bin");
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &vertices,
+            &[],
+            &[],
+            &[],
+            &[],
+        )?;
+        let mut read = parse(file.as_path())?;
+        assert_eq!(read.vertices()?.len(), vertices.len());
+        let new_cameras = gen_cameras(100, 0xECD7D80A8A4C4C95);
+        let new_materials = gen_materials(100, 0xAA9475DE05B6CE41);
+        read.update(Some(&new_cameras), Some(&new_materials))?;
+        assert_eq!(read.vertices()?.len(), vertices.len());
+        assert_eq!(read.cameras()?.len(), new_cameras.len());
+        assert_eq!(read.materials()?.len(), new_materials.len());
+        Ok(())
+    }
+
+    #[test]
+    fn update_all() -> Result<(), std::io::Error> {
+        let vertices = gen_vertices(100, 0x7CE285088B15CD6C);
+        let meshes = gen_meshes(100, 0x0360E2B31852DCDA);
+        let cameras = gen_cameras(25, 0x91D237698C5717D3);
+        let textures = gen_textures(4, 0x4AE5995B104BBAB1);
+        let materials = gen_materials(25, 0x6FEC53A488FBDB4F);
+        let dir = tempdir()?;
+        let file = dir.path().join("update_all.bin");
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &vertices,
+            &meshes,
+            &cameras,
+            &textures,
+            &materials,
+        )?;
+        let mut read = parse(file.as_path())?;
+        remove_file(file.as_path())?;
+        assert_eq!(read.vertices()?.len(), vertices.len());
+        assert_eq!(read.meshes()?.len(), meshes.len());
+        assert_eq!(read.cameras()?.len(), cameras.len());
+        assert_eq!(read.textures()?.len(), textures.len());
+        assert_eq!(read.materials()?.len(), materials.len());
+        let new_cameras = gen_cameras(100, 0x056F0B996A248BC4);
+        let new_materials = gen_materials(100, 0x3ABE1A9BEB00DA7B);
+        read.update(Some(&new_cameras), Some(&new_materials))?;
+        let read_vertices = read.vertices()?;
+        let read_meshes = read.meshes()?;
+        let read_cameras = read.cameras()?;
+        let read_textures = read.textures()?;
+        let read_materials = read.materials()?;
+        assert_eq!(read_vertices.len(), vertices.len());
+        assert_eq!(read_meshes.len(), meshes.len());
+        assert_eq!(read_cameras.len(), new_cameras.len());
+        assert_eq!(read_textures.len(), textures.len());
+        assert_eq!(read_materials.len(), new_materials.len());
+        for i in 0..read_vertices.len() {
+            let val = &read_vertices.get(i).unwrap();
+            let expected = &vertices.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_meshes.len() {
+            let val = &read_meshes.get(i).unwrap();
+            let expected = &meshes.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_cameras.len() {
+            let val = &read_cameras.get(i).unwrap();
+            let expected = &new_cameras.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_textures.len() {
+            let val = &read_textures.get(i).unwrap();
+            let expected = &textures.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_materials.len() {
+            let val = &read_materials.get(i).unwrap();
+            let expected = &new_materials.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        Ok(())
     }
 }

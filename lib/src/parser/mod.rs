@@ -3,7 +3,7 @@ use crate::geometry::{Camera, Mesh, Vertex};
 use crate::{Material, Texture};
 use std::fmt::Display;
 use std::fs::File;
-use std::io::{BufReader, Error, ErrorKind, Read, Write};
+use std::io::{Error, ErrorKind, Read, Write};
 use std::path::Path;
 use std::str::FromStr;
 
@@ -91,10 +91,9 @@ impl Display for ParseVersionError {
 /// let vertices = parsed.vertices().unwrap();
 /// ```
 pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ParsedScene + Send>, Error> {
-    let fin = File::open(file)?;
-    let mut reader = BufReader::new(fin);
+    let mut fin = File::open(file.as_ref())?;
     let mut header = [0; HEADER_LEN];
-    if reader.read_exact(&mut header).is_ok() {
+    if fin.read_exact(&mut header).is_ok() {
         let magic = &header[0..5];
         if magic != MAGIC_NUMBER {
             Err(Error::new(
@@ -104,7 +103,7 @@ pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ParsedScene + Send>, Err
         } else {
             let version = ParserVersion::from_byte(header[5])?;
             let parsed = match version {
-                ParserVersion::V1 => Box::new(ContentV1::parse(reader)?),
+                ParserVersion::V1 => Box::new(ContentV1::parse(file, fin)?),
             };
             Ok(parsed)
         }
@@ -116,7 +115,7 @@ pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ParsedScene + Send>, Err
     }
 }
 
-/// Save a file using the format expected by this crate.
+/// Saves a file using the format expected by this crate.
 ///
 /// This function saves a list of vertices/meshes/camera/textures/materials to the given path
 /// using the provided [ParserVersion].
@@ -155,11 +154,12 @@ pub fn serialize<P: AsRef<Path>>(
     fout.write_all(&[0; 10])?;
     match version {
         ParserVersion::V1 => {
-            ContentV1::<File>::serialize(fout, vertices, meshes, cameras, textures, materials)?
+            ContentV1::serialize(fout, vertices, meshes, cameras, textures, materials)?
         }
     };
     Ok(())
 }
+
 /// Returns true if the file has already been converted to a format supported by this crate.
 ///
 /// This crate requires file to be in a specific version. This function checks whether the file
@@ -179,7 +179,7 @@ pub fn converted_file<P: AsRef<Path>>(file: P) -> bool {
     }
 }
 
-/// Trait used for accessing the content of the parsed file.
+/// Trait used for accessing the content of the parsed file and updating them.
 ///
 /// This trait is used to access the content of the parsed file. Various parser versions may
 /// implement this trait and return a `Box<dyn ParsedContent>`.
@@ -194,6 +194,12 @@ pub trait ParsedScene {
     fn textures(&mut self) -> Result<Vec<(u16, Texture)>, Error>;
     /// Retrieve only the [Material]s contained in the file.
     fn materials(&mut self) -> Result<Vec<(u16, Material)>, Error>;
+    /// Updates an existing file.
+    fn update(
+        &mut self,
+        cameras: Option<&[Camera]>,
+        materials: Option<&[(u16, Material)]>,
+    ) -> Result<(), Error>;
 }
 
 mod v1;
