@@ -3,8 +3,8 @@ use ash::vk;
 use cgmath::{Vector2 as Vec2, Vector3 as Vec3};
 
 /// A three dimensional point in space, used as a vertex for a triangle.
-#[repr(C, packed)]
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Vertex {
     /// The vertex position in 3D space.
     pub vv: Vec3<f32>,
