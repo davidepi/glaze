@@ -2,6 +2,9 @@
 use crate::vulkan::PipelineBuilder;
 use std::error::Error;
 
+/// Macro used to include the shader contained inside the /shader directory as a `[u8; _]`.
+///
+/// Probably will not work outside this crate.
 #[macro_export]
 macro_rules! include_shader {
     ($shader_name : expr) => {

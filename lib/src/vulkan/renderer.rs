@@ -110,9 +110,11 @@ impl RealtimeRenderer {
     /// # Examples
     /// basic usage:
     /// ``` no_run
-    /// let window = winit::window::Window::new();
+    /// let mut event_loop = winit::event_loop::EventLoop::new();
+    /// let window = winit::window::Window::new(&event_loop).unwrap();
     /// let mut imgui = imgui::Context::create();
-    /// let renderer = RealtimeRenderer::create(
+    /// let instance = std::rc::Rc::new(glaze::PresentInstance::new(&window));
+    /// let renderer = glaze::RealtimeRenderer::create(
     ///     instance,
     ///     &mut imgui,
     ///     window.inner_size().width,
@@ -339,9 +341,11 @@ impl RealtimeRenderer {
     /// Basic usage:
     /// ``` no_run
     /// // init renderer
-    /// let window = winit::window::Window::new();
+    /// let mut event_loop = winit::event_loop::EventLoop::new();
+    /// let window = winit::window::Window::new(&event_loop).unwrap();
     /// let mut imgui = imgui::Context::create();
-    /// let mut renderer = RealtimeRenderer::create(
+    /// let instance = std::rc::Rc::new(glaze::PresentInstance::new(&window));
+    /// let mut renderer = glaze::RealtimeRenderer::create(
     ///     instance,
     ///     &mut imgui,
     ///     window.inner_size().width,
@@ -350,7 +354,7 @@ impl RealtimeRenderer {
     /// );
     /// // parse scene
     /// let scene_path = "/path/to/scene";
-    /// let parsed = parse(scene_path).expect("Failed to parse scene");
+    /// let parsed = glaze::parse(scene_path).expect("Failed to parse scene");
     /// renderer.change_scene(parsed);
     /// ```
     pub fn change_scene(&mut self, parsed: Box<dyn ParsedScene + Send>) {

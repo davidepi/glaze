@@ -23,14 +23,15 @@ impl Pipeline {
 
 /// Creates a Pipeline with a simil-builder pattern.
 ///
-/// Usually the pipeline is created with [Pipeline::default], then the builder fields edited,
-/// and finally the function [PipelinBuilder::build] called.
+/// Usually the pipeline is created with [PipelineBuilder::default], then the builder fields edited,
+/// and finally the function [PipelineBuilder::build] called.
 ///
-/// Several pipelines can be configured just by using the [ShaderMat::build_pipeline] method.
+/// Several pipelines can be configured just by using the
+/// [ShaderMat::build_pipeline][crate::ShaderMat::build_pipeline] method.
 pub struct PipelineBuilder {
     /// Shaders to use in the pipeline.
     /// Vector of `(shader SPIR-V data, function name, shader stage)`.
-    /// Edit this vector or use [Pipeline::push_shader].
+    /// Edit this vector or use [PipelineBuilder::push_shader].
     pub shaders: Vec<(Vec<u8>, CString, vk::ShaderStageFlags)>,
     /// Vertex binding descriptions.
     ///

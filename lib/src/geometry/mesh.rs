@@ -4,9 +4,9 @@ use cgmath::Matrix4;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mesh {
     /// Indices for the triangles vertices. Each triplet of indices represents a triangle.
-    /// The indices are relative to a [Vertex] buffer, not contained in the Mesh.
+    /// The indices are relative to a [Vertex][crate::Vertex] buffer, not contained in the Mesh.
     pub indices: Vec<u32>,
-    /// Index of the mesh [Material].
+    /// Index of the mesh [Material][crate::Material].
     /// The material is not contained in the Mesh itself.
     pub material: u16,
     /// Transformation matrices of the current mesh.

@@ -79,7 +79,7 @@ impl Display for ParseVersionError {
 ///
 /// Given a path to a file written by this crate, this function parses it and return its content.
 /// The content is returned in different formats, depending on the [ParserVersion] of the written
-/// file. One should use the methods provided by the trait [ReadParsed] to access the actual
+/// file. One should use the methods provided by the trait [ParsedScene] to access the actual
 /// content of the file.
 ///
 /// # Errors

@@ -55,8 +55,9 @@ impl PresentInstance {
     /// # Examples
     /// Basic usage:
     /// ``` no_run
-    /// let window = winit::Window::new();
-    /// let instance = PresentInstance::new(&window);
+    /// let mut event_loop = winit::event_loop::EventLoop::new();
+    /// let window = winit::window::Window::new(&event_loop).unwrap();
+    /// let instance = glaze::PresentInstance::new(&window);
     /// ```
     pub fn new(window: &Window) -> Self {
         let instance_extensions = required_extensions();
