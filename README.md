@@ -1,4 +1,5 @@
 # Glaze
+![build badge](https://github.com/davidepi/glaze/actions/workflows/ci.yml/badge.svg)
 
 Trying to write an offline renderer in Rust using Vulkan.
 
