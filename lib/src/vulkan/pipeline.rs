@@ -291,6 +291,10 @@ impl Default for PipelineBuilder {
             min_depth_bounds: 0.0,
             max_depth_bounds: 1.0,
         };
+        let cwm = vk::ColorComponentFlags::R
+            | vk::ColorComponentFlags::G
+            | vk::ColorComponentFlags::B
+            | vk::ColorComponentFlags::A;
         let blending_settings = vec![vk::PipelineColorBlendAttachmentState {
             blend_enable: vk::FALSE,
             src_color_blend_factor: vk::BlendFactor::ONE,
@@ -299,7 +303,7 @@ impl Default for PipelineBuilder {
             src_alpha_blend_factor: vk::BlendFactor::ONE,
             dst_alpha_blend_factor: vk::BlendFactor::ZERO,
             alpha_blend_op: vk::BlendOp::ADD,
-            color_write_mask: vk::ColorComponentFlags::all(),
+            color_write_mask: cwm,
         }];
         let blend_op = (None, [0.0; 4]);
         PipelineBuilder {

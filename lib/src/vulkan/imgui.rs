@@ -535,9 +535,13 @@ fn build_imgui_pipeline(
     };
     builder.dynamic_states = vec![vk::DynamicState::SCISSOR];
     builder.push_constants(std::mem::size_of::<ImguiPC>(), vk::ShaderStageFlags::VERTEX);
+    let cwm = vk::ColorComponentFlags::R
+        | vk::ColorComponentFlags::G
+        | vk::ColorComponentFlags::B
+        | vk::ColorComponentFlags::A;
     builder.blending_settings = vec![vk::PipelineColorBlendAttachmentState {
         blend_enable: vk::TRUE,
-        color_write_mask: vk::ColorComponentFlags::all(),
+        color_write_mask: cwm,
         alpha_blend_op: vk::BlendOp::ADD,
         color_blend_op: vk::BlendOp::ADD,
         src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,

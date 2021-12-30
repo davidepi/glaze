@@ -13,7 +13,7 @@ path = "src/main.rs"
 glaze = {path = "../lib", default-features=false}
 clap = "2.33"
 cgmath = "0.18"
-russimp = "1.0.1"
+russimp = "0.2.3"
 indicatif = "0.17.0-beta.1"
 console = "0.15"
 image = "0.23"

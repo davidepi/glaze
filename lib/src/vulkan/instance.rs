@@ -154,7 +154,7 @@ struct BasicInstance {
 impl BasicInstance {
     /// creates a new instance with the given extensions
     fn new(extensions: &[&'static CStr]) -> Self {
-        let entry = match unsafe { ash::Entry::new() } {
+        let entry = match unsafe { ash::Entry::load() } {
             Ok(entry) => entry,
             Err(err) => panic!("Failed to create entry: {}", err),
         };
