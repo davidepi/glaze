@@ -8,7 +8,6 @@ on:
       - '.github/workflows/ci.yml'
 
 jobs:
-
   syntax:
     name: Check Rust Syntax
     runs-on: ubuntu-latest
@@ -42,10 +41,12 @@ jobs:
         with:
           path: ~/.cargo
           key: x86_64-unknown-linux-gnu-cargo-stable
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install libgtk-3-dev libassimp-dev
       - name: Run Linter
         run: cargo +stable clippy --all-features
 
-  tests:
+  tests_all_features:
     name: Build and Test
     needs: [syntax, lint]
     strategy:
@@ -53,8 +54,6 @@ jobs:
       matrix:
         platform:
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, }
-          - { target: x86_64-apple-darwin, os: macos-latest, }
-          - { target: x86_64-pc-windows-msvc, os: windows-latest, }
     env:
       CARGO_INCREMENTAL: '0'
       RUST_BACKTRACE: '1'
@@ -71,6 +70,8 @@ jobs:
           profile: minimal
           toolchain: stable
           target: ${{ matrix.platform.target }}
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install libgtk-3-dev libassimp-dev libvulkan-dev
       - name: Build
         shell: bash
         run: cargo +stable build --verbose --all-features --target ${{ matrix.platform.target }}
