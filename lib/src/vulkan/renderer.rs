@@ -1,6 +1,5 @@
 use super::cmd::CommandManager;
 use super::descriptor::{Descriptor, DescriptorSetManager};
-use super::device::Device;
 use super::imgui::ImguiRenderer;
 use super::instance::{Instance, PresentInstance};
 use super::memory::{AllocatedBuffer, MemoryManager};

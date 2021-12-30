@@ -67,8 +67,8 @@ struct UnfinishedExecutions {
 impl VulkanScene {
     /// Converts a parsed scene into a vulkan scene.
     /// wchan is used to send feedbacks about the current loading status.
-    pub(super) fn load<T: Device>(
-        device: &T,
+    pub(super) fn load(
+        device: &Device,
         mut parsed: Box<dyn ParsedScene + Send>,
         mm: &mut MemoryManager,
         desc_cache: DLayoutCache,
@@ -164,9 +164,9 @@ impl VulkanScene {
     }
 
     /// Updates (changes) a single material in the scene.
-    pub(super) fn update_material<T: Device>(
+    pub(super) fn update_material(
         &mut self,
-        device: &T,
+        device: &Device,
         mat_id: u16,
         new: Material,
         cmdm: &mut CommandManager,
@@ -265,7 +265,7 @@ impl VulkanScene {
     }
 
     /// Unloads the scene from the GPU memory
-    pub(super) fn unload<T: Device>(self, device: &T, mm: &mut MemoryManager) {
+    pub(super) fn unload(self, device: &Device, mm: &mut MemoryManager) {
         self.textures
             .into_iter()
             .chain([(u16::MAX, self.dflt_tex)])
@@ -323,7 +323,7 @@ impl VulkanScene {
 
 /// Creates the default sampler for this scene.
 /// Uses anisotropic filtering with the max anisotropy supported by the GPU.
-fn create_sampler<T: Device>(device: &T) -> vk::Sampler {
+fn create_sampler(device: &Device) -> vk::Sampler {
     let max_anisotropy = device.physical().properties.limits.max_sampler_anisotropy;
     let ci = vk::SamplerCreateInfo {
         s_type: vk::StructureType::SAMPLER_CREATE_INFO,
@@ -355,8 +355,8 @@ fn create_sampler<T: Device>(device: &T) -> vk::Sampler {
 
 /// Loads all vertices to GPU.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
-fn load_vertices_to_gpu<T: Device>(
-    device: &T,
+fn load_vertices_to_gpu(
+    device: &Device,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
@@ -404,8 +404,8 @@ fn load_vertices_to_gpu<T: Device>(
 /// Loads all indices to GPU.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
 /// Returns the list of meshes and the index buffer.
-fn load_indices_to_gpu<T: Device>(
-    device: &T,
+fn load_indices_to_gpu(
+    device: &Device,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
@@ -465,8 +465,8 @@ fn load_indices_to_gpu<T: Device>(
 }
 
 /// Builds a single material descriptor set.
-fn build_mat_desc_set<T: Device>(
-    device: &T,
+fn build_mat_desc_set(
+    device: &Device,
     (textures, dflt_tex): (&FnvHashMap<u16, TextureLoaded>, &TextureLoaded),
     params: &AllocatedBuffer,
     sampler: vk::Sampler,
@@ -528,8 +528,8 @@ fn build_mat_desc_set<T: Device>(
 
 /// Loads all materials parameters to GPU.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
-fn load_materials_parameters<T: Device>(
-    device: &T,
+fn load_materials_parameters(
+    device: &Device,
     materials: &[(u16, Material)],
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
@@ -588,8 +588,8 @@ fn load_materials_parameters<T: Device>(
 
 /// Loads all textures to the GPU with optimal layout.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
-fn load_texture_to_gpu<T: Device>(
-    device: &T,
+fn load_texture_to_gpu(
+    device: &Device,
     mm: &mut MemoryManager,
     cmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,

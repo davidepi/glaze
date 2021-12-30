@@ -1,4 +1,4 @@
-use glaze::{PresentInstance, RealtimeRenderer};
+use glaze::{PresentInstance, RayTraceInstance, RealtimeRenderer};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use std::error::Error;
 use std::rc::Rc;
@@ -35,7 +35,9 @@ impl InteractiveView {
             let mut imgui = imgui::Context::create();
             let mut platform = WinitPlatform::init(&mut imgui);
             platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
-            let instance = Rc::new(PresentInstance::new(&window));
+            let instance =
+                Rc::new(PresentInstance::new(&window).expect("No GPU or window system found"));
+            let rt_instance = Rc::new(RayTraceInstance::new());
             let renderer = RealtimeRenderer::create(
                 instance,
                 &mut imgui,

@@ -1,7 +1,7 @@
 #[cfg(debug_assertions)]
 use crate::vulkan::debug::logger::VkDebugLogger;
 use crate::vulkan::debug::ValidationLayers;
-use crate::vulkan::device::{Device, PresentDevice, SurfaceSupport};
+use crate::vulkan::device::{Device, SurfaceSupport};
 use crate::vulkan::surface::Surface;
 use ash::vk;
 use std::ffi::{CStr, CString};
@@ -13,14 +13,11 @@ use winit::window::Window;
 /// Common trait used by the wrappers of this crate. Allows the retrieval of the instance itself,
 /// and the underlying device.
 pub trait Instance {
-    /// The type of device used by the instance.
-    type DeviceItem;
-
     /// Returns a reference to the raw vulkan instance.
     fn instance(&self) -> &ash::Instance;
 
     /// Returns a reference to the underlying device wrapper.
-    fn device(&self) -> &Self::DeviceItem;
+    fn device(&self) -> &Device;
 }
 
 /// Vulkan instance for a device supporting a presentation surface.
@@ -31,13 +28,15 @@ pub struct PresentInstance {
     #[cfg(debug_assertions)]
     _logger: VkDebugLogger,
     surface: Surface,
-    device: PresentDevice,
+    device: Device,
     //the following one must be destroyed for last
     instance: BasicInstance,
 }
 
 impl PresentInstance {
     /// Creates a new instance using the given window as presentation surface.
+    ///
+    /// Returns None if no matching device can be found.
     ///
     /// # Extensions
     /// The following Vulkan extensions are required:
@@ -59,7 +58,7 @@ impl PresentInstance {
     /// let window = winit::window::Window::new(&event_loop).unwrap();
     /// let instance = glaze::PresentInstance::new(&window);
     /// ```
-    pub fn new(window: &Window) -> Self {
+    pub fn new(window: &Window) -> Option<Self> {
         let instance_extensions = required_extensions();
         let device_extensions = vec![ash::extensions::khr::Swapchain::name()];
         let device_features = vk::PhysicalDeviceFeatures {
@@ -68,23 +67,27 @@ impl PresentInstance {
         };
         let instance = BasicInstance::new(&instance_extensions);
         let surface = Surface::new(&instance.entry, &instance.instance, window);
-        let device = PresentDevice::new(
+        let maybe_device = Device::new_present(
             &instance.instance,
             &device_extensions,
             device_features,
             &surface,
         );
-        PresentInstance {
-            #[cfg(debug_assertions)]
-            _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
-            instance,
-            surface,
-            device,
+        if let Some(device) = maybe_device {
+            Some(PresentInstance {
+                #[cfg(debug_assertions)]
+                _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
+                instance,
+                surface,
+                device,
+            })
+        } else {
+            None
         }
     }
 
     /// Returns the device used for presentation.
-    pub fn present_device(&self) -> &PresentDevice {
+    pub fn present_device(&self) -> &Device {
         &self.device
     }
 
@@ -100,13 +103,75 @@ impl PresentInstance {
 }
 
 impl Instance for PresentInstance {
-    type DeviceItem = PresentDevice;
-
     fn instance(&self) -> &ash::Instance {
         &self.instance.instance
     }
 
-    fn device(&self) -> &PresentDevice {
+    fn device(&self) -> &Device {
+        &self.device
+    }
+}
+
+pub struct RayTraceInstance {
+    #[cfg(debug_assertions)]
+    _logger: VkDebugLogger,
+    device: Device,
+    //the following one must be destroyed for last
+    instance: BasicInstance,
+}
+
+impl RayTraceInstance {
+    /// Creates a new instance that can be used for raytracing.
+    ///
+    /// Returns None if no supported device can be found.
+    ///
+    /// # Extensions
+    /// The following Vulkan extensions are required:
+    /// - VK_EXT_debug_utils (only when compiled in debug mode)
+    ///
+    /// # Features
+    /// No features are required to be supported on the physical device:
+    ///
+    /// # Examples
+    /// Basic usage:
+    /// ``` no_run
+    /// let instance = glaze::RayTracingInstance::new();
+    /// ```
+    pub fn new() -> Option<Self> {
+        let instance_extensions = vec![
+            #[cfg(debug_assertions)]
+            ash::extensions::ext::DebugUtils::name(),
+        ];
+        let device_extensions = vec![
+            ash::extensions::khr::DeferredHostOperations::name(),
+            ash::extensions::khr::AccelerationStructure::name(),
+            ash::extensions::khr::RayTracingPipeline::name(),
+        ];
+        let device_features = vk::PhysicalDeviceFeatures {
+            ..Default::default()
+        };
+        let instance = BasicInstance::new(&instance_extensions);
+        let maybe_device =
+            Device::new_compute(&instance.instance, &device_extensions, device_features);
+        if let Some(device) = maybe_device {
+            Some(RayTraceInstance {
+                #[cfg(debug_assertions)]
+                _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
+                instance,
+                device,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl Instance for RayTraceInstance {
+    fn instance(&self) -> &ash::Instance {
+        &self.instance.instance
+    }
+
+    fn device(&self) -> &Device {
         &self.device
     }
 }

@@ -1,11 +1,9 @@
-use ash::vk;
-use std::ptr;
-use std::rc::Rc;
-
-use super::device::Device;
 use super::instance::{Instance, PresentInstance};
 use super::renderpass::FinalRenderPass;
 use super::sync::PresentFrameSync;
+use ash::vk;
+use std::ptr;
+use std::rc::Rc;
 
 /// The swapchain image used as target for the current frame
 pub struct AcquiredImage<'a> {

@@ -55,9 +55,9 @@ pub struct ImguiRenderer {
 
 impl ImguiRenderer {
     /// Creates a new imgui renderer
-    pub(super) fn new<T: Device>(
+    pub(super) fn new(
         context: &mut imgui::Context,
-        device: &T,
+        device: &Device,
         mm: &mut MemoryManager,
         layout_cache: DLayoutCache,
         swapchain: &Swapchain,
@@ -558,8 +558,8 @@ fn build_imgui_pipeline(
 }
 
 /// Uploads an image in the cpu_buf to the gpu_buf. The image is transitioned to the optimal layout
-fn upload_image<T: Device>(
-    device: &T,
+fn upload_image(
+    device: &Device,
     cmdm: &mut CommandManager,
     cpu_buf: &AllocatedBuffer,
     gpu_buf: &AllocatedImage,

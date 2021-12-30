@@ -16,7 +16,7 @@ pub struct PresentFrameSync {
 
 impl PresentFrameSync {
     /// Creates a new PresentFrameSync object
-    fn create<T: Device>(device: &T) -> Self {
+    fn create(device: &Device) -> Self {
         PresentFrameSync {
             acquire: create_fence(device, true),
             image_available: create_semaphore(device),
@@ -25,7 +25,7 @@ impl PresentFrameSync {
     }
 
     /// Destroys the PresentFrameSync object
-    fn destroy<T: Device>(self, device: &T) {
+    fn destroy(self, device: &Device) {
         let device = device.logical();
         unsafe {
             device.destroy_fence(self.acquire, None);
@@ -35,7 +35,7 @@ impl PresentFrameSync {
     }
 
     /// waits until the image is ready to be acquired
-    pub fn wait_acquire<T: Device>(&mut self, device: &T) {
+    pub fn wait_acquire(&mut self, device: &Device) {
         let device = device.logical();
         let fence = &[self.acquire];
         unsafe {
@@ -54,7 +54,7 @@ pub struct PresentSync<const FRAMES_IN_FLIGHT: usize> {
 
 impl<const FRAMES_IN_FLIGHT: usize> PresentSync<FRAMES_IN_FLIGHT> {
     /// Creates a PresentSync object
-    pub fn create<T: Device>(device: &T) -> Self {
+    pub fn create(device: &Device) -> Self {
         let frames = (0..FRAMES_IN_FLIGHT)
             .map(|_| PresentFrameSync::create(device))
             .collect::<Vec<_>>()
@@ -70,7 +70,7 @@ impl<const FRAMES_IN_FLIGHT: usize> PresentSync<FRAMES_IN_FLIGHT> {
     }
 
     /// Destroys all synchronization objects
-    pub fn destroy<T: Device>(self, device: &T) {
+    pub fn destroy(self, device: &Device) {
         for frame in self.frames {
             frame.destroy(device)
         }
@@ -78,7 +78,7 @@ impl<const FRAMES_IN_FLIGHT: usize> PresentSync<FRAMES_IN_FLIGHT> {
 }
 
 /// Creates a fence
-fn create_fence<T: Device>(device: &T, signaled: bool) -> vk::Fence {
+fn create_fence(device: &Device, signaled: bool) -> vk::Fence {
     let ci = vk::FenceCreateInfo {
         s_type: vk::StructureType::FENCE_CREATE_INFO,
         p_next: ptr::null(),
@@ -92,7 +92,7 @@ fn create_fence<T: Device>(device: &T, signaled: bool) -> vk::Fence {
 }
 
 /// Creates a semaphore
-fn create_semaphore<T: Device>(device: &T) -> vk::Semaphore {
+fn create_semaphore(device: &Device) -> vk::Semaphore {
     let ci = vk::SemaphoreCreateInfo {
         s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
         p_next: ptr::null(),

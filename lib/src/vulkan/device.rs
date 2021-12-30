@@ -15,49 +15,14 @@ pub struct Queue {
     pub queue: vk::Queue,
 }
 
-/// Trait representing a Vulkan device wrapper.
-pub trait Device {
-    /// Returns the Vulkan logical device.
-    fn logical(&self) -> &ash::Device;
-
-    /// Returns an atomic reference counted clone of the Vulkan logical device.
-    fn logical_clone(&self) -> Arc<ash::Device>;
-
-    /// Returns the Vulkan physical device.
-    fn physical(&self) -> &PhysicalDevice;
-
-    /// Executes a closure with the Vulkan logical device.
-    ///
-    /// The closure is executed asynchronously in the command buffer `cmd` and returns a fence as a
-    /// result.
-    /// In order to ensure completion, one has to call [Device::wait_completion] passing the
-    /// fence received from the current function.
-    #[must_use]
-    fn immediate_execute<F>(&self, cmd: vk::CommandBuffer, queue: Queue, command: F) -> vk::Fence
-    where
-        F: Fn(&ash::Device, vk::CommandBuffer);
-
-    /// Waits for the completion of a [Device::immediate_execute] function.
-    fn wait_completion(&self, tokens: &[vk::Fence]);
-
-    /// Returns a queue family with graphics (and present) capabilities.
-    fn graphic_queue(&self) -> Queue;
-
-    /// Returns a queue family with compute capabilities.
-    fn compute_queue(&self) -> Queue;
-
-    /// Returns a queue family with transfer capabilities.
-    fn transfer_queue(&self) -> Queue;
-}
-
-/// A wrapper for a Vulkan device used to render on a presentation device.
+/// A wrapper for a Vulkan device.
 ///
 /// This struct wraps together a logical device, with some features and extensions, and a queue
 /// family.
 /// The device is enclosed within an [Arc] to be able to be shared between threads without
 /// additional clones.
 #[derive(Clone)]
-pub struct PresentDevice {
+pub struct Device {
     logical: Arc<ash::Device>,
     physical: Arc<PhysicalDevice>,
     graphic_queue: Queue,
@@ -66,117 +31,91 @@ pub struct PresentDevice {
     immediate_fences: Arc<Mutex<Vec<vk::Fence>>>,
 }
 
-impl PresentDevice {
-    /// Creates a new device which supports rendering on a presentation device.
+impl Device {
+    /// Creates a new device which supports rendering on a presentation surface.
     ///
     /// Requires the raw Vulkan instance, a list of device extensions, a list of physical device
     /// features and the Surface to use.
-    pub fn new(
+    ///
+    /// In addition to the requested extensions and features, this method will select a device that:
+    /// - supports a depth buffer with format `D32_SFLOAT`,
+    /// - supports a graphics, compute and transfer queues,
+    /// - the graphics queue suports presentation to the input [Surface]
+    ///
+    /// Returns None if no devices are found.
+    pub fn new_present(
         instance: &ash::Instance,
         ext: &[&'static CStr],
         features: vk::PhysicalDeviceFeatures,
         surface: &Surface,
-    ) -> Self {
-        let physical = PhysicalDevice::list_all(instance)
-            .into_iter()
-            .filter(|x| {
-                x.surface_capabilities(surface)
-                    .has_formats_and_present_modes()
-            })
-            .filter(|device| device_supports_requested_extensions(instance, ext, device.device))
-            .filter(|device| device_support_queues(instance, device.device, surface))
-            .filter(|device| device_supports_features(device, features))
-            .filter(|device| {
-                device_supports_depth_buffer(instance, vk::Format::D32_SFLOAT, device.device)
-            })
-            .last()
-            .expect("No compatible devices found");
-        let queue_families = get_queues(instance, physical.device, surface);
-        let all_queues = assign_queue_index(queue_families);
-        let logical = create_logical_device(instance, ext, &physical, features, all_queues);
-        let gq = unsafe { logical.get_device_queue(all_queues[0].0, all_queues[0].1) };
-        let cq = unsafe { logical.get_device_queue(all_queues[1].0, all_queues[1].1) };
-        let tq = unsafe { logical.get_device_queue(all_queues[2].0, all_queues[2].1) };
-        let graphic_queue = Queue {
-            idx: all_queues[0].0,
-            queue: gq,
-        };
-        let compute_queue = Queue {
-            idx: all_queues[1].0,
-            queue: cq,
-        };
-        let transfer_queue = Queue {
-            idx: all_queues[2].0,
-            queue: tq,
-        };
-        let ci = vk::FenceCreateInfo {
-            s_type: vk::StructureType::FENCE_CREATE_INFO,
-            p_next: ptr::null(),
-            flags: vk::FenceCreateFlags::empty(),
-        };
-        let immediate_fences = Arc::new(Mutex::new(
-            (0..10)
-                .map(|_| {
-                    unsafe { logical.create_fence(&ci, None) }.expect("Failed to create fence")
-                })
-                .collect::<Vec<_>>(),
-        ));
-        PresentDevice {
-            logical: Arc::new(logical),
-            physical: Arc::new(physical),
-            graphic_queue,
-            compute_queue,
-            transfer_queue,
-            immediate_fences,
-        }
+    ) -> Option<Self> {
+        create_device(instance, ext, features, Some(surface))
     }
-}
 
-impl Drop for PresentDevice {
-    fn drop(&mut self) {
-        unsafe {
-            if Arc::strong_count(&self.immediate_fences) == 1 {
-                self.immediate_fences
-                    .lock()
-                    .unwrap()
-                    .drain(..)
-                    .for_each(|fence| {
-                        self.logical.destroy_fence(fence, None);
-                    });
-            }
-            if Arc::strong_count(&self.logical) == 1 {
-                self.logical.destroy_device(None);
-            }
-        }
+    /// Creates a new device for computational purposes.
+    ///
+    /// Requires the raw Vulkan instance, a list of device extensions, and a list of physical device
+    /// features
+    ///
+    /// Unlike the [new_present] method, this one will not check for a depth buffer support.
+    /// However, the graphics queue and transfer queue support (and of course the compute queue) is
+    /// still required, albeit without presentation support.
+    ///
+    /// Returns None if no devices are found.
+    pub fn new_compute(
+        instance: &ash::Instance,
+        ext: &[&'static CStr],
+        features: vk::PhysicalDeviceFeatures,
+    ) -> Option<Self> {
+        create_device(instance, ext, features, None)
     }
-}
 
-impl Device for PresentDevice {
-    fn logical_clone(&self) -> Arc<ash::Device> {
+    /// Returns an atomic reference counted clone of the Vulkan logical device.
+    pub fn logical_clone(&self) -> Arc<ash::Device> {
         self.logical.clone()
     }
 
-    fn logical(&self) -> &ash::Device {
+    /// Returns the Vulkan logical device.
+    pub fn logical(&self) -> &ash::Device {
         &self.logical
     }
 
-    fn physical(&self) -> &PhysicalDevice {
+    /// Returns the Vulkan physical device.
+    pub fn physical(&self) -> &PhysicalDevice {
         &self.physical
     }
 
-    fn graphic_queue(&self) -> Queue {
+    /// Returns a queue family with graphics capabilities.
+    ///
+    /// If the device is created with the [Self::present] method, this queue is required to support
+    /// also presentation to a surface.
+    pub fn graphic_queue(&self) -> Queue {
         self.graphic_queue
     }
 
-    fn compute_queue(&self) -> Queue {
+    /// Returns a queue family with compute capabilities.
+    pub fn compute_queue(&self) -> Queue {
         self.compute_queue
     }
 
-    fn transfer_queue(&self) -> Queue {
+    /// Returns a queue family with transfer capabilities.
+    pub fn transfer_queue(&self) -> Queue {
         self.transfer_queue
     }
 
-    fn immediate_execute<F>(&self, cmd: vk::CommandBuffer, queue: Queue, command: F) -> vk::Fence
+    /// Executes a closure with the Vulkan logical device.
+    ///
+    /// The closure is executed asynchronously in the command buffer `cmd` and returns a fence as a
+    /// result.
+    /// In order to ensure completion, one has to call [Device::wait_completion] passing the
+    /// fence received from the current function.
+    #[must_use]
+    pub fn immediate_execute<F>(
+        &self,
+        cmd: vk::CommandBuffer,
+        queue: Queue,
+        command: F,
+    ) -> vk::Fence
     where
         F: Fn(&ash::Device, vk::CommandBuffer),
     {
@@ -226,7 +165,8 @@ impl Device for PresentDevice {
         fence
     }
 
-    fn wait_completion(&self, tokens: &[vk::Fence]) {
+    /// Waits for the completion of a [Device::immediate_execute] function.
+    pub fn wait_completion(&self, tokens: &[vk::Fence]) {
         unsafe {
             self.logical
                 .wait_for_fences(tokens, true, u64::MAX)
@@ -236,6 +176,96 @@ impl Device for PresentDevice {
                 .expect("Failed to reset fence");
             self.immediate_fences.lock().unwrap().extend(tokens);
         }
+    }
+}
+
+impl Drop for Device {
+    fn drop(&mut self) {
+        unsafe {
+            if Arc::strong_count(&self.immediate_fences) == 1 {
+                self.immediate_fences
+                    .lock()
+                    .unwrap()
+                    .drain(..)
+                    .for_each(|fence| {
+                        self.logical.destroy_fence(fence, None);
+                    });
+            }
+            if Arc::strong_count(&self.logical) == 1 {
+                self.logical.destroy_device(None);
+            }
+        }
+    }
+}
+
+pub fn create_device(
+    instance: &ash::Instance,
+    ext: &[&'static CStr],
+    features: vk::PhysicalDeviceFeatures,
+    surface: Option<&Surface>,
+) -> Option<Device> {
+    let maybe_physical = PhysicalDevice::list_all(instance)
+        .into_iter()
+        .filter(|x| {
+            if let Some(surface) = surface {
+                x.surface_capabilities(surface)
+                    .has_formats_and_present_modes()
+            } else {
+                true
+            }
+        })
+        .filter(|device| device_supports_requested_extensions(instance, ext, device.device))
+        .filter(|device| device_support_queues(instance, device.device, surface))
+        .filter(|device| device_supports_features(device, features))
+        .filter(|device| {
+            if surface.is_some() {
+                device_supports_depth_buffer(instance, vk::Format::D32_SFLOAT, device.device)
+            } else {
+                true
+            }
+        })
+        .last();
+    if let Some(physical) = maybe_physical {
+        let queue_families = get_queues(instance, physical.device, surface);
+        let all_queues = assign_queue_index(queue_families);
+        let logical = create_logical_device(instance, ext, &physical, features, all_queues);
+        let gq = unsafe { logical.get_device_queue(all_queues[0].0, all_queues[0].1) };
+        let cq = unsafe { logical.get_device_queue(all_queues[1].0, all_queues[1].1) };
+        let tq = unsafe { logical.get_device_queue(all_queues[2].0, all_queues[2].1) };
+        let graphic_queue = Queue {
+            idx: all_queues[0].0,
+            queue: gq,
+        };
+        let compute_queue = Queue {
+            idx: all_queues[1].0,
+            queue: cq,
+        };
+        let transfer_queue = Queue {
+            idx: all_queues[2].0,
+            queue: tq,
+        };
+        let ci = vk::FenceCreateInfo {
+            s_type: vk::StructureType::FENCE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::FenceCreateFlags::empty(),
+        };
+        let immediate_fences = Arc::new(Mutex::new(
+            (0..10)
+                .map(|_| {
+                    unsafe { logical.create_fence(&ci, None) }.expect("Failed to create fence")
+                })
+                .collect::<Vec<_>>(),
+        ));
+        Some(Device {
+            logical: Arc::new(logical),
+            physical: Arc::new(physical),
+            graphic_queue,
+            compute_queue,
+            transfer_queue,
+            immediate_fences,
+        })
+    } else {
+        None
     }
 }
 
@@ -384,7 +414,7 @@ fn device_supports_depth_buffer(
 fn device_support_queues(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
-    surface: &Surface,
+    surface: Option<&Surface>,
 ) -> bool {
     let queue_families =
         unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
@@ -393,14 +423,18 @@ fn device_support_queues(
         .enumerate()
         .filter(|(_, prop)| prop.queue_flags.contains(vk::QueueFlags::GRAPHICS))
         .any(|(index, _)| {
-            unsafe {
-                surface.loader.get_physical_device_surface_support(
-                    physical_device,
-                    index as u32,
-                    surface.surface,
-                )
+            if let Some(surface) = surface {
+                unsafe {
+                    surface.loader.get_physical_device_surface_support(
+                        physical_device,
+                        index as u32,
+                        surface.surface,
+                    )
+                }
+                .is_ok()
+            } else {
+                true
             }
-            .is_ok()
         });
     let compute_support = queue_families
         .iter()
@@ -413,29 +447,35 @@ fn device_support_queues(
 
 /// Returns the queue family index for graphics, compute and tranfer queues.
 /// Handle cases where each family index supports a single queue.
+///
+/// If the surface is Some, the graphics queue is required to support presentation.
 fn get_queues(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
-    surface: &Surface,
+    surface: Option<&Surface>,
 ) -> [u32; 3] {
     // filter by resources, takes the index that has the highest availability
     // intel graphics card can have 1 queue for queue family index, and all supports everything
     // nvidia has the graphics only on the some indices, but supports more queue
     let mut qf = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
-    // graphics queue + present to surface
+    // graphics queue + optional present to surface
     let graphics_qfi = qf
         .iter()
         .enumerate()
         .filter(|(_, &prop)| prop.queue_flags.contains(vk::QueueFlags::GRAPHICS))
         .filter(|(idx, _)| {
-            unsafe {
-                surface.loader.get_physical_device_surface_support(
-                    physical_device,
-                    *idx as u32,
-                    surface.surface,
-                )
+            if let Some(surface) = surface {
+                unsafe {
+                    surface.loader.get_physical_device_surface_support(
+                        physical_device,
+                        *idx as u32,
+                        surface.surface,
+                    )
+                }
+                .is_ok()
+            } else {
+                true
             }
-            .is_ok()
         })
         .max_by_key(|(_, prop)| prop.queue_count)
         .expect("Not enough graphics queues in the device")
