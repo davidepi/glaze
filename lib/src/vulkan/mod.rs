@@ -1,3 +1,4 @@
+mod acceleration;
 mod cmd;
 mod debug;
 mod descriptor;
