@@ -1,12 +1,14 @@
-use super::{
-    cmd::CommandManager,
-    device::Device,
-    memory::{AllocatedBuffer, MemoryManager},
-    scene::VulkanMesh,
-};
+use super::cmd::CommandManager;
+use super::device::Device;
+use super::memory::{AllocatedBuffer, MemoryManager};
+use super::scene::VulkanMesh;
+use crate::vulkan::instance::Instance;
 use crate::{Mesh, Vertex};
-use ash::{extensions::khr::AccelerationStructure as AccelerationLoader, vk};
+use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
+use ash::vk::{self, AccelerationStructureReferenceKHR, Packed24_8};
+use cgmath::{Matrix, Matrix4, SquareMatrix};
 use gpu_allocator::MemoryLocation;
+use std::ops::Deref;
 use std::ptr;
 
 pub struct AllocatedAS {
@@ -67,10 +69,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
     pub fn build(mut self) -> SceneAS {
         let blas = self.build_blases();
         let tlas = self.build_tlas(&blas);
-        SceneAS {
-            blas,
-            tlas,
-        }
+        SceneAS { blas, tlas }
     }
 
     fn build_blases(&mut self) -> Vec<AllocatedAS> {
@@ -288,7 +287,181 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
     }
 
     fn build_tlas(&mut self, blases: &[AllocatedAS]) -> AllocatedAS {
-        unimplemented!()
+        let cmd = self.cmdm.get_cmd_buffer();
+        let vkdevice = self.device.logical();
+        // populates the instances
+        // TODO: add correct instancing and shader binding
+        let instances = blases
+            .iter()
+            .enumerate()
+            .map(|(id, blas)| {
+                let as_addr_info = vk::AccelerationStructureDeviceAddressInfoKHR {
+                    s_type: vk::StructureType::ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
+                    p_next: ptr::null(),
+                    acceleration_structure: blas.accel,
+                };
+                let as_addr = unsafe {
+                    self.loader
+                        .get_acceleration_structure_device_address(&as_addr_info)
+                };
+                vk::AccelerationStructureInstanceKHR {
+                    transform: to_transform_mat(Matrix4::identity()),
+                    instance_custom_index_and_mask: Packed24_8::new(id as u32, 0xFF), //TODO add index
+                    instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
+                        0,
+                        vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as u8,
+                    ),
+                    acceleration_structure_reference: AccelerationStructureReferenceKHR {
+                        device_handle: as_addr,
+                    },
+                }
+            })
+            .collect::<Vec<_>>();
+        // create a buffer to store all the instances (needed by subsequent methods)
+        let inst_buf_size =
+            std::mem::size_of::<vk::AccelerationStructureInstanceKHR>() * instances.len();
+        let inst_cpu_buf = self.mm.create_buffer(
+            "Instances CPU buffer",
+            inst_buf_size as u64,
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            MemoryLocation::CpuToGpu,
+        );
+        let inst_gpu_buf = self.mm.create_buffer(
+            "Instances CPU buffer",
+            inst_buf_size as u64,
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            MemoryLocation::GpuOnly,
+        );
+        let mapped = inst_cpu_buf
+            .allocation
+            .mapped_ptr()
+            .expect("Failed to map memory")
+            .cast()
+            .as_ptr();
+        unsafe { std::ptr::copy_nonoverlapping(instances.as_ptr(), mapped, instances.len()) };
+        let copy_region = vk::BufferCopy {
+            src_offset: 0,
+            dst_offset: 0,
+            size: inst_cpu_buf.size,
+        };
+        let barrier = vk::MemoryBarrier {
+            s_type: vk::StructureType::MEMORY_BARRIER,
+            p_next: ptr::null(),
+            src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+            dst_access_mask: vk::AccessFlags::ACCELERATION_STRUCTURE_WRITE_KHR,
+        };
+        // fill the required structures
+        let inst_addr_info = vk::BufferDeviceAddressInfo {
+            s_type: vk::StructureType::BUFFER_DEVICE_ADDRESS_INFO,
+            p_next: ptr::null(),
+            buffer: inst_gpu_buf.buffer,
+        };
+        let inst_addr = unsafe {
+            self.device
+                .logical()
+                .get_buffer_device_address(&inst_addr_info)
+        };
+        let instances_data = vk::AccelerationStructureGeometryInstancesDataKHR {
+            s_type: vk::StructureType::ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
+            p_next: ptr::null(),
+            array_of_pointers: vk::FALSE,
+            data: vk::DeviceOrHostAddressConstKHR {
+                device_address: inst_addr,
+            },
+        };
+        let geometry = [vk::AccelerationStructureGeometryKHR {
+            s_type: vk::StructureType::ACCELERATION_STRUCTURE_GEOMETRY_KHR,
+            p_next: ptr::null(),
+            geometry_type: vk::GeometryTypeKHR::INSTANCES,
+            geometry: vk::AccelerationStructureGeometryDataKHR {
+                instances: instances_data,
+            },
+            flags: vk::GeometryFlagsKHR::empty(),
+        }];
+        let mut build_info = vk::AccelerationStructureBuildGeometryInfoKHR {
+            s_type: vk::StructureType::ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+            p_next: ptr::null(),
+            ty: vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            flags: vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE,
+            mode: vk::BuildAccelerationStructureModeKHR::BUILD,
+            src_acceleration_structure: vk::AccelerationStructureKHR::null(),
+            dst_acceleration_structure: vk::AccelerationStructureKHR::null(),
+            geometry_count: geometry.len() as u32,
+            p_geometries: geometry.as_ptr(),
+            pp_geometries: ptr::null(),
+            scratch_data: vk::DeviceOrHostAddressKHR { device_address: 0 },
+        };
+        // get the scratch buf size and allocate everything
+        let req_mem = unsafe {
+            self.loader.get_acceleration_structure_build_sizes(
+                vk::AccelerationStructureBuildTypeKHR::DEVICE,
+                &build_info,
+                &[instances.len() as u32],
+            )
+        };
+        let tlas = allocate_as(
+            self.loader,
+            self.mm,
+            req_mem.acceleration_structure_size,
+            false,
+        );
+        let scratch_buf = self.mm.create_buffer(
+            "TLAS scratch",
+            req_mem.build_scratch_size,
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryLocation::GpuOnly,
+        );
+        let scratch_addr_info = vk::BufferDeviceAddressInfo {
+            s_type: vk::StructureType::BUFFER_DEVICE_ADDRESS_INFO,
+            p_next: ptr::null(),
+            buffer: scratch_buf.buffer,
+        };
+        let scratch_addr = unsafe { vkdevice.get_buffer_device_address(&scratch_addr_info) };
+        // build the tlas
+        build_info.dst_acceleration_structure = tlas.accel;
+        build_info.scratch_data = vk::DeviceOrHostAddressKHR {
+            device_address: scratch_addr,
+        };
+        let build_range = vk::AccelerationStructureBuildRangeInfoKHR {
+            primitive_count: instances.len() as u32,
+            primitive_offset: 0,
+            first_vertex: 0,
+            transform_offset: 0,
+        };
+        let command = unsafe {
+            |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_copy_buffer(
+                    cmd,
+                    inst_cpu_buf.buffer,
+                    inst_gpu_buf.buffer,
+                    &[copy_region],
+                );
+                device.cmd_pipeline_barrier(
+                    cmd,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR,
+                    vk::DependencyFlags::empty(),
+                    &[barrier],
+                    &[],
+                    &[],
+                );
+                self.loader.cmd_build_acceleration_structures(
+                    cmd,
+                    &[build_info],
+                    &[&[build_range]],
+                );
+            }
+        };
+        let compute = self.device.compute_queue();
+        let fence = self.device.immediate_execute(cmd, compute, command);
+        self.device.wait_completion(&[fence]);
+        // free everything
+        self.mm.free_buffer(inst_cpu_buf);
+        self.mm.free_buffer(inst_gpu_buf);
+        self.mm.free_buffer(scratch_buf);
+        tlas
     }
 }
 
@@ -325,5 +498,31 @@ fn allocate_as(
     AllocatedAS {
         accel: accs,
         buffer,
+    }
+}
+
+fn to_transform_mat(matrix: Matrix4<f32>) -> vk::TransformMatrixKHR {
+    let transpose = matrix.transpose();
+    let floats: [f32; 16] = *transpose.as_ref();
+    let matrix: [f32; 12] = floats[..12].try_into().unwrap();
+    vk::TransformMatrixKHR { matrix }
+}
+
+#[cfg(test)]
+mod tests {
+    use cgmath::Matrix4;
+
+    use super::to_transform_mat;
+
+    #[test]
+    fn cgmath_vktransform_memory_layout() {
+        let matrix = Matrix4::new(
+            0.0, 4.0, 8.0, 12.0, 1.0, 5.0, 9.0, 13.0, 2.0, 6.0, 10.0, 14.0, 3.0, 7.0, 11.0, 15.0,
+        );
+        let transform = to_transform_mat(matrix);
+        assert_eq!(
+            transform.matrix,
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
+        );
     }
 }
