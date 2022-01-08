@@ -78,13 +78,13 @@ impl VulkanScene {
             fences: Vec::new(),
             buffers_to_free: Vec::new(),
         };
-        let mut cmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 5);
+        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 5);
         wchan.send("[1/4] Loading vertices...".to_string()).ok();
         let vertex_buffer =
-            load_vertices_to_gpu(device, mm, &mut cmdm, &mut unf, &parsed.vertices()?);
+            load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &parsed.vertices()?);
         wchan.send("[2/4] Loading meshes...".to_string()).ok();
         let (mut meshes, index_buffer) =
-            load_indices_to_gpu(device, mm, &mut cmdm, &mut unf, &parsed.meshes()?);
+            load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &parsed.meshes()?);
         let sampler = create_sampler(device);
         wchan.send("[3/4] Loading textures...".to_string()).ok();
         let scene_textures = parsed.textures()?;
@@ -102,14 +102,14 @@ impl VulkanScene {
                     .ok();
                 (
                     id,
-                    load_texture_to_gpu(device, mm, &mut cmdm, &mut unf, tex),
+                    load_texture_to_gpu(device, mm, &mut tcmdm, &mut unf, tex),
                 )
             })
             .collect();
-        let dflt_tex = load_texture_to_gpu(device, mm, &mut cmdm, &mut unf, Texture::default());
+        let dflt_tex = load_texture_to_gpu(device, mm, &mut tcmdm, &mut unf, Texture::default());
         let parsed_mats = parsed.materials()?;
         let params_buffer =
-            load_materials_parameters(device, &parsed_mats, mm, &mut cmdm, &mut unf);
+            load_materials_parameters(device, &parsed_mats, mm, &mut tcmdm, &mut unf);
         device.wait_completion(&unf.fences);
         unf.buffers_to_free
             .into_iter()
@@ -169,7 +169,7 @@ impl VulkanScene {
         device: &Device,
         mat_id: u16,
         new: Material,
-        cmdm: &mut CommandManager,
+        gcmdm: &mut CommandManager,
         rpass: vk::RenderPass,
         frame_desc_layout: vk::DescriptorSetLayout,
         render_size: vk::Extent2D,
@@ -207,7 +207,7 @@ impl VulkanScene {
                 );
             }
         };
-        let cmd = cmdm.get_cmd_buffer();
+        let cmd = gcmdm.get_cmd_buffer();
         let queue = device.graphic_queue();
         let fence = device.immediate_execute(cmd, queue, command);
         device.wait_completion(&[fence]);
@@ -358,7 +358,7 @@ fn create_sampler(device: &Device) -> vk::Sampler {
 fn load_vertices_to_gpu(
     device: &Device,
     mm: &mut MemoryManager,
-    cmdm: &mut CommandManager,
+    tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
     vertices: &[Vertex],
 ) -> AllocatedBuffer {
@@ -393,7 +393,7 @@ fn load_vertices_to_gpu(
             device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
         }
     };
-    let cmd = cmdm.get_cmd_buffer();
+    let cmd = tcmdm.get_cmd_buffer();
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.fences.push(fence);
@@ -407,7 +407,7 @@ fn load_vertices_to_gpu(
 fn load_indices_to_gpu(
     device: &Device,
     mm: &mut MemoryManager,
-    cmdm: &mut CommandManager,
+    tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
     meshes: &[Mesh],
 ) -> (Vec<VulkanMesh>, AllocatedBuffer) {
@@ -456,7 +456,7 @@ fn load_indices_to_gpu(
             device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
         }
     };
-    let cmd = cmdm.get_cmd_buffer();
+    let cmd = tcmdm.get_cmd_buffer();
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.fences.push(fence);
@@ -532,7 +532,7 @@ fn load_materials_parameters(
     device: &Device,
     materials: &[(u16, Material)],
     mm: &mut MemoryManager,
-    cmdm: &mut CommandManager,
+    tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
 ) -> AllocatedBuffer {
     let align = device
@@ -578,7 +578,7 @@ fn load_materials_parameters(
             device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
         }
     };
-    let cmd = cmdm.get_cmd_buffer();
+    let cmd = tcmdm.get_cmd_buffer();
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.fences.push(fence);
@@ -591,7 +591,7 @@ fn load_materials_parameters(
 fn load_texture_to_gpu(
     device: &Device,
     mm: &mut MemoryManager,
-    cmdm: &mut CommandManager,
+    tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
     texture: Texture,
 ) -> TextureLoaded {
@@ -720,7 +720,7 @@ fn load_texture_to_gpu(
             );
         }
     };
-    let cmd = cmdm.get_cmd_buffer();
+    let cmd = tcmdm.get_cmd_buffer();
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.fences.push(fence);

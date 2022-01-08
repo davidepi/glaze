@@ -67,7 +67,8 @@ impl ImguiRenderer {
         let avg_sizes = [(vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0)];
         let mut dm =
             DescriptorSetManager::with_cache(device.logical_clone(), &avg_sizes, layout_cache);
-        let mut cmdm = CommandManager::new(device.logical_clone(), device.graphic_queue().idx, 3);
+        let mut gcmdm = CommandManager::new(device.logical_clone(), device.graphic_queue().idx, 3);
+        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
         let fonts_gpu_buf;
         {
             let mut fonts_ref = context.fonts();
@@ -119,7 +120,7 @@ impl ImguiRenderer {
             }
             upload_image(
                 device,
-                &mut cmdm,
+                &mut tcmdm,
                 &fonts_cpu_buf,
                 &fonts_gpu_buf,
                 fonts_extent,
@@ -214,6 +215,7 @@ impl ImguiRenderer {
     }
 
     /// draw the ui. This should be called inside an existing render pass.
+    /// cmd is a command buffer for a graphic queue.
     pub(super) fn draw(
         &mut self,
         device: &ash::Device,
@@ -560,7 +562,7 @@ fn build_imgui_pipeline(
 /// Uploads an image in the cpu_buf to the gpu_buf. The image is transitioned to the optimal layout
 fn upload_image(
     device: &Device,
-    cmdm: &mut CommandManager,
+    tcmdm: &mut CommandManager,
     cpu_buf: &AllocatedBuffer,
     gpu_buf: &AllocatedImage,
     extent: vk::Extent2D,
@@ -643,9 +645,9 @@ fn upload_image(
             );
         }
     };
-    let cmd = cmdm.get_cmd_buffer();
-    let graphic_queue = device.graphic_queue();
-    let fence = device.immediate_execute(cmd, graphic_queue, command);
+    let cmd = tcmdm.get_cmd_buffer();
+    let transfer_queue = device.transfer_queue();
+    let fence = device.immediate_execute(cmd, transfer_queue, command);
     device.wait_completion(&[fence]);
 }
 

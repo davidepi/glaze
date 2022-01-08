@@ -79,8 +79,8 @@ pub struct RealtimeRenderer {
     dm: DescriptorSetManager,
     /// Manager for the memory allocation.
     mm: MemoryManager,
-    /// Manager for the command pools and buffers.
-    cmdm: CommandManager,
+    /// Graphic Command Manager. Manager for the command pools and buffers of a graphic queue.
+    gcmdm: CommandManager,
     /// Synchronization structures for each frame.
     sync: PresentSync<FRAMES_IN_FLIGHT>,
     /// Scene to be rendered.
@@ -139,7 +139,7 @@ impl RealtimeRenderer {
             instance.device().physical().device,
             FRAMES_IN_FLIGHT as u8,
         );
-        let cmdm = CommandManager::new(
+        let gcmdm = CommandManager::new(
             instance.device().logical_clone(),
             instance.device().graphic_queue().idx,
             15,
@@ -207,7 +207,7 @@ impl RealtimeRenderer {
             imgui_renderer,
             dm,
             mm,
-            cmdm,
+            gcmdm,
             sync,
             scene: None,
             scene_loading: None,
@@ -428,7 +428,7 @@ impl RealtimeRenderer {
                 self.instance.device(),
                 old,
                 new,
-                &mut self.cmdm,
+                &mut self.gcmdm,
                 self.forward_pass.renderpass,
                 self.frame_data[0].descriptor.layout,
                 render_size,
@@ -469,7 +469,7 @@ impl RealtimeRenderer {
         let frame_sync = self.sync.get(self.frame_no);
         frame_sync.wait_acquire(self.instance.device());
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
-            let cmd = self.cmdm.get_cmd_buffer();
+            let cmd = self.gcmdm.get_cmd_buffer();
             let current_time = Instant::now();
             let frame_data = &mut self.frame_data[self.frame_no % FRAMES_IN_FLIGHT];
             frame_data.data.frame_time = (current_time - self.start_time).as_secs_f32();

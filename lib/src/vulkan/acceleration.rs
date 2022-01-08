@@ -34,7 +34,7 @@ struct SceneASBuilder<'scene, 'renderer> {
     vb: &'scene AllocatedBuffer,
     ib: &'scene AllocatedBuffer,
     mm: &'renderer mut MemoryManager,
-    cmdm: &'renderer mut CommandManager,
+    ccmdm: &'renderer mut CommandManager,
     device: &'renderer Device,
     loader: &'renderer AccelerationLoader,
 }
@@ -43,7 +43,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
     pub fn new(
         device: &'renderer Device,
         mm: &'renderer mut MemoryManager,
-        cmdm: &'renderer mut CommandManager,
+        ccmdm: &'renderer mut CommandManager,
         vertex_buffer: &'scene AllocatedBuffer,
         index_buffer: &'scene AllocatedBuffer,
         loader: &'renderer AccelerationLoader,
@@ -54,7 +54,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             vb: vertex_buffer,
             ib: index_buffer,
             mm,
-            cmdm,
+            ccmdm,
             device,
             loader,
         }
@@ -192,7 +192,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             for (id, (mut build_info, build_range, geometry, req_mem)) in
                 blas_chunk.into_iter().enumerate()
             {
-                let cmd = self.cmdm.get_cmd_buffer();
+                let cmd = self.ccmdm.get_cmd_buffer();
                 let blas = allocate_as(
                     self.loader,
                     self.mm,
@@ -256,7 +256,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             }
             .expect("Failed to get compacted size");
             for (id, blas) in blas_tmp.iter().enumerate() {
-                let cmd = self.cmdm.get_cmd_buffer();
+                let cmd = self.ccmdm.get_cmd_buffer();
                 let compacted_size = compact_size[id];
                 let compacted_blas = allocate_as(self.loader, self.mm, compacted_size, true);
                 let copy_ci = vk::CopyAccelerationStructureInfoKHR {
@@ -287,7 +287,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
     }
 
     fn build_tlas(&mut self, blases: &[AllocatedAS]) -> AllocatedAS {
-        let cmd = self.cmdm.get_cmd_buffer();
+        let cmd = self.ccmdm.get_cmd_buffer();
         let vkdevice = self.device.logical();
         // populates the instances
         // TODO: add correct instancing and shader binding
