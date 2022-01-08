@@ -141,7 +141,7 @@ impl RealtimeRenderer {
         );
         let cmdm = CommandManager::new(
             instance.device().logical_clone(),
-            instance.present_device().graphic_queue().idx,
+            instance.device().graphic_queue().idx,
             15,
         );
         let swapchain = Swapchain::create(instance.clone(), window_width, window_height);

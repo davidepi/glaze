@@ -18,17 +18,25 @@ pub trait Instance {
 
     /// Returns a reference to the underlying device wrapper.
     fn device(&self) -> &Device;
+
+    /// Returns the list of extensions enabled for this instance.
+    fn extensions(&self) -> &[String];
 }
 
 /// Vulkan instance for a device supporting a presentation surface.
 ///
 /// Wraps together a Vulkan instance, a device and a presentation surface.
 /// When compiled in debug mode, validations are automatically enabled.
+///
+/// Supports raytracing if there is at least one GPU in the system supporting presentation and
+/// raytracing combined.
 pub struct PresentInstance {
     #[cfg(debug_assertions)]
     _logger: VkDebugLogger,
     surface: Surface,
     device: Device,
+    raytrace: bool,
+    enabled_extensions: Vec<String>,
     //the following one must be destroyed for last
     instance: BasicInstance,
 }
@@ -36,16 +44,25 @@ pub struct PresentInstance {
 impl PresentInstance {
     /// Creates a new instance using the given window as presentation surface.
     ///
+    /// The method attempts at creating an instance that can support raytracing. If this fails, a
+    /// normal instance is instead created. This failure is silent and, to know which instance was
+    /// created, the method [PresentInstance::supports_raytrace] is provided.
+    ///
     /// Returns None if no matching device can be found.
     ///
     /// # Extensions
-    /// The following Vulkan extensions are required:
+    /// The following Vulkan extensions are required for presentation only:
     /// - VK_KHR_surface
     /// - VK_KHR_swapchain
     /// - VK_EXT_debug_utils (only when compiled in debug mode)
     /// - VK_KHR_xlib_surface (only when compiled for GNU/Linux)
     /// - VK_KHR_win32_surface (only when compiled for Windows)
     /// - VK_MVK_macos_surface (only when compiled for macOs)
+    ///
+    /// Additionally, to support raytrace, the following extensions are required:
+    /// - VK_KHR_deferred_host_operations
+    /// - VK_KHR_acceleration_structure
+    /// - VK_KHR_ray_tracing_pipeline
     ///
     /// # Features
     /// The following features are required to be supported on the physical device:
@@ -60,35 +77,73 @@ impl PresentInstance {
     /// ```
     pub fn new(window: &Window) -> Option<Self> {
         let instance_extensions = required_extensions();
-        let device_extensions = vec![ash::extensions::khr::Swapchain::name()];
+        let present_only_ext = vec![ash::extensions::khr::Swapchain::name()];
+        let present_and_raytrace_ext = vec![
+            ash::extensions::khr::Swapchain::name(),
+            ash::extensions::khr::DeferredHostOperations::name(),
+            ash::extensions::khr::AccelerationStructure::name(),
+            ash::extensions::khr::RayTracingPipeline::name(),
+        ];
         let device_features = vk::PhysicalDeviceFeatures {
             sampler_anisotropy: vk::TRUE,
             ..Default::default()
         };
         let instance = BasicInstance::new(&instance_extensions);
         let surface = Surface::new(&instance.entry, &instance.instance, window);
-        let maybe_device = Device::new_present(
+        let maybe_raytrace_device = Device::new_present(
             &instance.instance,
-            &device_extensions,
+            &present_and_raytrace_ext,
             device_features,
             &surface,
         );
-        if let Some(device) = maybe_device {
+        if let Some(device) = maybe_raytrace_device {
+            let enabled_extensions = present_and_raytrace_ext
+                .into_iter()
+                .map(CStr::to_bytes)
+                .flat_map(std::str::from_utf8)
+                .map(String::from)
+                .collect::<Vec<_>>();
             Some(PresentInstance {
                 #[cfg(debug_assertions)]
                 _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
-                instance,
                 surface,
                 device,
+                raytrace: true,
+                enabled_extensions,
+                instance,
             })
         } else {
-            None
+            let maybe_device = Device::new_present(
+                &instance.instance,
+                &present_only_ext,
+                device_features,
+                &surface,
+            );
+            if let Some(device) = maybe_device {
+                let enabled_extensions = present_only_ext
+                    .into_iter()
+                    .map(CStr::to_bytes)
+                    .flat_map(std::str::from_utf8)
+                    .map(String::from)
+                    .collect::<Vec<_>>();
+                Some(PresentInstance {
+                    #[cfg(debug_assertions)]
+                    _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
+                    surface,
+                    device,
+                    raytrace: false,
+                    enabled_extensions,
+                    instance,
+                })
+            } else {
+                None
+            }
         }
     }
 
-    /// Returns the device used for presentation.
-    pub fn present_device(&self) -> &Device {
-        &self.device
+    /// Returns true if the instance supports raytracing.
+    pub fn supports_raytrace(&self) -> bool {
+        self.raytrace
     }
 
     /// Returns the surface used for presentation.
@@ -110,24 +165,39 @@ impl Instance for PresentInstance {
     fn device(&self) -> &Device {
         &self.device
     }
+
+    fn extensions(&self) -> &[String] {
+        &self.enabled_extensions
+    }
 }
 
+/// Vulkan instance for a device supporting raytracing.
+///
+/// Wraps together a Vulkan instance and a device.
+/// When compiled in debug mode, validations are automatically enabled.
+///
+/// No presentation provided, this is meant mostly for command line applications.
+/// Use [PresentInstance] to have a device supporting both presentation and raytracing.
 pub struct RayTraceInstance {
     #[cfg(debug_assertions)]
     _logger: VkDebugLogger,
     device: Device,
+    enabled_extensions: Vec<String>,
     //the following one must be destroyed for last
     instance: BasicInstance,
 }
 
 impl RayTraceInstance {
-    /// Creates a new instance that can be used for raytracing.
+    /// Creates a new instance that can be used for raytracing, without presentation support.
     ///
     /// Returns None if no supported device can be found.
     ///
     /// # Extensions
     /// The following Vulkan extensions are required:
     /// - VK_EXT_debug_utils (only when compiled in debug mode)
+    /// - VK_KHR_deferred_host_operations
+    /// - VK_KHR_acceleration_structure
+    /// - VK_KHR_ray_tracing_pipeline
     ///
     /// # Features
     /// No features are required to be supported on the physical device:
@@ -154,11 +224,18 @@ impl RayTraceInstance {
         let maybe_device =
             Device::new_compute(&instance.instance, &device_extensions, device_features);
         if let Some(device) = maybe_device {
+            let enabled_extensions = device_extensions
+                .into_iter()
+                .map(CStr::to_bytes)
+                .flat_map(std::str::from_utf8)
+                .map(String::from)
+                .collect::<Vec<_>>();
             Some(RayTraceInstance {
                 #[cfg(debug_assertions)]
                 _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
-                instance,
                 device,
+                enabled_extensions,
+                instance,
             })
         } else {
             None
@@ -173,6 +250,10 @@ impl Instance for RayTraceInstance {
 
     fn device(&self) -> &Device {
         &self.device
+    }
+
+    fn extensions(&self) -> &[String] {
+        &self.enabled_extensions
     }
 }
 
