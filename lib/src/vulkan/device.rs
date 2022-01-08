@@ -283,6 +283,54 @@ impl SurfaceSupport {
     }
 }
 
+/// Information about a device in String form.
+pub struct DeviceInfo {
+    /// Device name.
+    pub name: String,
+    /// Vulkan API version in form `Major.Minor.Patch`.
+    pub vulkan_api_ver: String,
+    /// Vendor name.
+    pub vendor: &'static str,
+    /// Driver version.
+    pub driver_ver: String,
+}
+
+/// Decodes the driver version into a String.
+fn driver_conversion(version: u32, vendor: u32) -> String {
+    // nvidia
+    if vendor == 0x10DE {
+        let major = (version >> 22) & 0x3FF;
+        let minor = (version >> 14) & 0xFF;
+        let secondary = (version >> 6) & 0xFF;
+        let tertiary = version & 0x3F;
+        format!("{}.{}.{}.{}", major, minor, secondary, tertiary)
+    } else if cfg!(target_os = "windows") && vendor == 0x8086 {
+        // intel on windows
+        let major = version >> 14;
+        let minor = version & 0x3FFF;
+        format!("{}.{}", major, minor)
+    } else {
+        // follow the vulkan convention
+        let major = version >> 22;
+        let minor = version >> 12 & 0x3FF;
+        let patch = version & 0xFFF;
+        format!("{}.{}.{}", major, minor, patch)
+    }
+}
+
+/// Decodes the vendor id into a string.
+fn vendor_id_conversion(id: u32) -> &'static str {
+    match id {
+        0x1002 => "AMD",
+        0x1010 => "ImgTec",
+        0x10DE => "Nvidia",
+        0x13B5 => "ARM",
+        0x5143 => "Qualcomm",
+        0x8086 => "Intel",
+        _ => "",
+    }
+}
+
 /// Wrapper for a physical device, with its properties and features.
 #[derive(Debug, Clone)]
 pub struct PhysicalDevice {
@@ -329,6 +377,21 @@ impl PhysicalDevice {
             capabilities,
             formats,
             present_modes,
+        }
+    }
+
+    /// Returns information about a physical device.
+    pub fn info(&self) -> DeviceInfo {
+        let props = self.properties;
+        let vulkan_api_ver = driver_conversion(props.api_version, 0);
+        let driver_ver = driver_conversion(props.driver_version, props.vendor_id);
+        let name = cchars_to_string(&props.device_name);
+        let vendor = vendor_id_conversion(self.properties.vendor_id);
+        DeviceInfo {
+            name,
+            vulkan_api_ver,
+            vendor,
+            driver_ver,
         }
     }
 }

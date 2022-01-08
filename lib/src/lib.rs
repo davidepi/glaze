@@ -16,5 +16,6 @@ pub use materials::{
 pub use parser::{converted_file, parse, serialize, ParsedScene, ParserVersion};
 #[cfg(feature = "vulkan")]
 pub use vulkan::{
-    Pipeline, PipelineBuilder, PresentInstance, RayTraceInstance, RealtimeRenderer, VulkanScene,
+    DeviceInfo, Pipeline, PipelineBuilder, PresentInstance, RayTraceInstance, RealtimeRenderer,
+    VulkanScene,
 };

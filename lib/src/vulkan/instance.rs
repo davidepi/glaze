@@ -3,6 +3,7 @@ use crate::vulkan::debug::logger::VkDebugLogger;
 use crate::vulkan::debug::ValidationLayers;
 use crate::vulkan::device::{Device, SurfaceSupport};
 use crate::vulkan::surface::Surface;
+use crate::DeviceInfo;
 use ash::vk;
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -154,6 +155,18 @@ impl PresentInstance {
     /// Returns the capabilities of the current surface.
     pub fn surface_capabilities(&self) -> SurfaceSupport {
         self.device.physical().surface_capabilities(&self.surface)
+    }
+
+    /// Returns the properties of the underlying physical device.
+    pub fn device_properties(&self) -> DeviceInfo {
+        self.device.physical().info()
+    }
+
+    /// Returns a list of loaded extensions.
+    pub fn loaded_extensions(&self) -> &[String] {
+        // this trait is not exposed (otherwise I have to expose the entirety of Device)
+        // hence the reason of this method
+        self.extensions()
     }
 }
 

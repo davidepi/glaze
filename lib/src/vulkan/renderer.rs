@@ -250,9 +250,14 @@ impl RealtimeRenderer {
         self.forward_pass.clear_color[0].color.float32 = self.clear_color;
     }
 
-    /// Returns the current stats of the renderer
+    /// Returns the current stats of the renderer.
     pub fn stats(&self) -> Stats {
         self.stats.last_val
+    }
+
+    /// Reuturns the vulkan instance used by the renderer.
+    pub fn instance(&self) -> &PresentInstance {
+        &self.instance
     }
 
     /// Returns the current scene being rendered.

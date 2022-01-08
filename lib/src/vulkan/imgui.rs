@@ -67,7 +67,6 @@ impl ImguiRenderer {
         let avg_sizes = [(vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0)];
         let mut dm =
             DescriptorSetManager::with_cache(device.logical_clone(), &avg_sizes, layout_cache);
-        let mut gcmdm = CommandManager::new(device.logical_clone(), device.graphic_queue().idx, 3);
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
         let fonts_gpu_buf;
         {

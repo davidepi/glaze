@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use glaze::{
     parse, Camera, OrthographicCam, PerspectiveCam, RealtimeRenderer, ShaderMat, TextureFormat,
     VulkanScene,
@@ -9,6 +7,7 @@ use imgui::{
     Selectable, SelectableFlags, Slider, SliderFlags, TextureId, Ui,
 };
 use nfd2::Response;
+use std::time::Instant;
 use winit::window::Window;
 
 pub struct UiState {
@@ -30,6 +29,7 @@ pub struct UiState {
     materials_window: bool,
     materials_selected: Option<u16>,
     stats_window: bool,
+    info_window: bool,
 }
 
 impl UiState {
@@ -53,6 +53,7 @@ impl UiState {
             materials_window: false,
             materials_selected: None,
             stats_window: true,
+            info_window: false,
         }
     }
 
@@ -84,10 +85,8 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
             ui.checkbox("Materials", &mut state.materials_window);
             ui.checkbox("Stats", &mut state.stats_window);
         });
-        ui.menu("About", || {
-            if MenuItem::new("Help").build(ui) {
-                ui.open_popup("Help me");
-            }
+        ui.menu("Help", || {
+            ui.checkbox("Info", &mut state.info_window);
         });
     });
     if state.stats_window {
@@ -101,6 +100,9 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
     }
     if state.materials_window {
         window_materials(ui, state, window, renderer);
+    }
+    if state.info_window {
+        window_info(ui, state, window, renderer);
     }
     if state.open_loading_popup {
         state.open_loading_popup = false;
@@ -479,6 +481,7 @@ fn texture_selector(
 
 fn window_stats(ui: &Ui, _: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
     let inner_sz = window.inner_size();
+    let device = renderer.instance().device_properties();
     imgui::Window::new("Stats")
         .size([400.0, 400.0], Condition::Appearing)
         .position([inner_sz.width as f32 - 200.0, 50.0], Condition::Always)
@@ -490,12 +493,35 @@ fn window_stats(ui: &Ui, _: &mut UiState, window: &mut Window, renderer: &mut Re
         .movable(false)
         .build(ui, || {
             let stats = renderer.stats();
+            ui.text(format!("[{}]", device.name));
             ui.text(format!("FPS: {}", (stats.fps + 0.5) as u32)); // round to nearest integer
             ui.text(format!(
                 "Draw calls: {}",
                 (stats.avg_draw_calls + 0.5) as u32
             ));
         });
+}
+
+fn window_info(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut RealtimeRenderer) {
+    let closed = &mut state.info_window;
+    let device = renderer.instance().device_properties();
+    if let Some(window) = imgui::Window::new("Info")
+        .opened(closed)
+        .size([300.0, 200.0], Condition::Appearing)
+        .save_settings(false)
+        .begin(ui)
+    {
+        ui.text(format!("Vendor: {}", device.vendor));
+        ui.text(format!("Adapter: {}", device.name));
+        ui.text(format!("Vulkan version: {}", device.vulkan_api_ver));
+        ui.text(format!("Driver version: {}", device.driver_ver));
+        ui.separator();
+        ui.text("Loaded extensions:");
+        for ext in renderer.instance().loaded_extensions() {
+            ui.text(ext);
+        }
+        window.end()
+    }
 }
 
 fn open_scene(renderer: &mut RealtimeRenderer, state: &mut UiState) {
