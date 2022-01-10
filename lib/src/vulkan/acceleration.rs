@@ -2,13 +2,11 @@ use super::cmd::CommandManager;
 use super::device::Device;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::scene::VulkanMesh;
-use crate::vulkan::instance::Instance;
 use crate::{Mesh, Vertex};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk::{self, AccelerationStructureReferenceKHR, Packed24_8};
 use cgmath::{Matrix, Matrix4, SquareMatrix};
 use gpu_allocator::MemoryLocation;
-use std::ops::Deref;
 use std::ptr;
 
 pub struct AllocatedAS {
@@ -23,12 +21,19 @@ impl AllocatedAS {
     }
 }
 
-struct SceneAS {
-    blas: Vec<AllocatedAS>,
-    tlas: AllocatedAS,
+pub struct SceneAS {
+    pub blas: Vec<AllocatedAS>,
+    pub tlas: AllocatedAS,
 }
 
-struct SceneASBuilder<'scene, 'renderer> {
+impl SceneAS {
+    pub fn destroy(self, loader: &AccelerationLoader, mm: &mut MemoryManager) {
+        self.tlas.destroy(mm, loader);
+        self.blas.into_iter().for_each(|b| b.destroy(mm, loader));
+    }
+}
+
+pub struct SceneASBuilder<'scene, 'renderer> {
     vkmeshes: Vec<&'scene VulkanMesh>,
     max_vertices: Vec<u32>,
     vb: &'scene AllocatedBuffer,

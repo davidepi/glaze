@@ -1,3 +1,4 @@
+use super::acceleration::{SceneAS, SceneASBuilder};
 use super::cmd::CommandManager;
 use super::descriptor::{DLayoutCache, Descriptor, DescriptorSetManager};
 use super::device::Device;
@@ -5,6 +6,7 @@ use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::Pipeline;
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{Camera, Material, Mesh, ParsedScene, ShaderMat, Texture, Vertex};
+use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use cgmath::Vector3 as Vec3;
 use fnv::FnvHashMap;
@@ -12,6 +14,7 @@ use gpu_allocator::MemoryLocation;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 /// A scene optimized to be rendered using this crates vulkan implementation.
 pub struct VulkanScene {
@@ -20,9 +23,9 @@ pub struct VulkanScene {
     /// The camera for the current scene.
     pub current_cam: Camera,
     /// The buffer containing all vertices for the current scene.
-    pub(super) vertex_buffer: AllocatedBuffer,
+    pub(super) vertex_buffer: Arc<AllocatedBuffer>,
     /// The buffer containing all indices for the current scene.
-    pub(super) index_buffer: AllocatedBuffer,
+    pub(super) index_buffer: Arc<AllocatedBuffer>,
     /// Buffer used during a single material update, as a transfer buffer to the GPU
     update_buffer: AllocatedBuffer,
     /// GPU buffer containing all parameters for all materials in the scene
@@ -62,6 +65,13 @@ struct UnfinishedExecutions {
     fences: Vec<vk::Fence>,
     /// Buffers that are to be freed after waiting on the fences.
     buffers_to_free: Vec<AllocatedBuffer>,
+}
+
+impl UnfinishedExecutions {
+    fn wait_completion(self, device: &Device, mm: &mut MemoryManager) {
+        device.wait_completion(&self.fences);
+        self.buffers_to_free.into_iter().map(|b| mm.free_buffer(b));
+    }
 }
 
 impl VulkanScene {
@@ -110,10 +120,7 @@ impl VulkanScene {
         let parsed_mats = parsed.materials()?;
         let params_buffer =
             load_materials_parameters(device, &parsed_mats, mm, &mut tcmdm, &mut unf);
-        device.wait_completion(&unf.fences);
-        unf.buffers_to_free
-            .into_iter()
-            .for_each(|b| mm.free_buffer(b));
+        unf.wait_completion(device, mm);
         wchan.send("[4/4] Loading materials...".to_string()).ok();
         let avg_desc = [
             (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
@@ -148,8 +155,8 @@ impl VulkanScene {
         Ok(VulkanScene {
             file: parsed,
             current_cam,
-            vertex_buffer,
-            index_buffer,
+            vertex_buffer: Arc::new(vertex_buffer),
+            index_buffer: Arc::new(index_buffer),
             update_buffer,
             params_buffer,
             meshes,
@@ -271,8 +278,12 @@ impl VulkanScene {
             .chain([(u16::MAX, self.dflt_tex)])
             .for_each(|(_, tex)| mm.free_image(tex.image));
         unsafe { device.logical().destroy_sampler(self.sampler, None) };
-        mm.free_buffer(self.vertex_buffer);
-        mm.free_buffer(self.index_buffer);
+        if let Ok(last_buffer) = Arc::try_unwrap(self.vertex_buffer) {
+            mm.free_buffer(last_buffer);
+        }
+        if let Ok(last_buffer) = Arc::try_unwrap(self.index_buffer) {
+            mm.free_buffer(last_buffer)
+        }
         mm.free_buffer(self.params_buffer);
         mm.free_buffer(self.update_buffer);
     }
@@ -772,4 +783,66 @@ impl From<&Material> for MaterialParams {
 /// How many bytes are required for `n` to be aligned to `align` boundary
 fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
     ((!n.into()).wrapping_add(1)) & (align.into().wrapping_sub(1))
+}
+
+pub struct RayTraceScene {
+    vertex_buffer: Arc<AllocatedBuffer>,
+    index_buffer: Arc<AllocatedBuffer>,
+    acc: SceneAS,
+}
+
+impl RayTraceScene {
+    pub fn new(
+        device: &Device,
+        loader: &AccelerationLoader,
+        mut scene: Box<dyn ParsedScene>,
+        mm: &mut MemoryManager,
+        ccmdm: &mut CommandManager,
+    ) -> Result<Self, std::io::Error> {
+        let mut unf = UnfinishedExecutions {
+            fences: Vec::new(),
+            buffers_to_free: Vec::new(),
+        };
+        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
+        let vertex_buffer =
+            load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?);
+        let (_, index_buffer) =
+            load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?);
+        unf.wait_completion(device, mm);
+        let builder = SceneASBuilder::new(device, mm, ccmdm, &vertex_buffer, &index_buffer, loader);
+        let acc = builder.build();
+        Ok(Self {
+            vertex_buffer: Arc::new(vertex_buffer),
+            index_buffer: Arc::new(index_buffer),
+            acc,
+        })
+    }
+
+    pub fn from(
+        device: &Device,
+        loader: &AccelerationLoader,
+        scene: &VulkanScene,
+        mm: &mut MemoryManager,
+        ccmdm: &mut CommandManager,
+    ) -> Self {
+        let vertex_buffer = scene.vertex_buffer.clone();
+        let index_buffer = scene.index_buffer.clone();
+        let builder = SceneASBuilder::new(device, mm, ccmdm, &vertex_buffer, &index_buffer, loader);
+        let acc = builder.build();
+        Self {
+            vertex_buffer,
+            index_buffer,
+            acc,
+        }
+    }
+
+    pub fn destroy(self, loader: &AccelerationLoader, mm: &mut MemoryManager) {
+        if let Ok(last_buffer) = Arc::try_unwrap(self.vertex_buffer) {
+            mm.free_buffer(last_buffer);
+        }
+        if let Ok(last_buffer) = Arc::try_unwrap(self.index_buffer) {
+            mm.free_buffer(last_buffer);
+        }
+        self.acc.destroy(loader, mm);
+    }
 }

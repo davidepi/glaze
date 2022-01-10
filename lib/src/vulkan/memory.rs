@@ -30,7 +30,6 @@ pub struct AllocatedImage {
 pub struct MemoryManager {
     device: Arc<ash::Device>,
     frames_in_flight: u8,
-    /// F
     deferred_buffers: Vec<(AllocatedBuffer, u8)>,
     allocator: Arc<Mutex<Allocator>>,
 }

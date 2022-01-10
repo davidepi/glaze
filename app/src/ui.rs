@@ -79,6 +79,15 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
                 }
             }
         });
+        ui.menu("Render", || {
+            if MenuItem::new("Start").build(ui) {
+                if renderer.get_raytrace().is_some() {
+                    println!("Successfully created");
+                } else {
+                    println!("Not supported");
+                }
+            }
+        });
         ui.menu("Window", || {
             ui.checkbox("Settings", &mut state.settings_window);
             ui.checkbox("Textures", &mut state.textures_window);

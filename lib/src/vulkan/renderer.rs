@@ -5,10 +5,11 @@ use super::instance::{Instance, PresentInstance};
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderpass::RenderPass;
-use super::scene::VulkanScene;
+use super::scene::{RayTraceScene, VulkanScene};
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
-use crate::{include_shader, Camera, Material, ParsedScene};
+use crate::{include_shader, Camera, Material, ParsedScene, RayTraceInstance};
+use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
@@ -441,6 +442,20 @@ impl RealtimeRenderer {
         }
     }
 
+    pub fn get_raytrace(&self) -> Option<RayTraceRenderer> {
+        if self.instance.supports_raytrace() {
+            if let Some(scene) = &self.scene {
+                let instance = self.instance.clone();
+                let mm = self.mm.thread_exclusive();
+                Some(RayTraceRenderer::from_realtime(instance, mm, scene))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
     /// Terminates rendering and frees all resources.
     pub fn destroy(mut self) {
         self.wait_idle();
@@ -729,5 +744,62 @@ impl InternalStats {
 
     pub fn done_frame(&mut self) {
         self.frame_count += 1;
+    }
+}
+
+pub struct RayTraceRenderer {
+    ccmdm: CommandManager,
+    mm: MemoryManager,
+    loader: AccelerationLoader,
+    instance: Rc<dyn Instance>,
+    scene: RayTraceScene,
+}
+
+impl RayTraceRenderer {
+    pub fn new(
+        instance: Rc<RayTraceInstance>,
+        scene: Box<dyn ParsedScene>,
+    ) -> Result<RayTraceRenderer, std::io::Error> {
+        let device = instance.device();
+        let compute = device.compute_queue();
+        let mut ccmdm = CommandManager::new(device.logical_clone(), compute.idx, 15);
+        let mut mm = MemoryManager::new(
+            instance.instance(),
+            device.logical_clone(),
+            device.physical().device,
+            0,
+        );
+        let loader = AccelerationLoader::new(instance.instance(), device.logical());
+        let scene = RayTraceScene::new(device, &loader, scene, &mut mm, &mut ccmdm)?;
+        Ok(RayTraceRenderer {
+            ccmdm,
+            mm,
+            loader,
+            instance,
+            scene,
+        })
+    }
+
+    fn from_realtime(
+        instance: Rc<PresentInstance>,
+        mut mm: MemoryManager,
+        scene: &VulkanScene,
+    ) -> RayTraceRenderer {
+        let device = instance.device();
+        let compute = device.compute_queue();
+        let mut ccmdm = CommandManager::new(device.logical_clone(), compute.idx, 15);
+        let loader = AccelerationLoader::new(instance.instance(), device.logical());
+        let scene = RayTraceScene::from(device, &loader, scene, &mut mm, &mut ccmdm);
+        RayTraceRenderer {
+            ccmdm,
+            mm,
+            loader,
+            instance,
+            scene,
+        }
+    }
+
+    fn destroy(mut self) {
+        self.scene.destroy(&self.loader, &mut self.mm);
     }
 }
