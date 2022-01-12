@@ -218,7 +218,7 @@ impl RayTraceInstance {
     /// # Examples
     /// Basic usage:
     /// ``` no_run
-    /// let instance = glaze::RayTracingInstance::new();
+    /// let instance = glaze::RayTraceInstance::new();
     /// ```
     pub fn new() -> Option<Self> {
         let instance_extensions = vec![

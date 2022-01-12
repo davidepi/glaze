@@ -2,7 +2,7 @@ use super::cmd::CommandManager;
 use super::device::Device;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::scene::VulkanMesh;
-use crate::{Mesh, Vertex};
+use crate::Vertex;
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk::{self, AccelerationStructureReferenceKHR, Packed24_8};
 use cgmath::{Matrix, Matrix4, SquareMatrix};
@@ -35,7 +35,6 @@ impl SceneAS {
 
 pub struct SceneASBuilder<'scene, 'renderer> {
     vkmeshes: Vec<&'scene VulkanMesh>,
-    max_vertices: Vec<u32>,
     vb: &'scene AllocatedBuffer,
     ib: &'scene AllocatedBuffer,
     mm: &'renderer mut MemoryManager,
@@ -55,7 +54,6 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
     ) -> Self {
         SceneASBuilder {
             vkmeshes: Vec::new(),
-            max_vertices: Vec::new(),
             vb: vertex_buffer,
             ib: index_buffer,
             mm,
@@ -65,9 +63,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         }
     }
 
-    pub fn add_mesh(&mut self, mesh: &Mesh, vkmesh: &'scene VulkanMesh) {
-        let max_vertex = mesh.indices.iter().max().copied().unwrap_or(0);
-        self.max_vertices.push(max_vertex);
+    pub fn add_mesh(&mut self, vkmesh: &'scene VulkanMesh) {
         self.vkmeshes.push(vkmesh);
     }
 
@@ -83,7 +79,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         let mut retval = Vec::with_capacity(self.vkmeshes.len());
         let mut scratch_size = 0;
         // first iteration: partial build and get the max memory usage
-        for (&mesh, &max_vertex) in self.vkmeshes.iter().zip(self.max_vertices.iter()) {
+        for &mesh in &self.vkmeshes {
             let vb_addr_info = vk::BufferDeviceAddressInfo {
                 s_type: vk::StructureType::BUFFER_DEVICE_ADDRESS_INFO,
                 p_next: ptr::null(),
@@ -105,7 +101,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                         device_address: vb_addr,
                     },
                     vertex_stride: std::mem::size_of::<Vertex>() as u64,
-                    max_vertex,
+                    max_vertex: mesh.max_index,
                     index_type: vk::IndexType::UINT32,
                     index_data: vk::DeviceOrHostAddressConstKHR {
                         device_address: ib_addr,
@@ -193,7 +189,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             let mut fences = Vec::with_capacity(blas_chunk.len());
             let mut blas_tmp = Vec::with_capacity(blas_chunk.len());
             let blas_no = blas_chunk.len() as u32;
-            unsafe { vkdevice.reset_query_pool(query_pool, 0, blas_chunk.len() as u32) };
+            unsafe { vkdevice.reset_query_pool(query_pool, 0, blas_no) };
             for (id, (mut build_info, build_range, geometry, req_mem)) in
                 blas_chunk.into_iter().enumerate()
             {
@@ -249,7 +245,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             // wait for creation, then start compaction
             self.device.wait_completion(&fences);
             fences.clear();
-            let mut compact_size = Vec::<vk::DeviceSize>::with_capacity(blas_no as usize);
+            let mut compact_size = vec![0_u64; blas_no as usize];
             unsafe {
                 vkdevice.get_query_pool_results(
                     query_pool,
@@ -286,8 +282,11 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                 .into_iter()
                 .for_each(|b| b.destroy(self.mm, self.loader));
         }
-        // cleanup the scratch buffer and return
+        // cleanup the scratch buffer and query pool and return
         self.mm.free_buffer(scratch_buf);
+        unsafe {
+            vkdevice.destroy_query_pool(query_pool, None);
+        }
         retval
     }
 

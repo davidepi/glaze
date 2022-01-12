@@ -113,9 +113,10 @@ impl RealtimeRenderer {
     /// let mut event_loop = winit::event_loop::EventLoop::new();
     /// let window = winit::window::Window::new(&event_loop).unwrap();
     /// let mut imgui = imgui::Context::create();
-    /// let instance = std::rc::Rc::new(glaze::PresentInstance::new(&window));
+    /// let instance = glaze::PresentInstance::new(&window).expect("No GPU found");
+    /// let rc_instance = std::rc::Rc::new(instance);
     /// let renderer = glaze::RealtimeRenderer::create(
-    ///     instance,
+    ///     rc_instance,
     ///     &mut imgui,
     ///     window.inner_size().width,
     ///     window.inner_size().height,
@@ -349,9 +350,10 @@ impl RealtimeRenderer {
     /// let mut event_loop = winit::event_loop::EventLoop::new();
     /// let window = winit::window::Window::new(&event_loop).unwrap();
     /// let mut imgui = imgui::Context::create();
-    /// let instance = std::rc::Rc::new(glaze::PresentInstance::new(&window));
+    /// let instance = glaze::PresentInstance::new(&window).expect("No GPU found");
+    /// let rc_instance = std::rc::Rc::new(instance);
     /// let mut renderer = glaze::RealtimeRenderer::create(
-    ///     instance,
+    ///     rc_instance,
     ///     &mut imgui,
     ///     window.inner_size().width,
     ///     window.inner_size().height,
@@ -799,7 +801,7 @@ impl RayTraceRenderer {
         }
     }
 
-    fn destroy(mut self) {
+    pub fn destroy(mut self) {
         self.scene.destroy(&self.loader, &mut self.mm);
     }
 }

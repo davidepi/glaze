@@ -54,6 +54,8 @@ pub struct VulkanMesh {
     pub index_offset: u32,
     /// Number of indices of this mesh in the index buffer.
     pub index_count: u32,
+    /// Maximum index value that appears for this mesh.
+    pub max_index: u32,
     /// Material id of this mesh.
     pub material: u16,
 }
@@ -70,7 +72,9 @@ struct UnfinishedExecutions {
 impl UnfinishedExecutions {
     fn wait_completion(self, device: &Device, mm: &mut MemoryManager) {
         device.wait_completion(&self.fences);
-        self.buffers_to_free.into_iter().map(|b| mm.free_buffer(b));
+        self.buffers_to_free
+            .into_iter()
+            .for_each(|b| mm.free_buffer(b));
     }
 }
 
@@ -449,9 +453,11 @@ fn load_indices_to_gpu(
             std::ptr::copy_nonoverlapping(mesh.indices.as_ptr(), mapped, mesh.indices.len());
             mapped = mapped.add(mesh.indices.len());
         };
+        let max_index = mesh.indices.iter().max().copied().unwrap_or(0);
         converted_meshes.push(VulkanMesh {
             index_offset: offset,
             index_count: mesh.indices.len() as u32,
+            max_index,
             material: mesh.material,
         });
         offset += mesh.indices.len() as u32;
@@ -806,10 +812,12 @@ impl RayTraceScene {
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
         let vertex_buffer =
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?);
-        let (_, index_buffer) =
+        let (meshes, index_buffer) =
             load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?);
         unf.wait_completion(device, mm);
-        let builder = SceneASBuilder::new(device, mm, ccmdm, &vertex_buffer, &index_buffer, loader);
+        let mut builder =
+            SceneASBuilder::new(device, mm, ccmdm, &vertex_buffer, &index_buffer, loader);
+        meshes.iter().for_each(|m| builder.add_mesh(m));
         let acc = builder.build();
         Ok(Self {
             vertex_buffer: Arc::new(vertex_buffer),
@@ -827,7 +835,9 @@ impl RayTraceScene {
     ) -> Self {
         let vertex_buffer = scene.vertex_buffer.clone();
         let index_buffer = scene.index_buffer.clone();
-        let builder = SceneASBuilder::new(device, mm, ccmdm, &vertex_buffer, &index_buffer, loader);
+        let mut builder =
+            SceneASBuilder::new(device, mm, ccmdm, &vertex_buffer, &index_buffer, loader);
+        scene.meshes.iter().for_each(|m| builder.add_mesh(m));
         let acc = builder.build();
         Self {
             vertex_buffer,
