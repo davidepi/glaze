@@ -7,7 +7,9 @@ mod parser;
 #[cfg(feature = "vulkan")]
 mod vulkan;
 
-pub use geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
+pub use geometry::{
+    Camera, Mesh, MeshInstance, OrthographicCam, PerspectiveCam, Transform, Vertex,
+};
 #[cfg(feature = "vulkan")]
 pub use materials::TextureLoaded;
 pub use materials::{

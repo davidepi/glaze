@@ -1,6 +1,8 @@
+use cgmath::Matrix4;
+
 use self::v1::ContentV1;
 use crate::geometry::{Camera, Mesh, Vertex};
-use crate::{Material, Texture};
+use crate::{Material, MeshInstance, Texture, Transform};
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Error, ErrorKind, Read, Seek, Write};
@@ -135,6 +137,8 @@ pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ParsedScene + Send>, Err
 ///     &[],
 ///     &[],
 ///     &[],
+///     &[],
+///     &[],
 /// )
 /// .expect("Failed to save file");
 /// ```
@@ -143,6 +147,8 @@ pub fn serialize<P: AsRef<Path>>(
     version: ParserVersion,
     vertices: &[Vertex],
     meshes: &[Mesh],
+    transforms: &[(u16, Matrix4<f32>)],
+    instances: &[MeshInstance],
     cameras: &[Camera],
     textures: &[(u16, Texture)],
     materials: &[(u16, Material)],
@@ -150,9 +156,9 @@ pub fn serialize<P: AsRef<Path>>(
     let mut fout = BufWriter::new(File::create(file)?);
     write_header(&mut fout)?;
     match version {
-        ParserVersion::V1 => {
-            ContentV1::serialize(fout, vertices, meshes, cameras, textures, materials)?
-        }
+        ParserVersion::V1 => ContentV1::serialize(
+            fout, vertices, meshes, transforms, instances, cameras, textures, materials,
+        )?,
     };
     Ok(())
 }
@@ -199,6 +205,10 @@ pub trait ParsedScene {
     fn textures(&mut self) -> Result<Vec<(u16, Texture)>, Error>;
     /// Retrieve only the [Material]s contained in the file.
     fn materials(&mut self) -> Result<Vec<(u16, Material)>, Error>;
+    /// Retrieve only the [Transform]s contained in the file.
+    fn transforms(&mut self) -> Result<Vec<(u16, Transform)>, Error>;
+    /// Retrieve only the [MeshInstance]s contained in the file.
+    fn instances(&mut self) -> Result<Vec<MeshInstance>, Error>;
     /// Updates an existing file.
     fn update(
         &mut self,

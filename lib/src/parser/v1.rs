@@ -1,7 +1,7 @@
 use super::{write_header, ParsedScene, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
 use crate::materials::{TextureFormat, TextureInfo};
-use crate::{Material, Texture};
+use crate::{Material, MeshInstance, Texture, Transform};
 use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
 use fnv::FnvHashMap;
 use image::png::{CompressionType, FilterType, PngDecoder, PngEncoder};
@@ -73,6 +73,8 @@ enum ChunkID {
     Camera = 2,
     Texture = 3,
     Material = 4,
+    Transform = 5,
+    Instance = 6,
 }
 
 impl TryFrom<u8> for ChunkID {
@@ -85,6 +87,8 @@ impl TryFrom<u8> for ChunkID {
             2 => Ok(ChunkID::Camera),
             3 => Ok(ChunkID::Texture),
             4 => Ok(ChunkID::Material),
+            5 => Ok(ChunkID::Transform),
+            6 => Ok(ChunkID::Instance),
             _ => Err(Error::new(ErrorKind::Unsupported, "Unsupported chunk")),
         }
     }
@@ -98,6 +102,8 @@ impl From<ChunkID> for u8 {
             ChunkID::Camera => 2,
             ChunkID::Texture => 3,
             ChunkID::Material => 4,
+            ChunkID::Transform => 5,
+            ChunkID::Instance => 6,
         }
     }
 }
@@ -217,6 +223,8 @@ impl ContentV1 {
         mut fout: W,
         vertices: &[Vertex],
         meshes: &[Mesh],
+        transforms: &[(u16, Matrix4<f32>)],
+        instances: &[MeshInstance],
         cameras: &[Camera],
         textures: &[(u16, Texture)],
         materials: &[(u16, Material)],
@@ -227,6 +235,8 @@ impl ContentV1 {
             (ChunkID::Camera, Chunk::from_cameras(cameras)),
             (ChunkID::Texture, Chunk::from_textures(textures)),
             (ChunkID::Material, Chunk::from_materials(materials)),
+            (ChunkID::Transform, Chunk::from_transforms(transforms)),
+            (ChunkID::Instance, Chunk::from_instances(instances)),
         ];
         ContentV1::write_chunks(&mut fout, &chunks)
     }
@@ -294,6 +304,8 @@ impl ParsedScene for ContentV1 {
         let vertices = self.read_chunk(ChunkID::Vertex)?;
         let meshes = self.read_chunk(ChunkID::Mesh)?;
         let textures = self.read_chunk(ChunkID::Texture)?;
+        let transforms = self.read_chunk(ChunkID::Transform)?;
+        let instances = self.read_chunk(ChunkID::Instance)?;
         let cameras = if let Some(cameras) = cameras {
             Chunk::from_cameras(cameras)
         } else {
@@ -315,12 +327,22 @@ impl ParsedScene for ContentV1 {
                 (ChunkID::Camera, cameras),
                 (ChunkID::Texture, textures),
                 (ChunkID::Material, materials),
+                (ChunkID::Transform, transforms),
+                (ChunkID::Instance, instances),
             ];
             ContentV1::write_chunks(&mut writer, &chunks)?;
             self.reader = BufReader::new(File::open(&self.filepath)?);
         }
         self.offsets = OffsetsTable::seek_and_parse(&mut self.reader)?;
         Ok(())
+    }
+
+    fn transforms(&mut self) -> Result<Vec<(u16, Transform)>, Error> {
+        self.read_chunk(ChunkID::Transform)?.to_transforms()
+    }
+
+    fn instances(&mut self) -> Result<Vec<MeshInstance>, Error> {
+        self.read_chunk(ChunkID::Instance)?.to_instances()
     }
 }
 
@@ -582,6 +604,104 @@ impl Chunk {
             Ok(Vec::with_capacity(0))
         }
     }
+
+    /// Creates a chunk from a slice of transforms.
+    fn from_transforms(items: &[(u16, Transform)]) -> Self {
+        if !items.is_empty() {
+            let len = items.len() as u16;
+            let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
+            for transform in items {
+                let encoded = transform_to_bytes(transform);
+                let encoded_len = encoded.len() as u32;
+                uncompressed.extend(encoded_len.to_le_bytes().iter());
+                uncompressed.extend(encoded);
+            }
+            let compressed = compress(&uncompressed[..]);
+            Chunk {
+                data: prepend_hash(compressed),
+            }
+        } else {
+            Chunk {
+                data: Vec::with_capacity(0),
+            }
+        }
+    }
+
+    /// Reinterprets the bytes of this chunks as a vector of transforms.
+    #[allow(clippy::wrong_self_convention)] // this is private, who cares
+    fn to_transforms(self) -> Result<Vec<(u16, Transform)>, Error> {
+        if !self.data.is_empty() {
+            if let Some(verified) = verify_hash(self.data) {
+                let decompressed = decompress(&verified[..]);
+                let len = u16::from_le_bytes(decompressed[0..2].try_into().unwrap());
+                let mut retval = Vec::with_capacity(len as usize);
+                let mut index = std::mem::size_of::<u16>();
+                while index < decompressed.len() {
+                    let encoded_len =
+                        u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap())
+                            as usize;
+                    index += std::mem::size_of::<u32>();
+                    let transform = bytes_to_transform(&decompressed[index..index + encoded_len]);
+                    index += encoded_len;
+                    retval.push(transform);
+                }
+                Ok(retval)
+            } else {
+                Err(Error::new(ErrorKind::InvalidData, "Corrupted transforms"))
+            }
+        } else {
+            Ok(Vec::with_capacity(0))
+        }
+    }
+
+    /// Creates a chunk from a slice of instances.
+    fn from_instances(items: &[MeshInstance]) -> Self {
+        if !items.is_empty() {
+            let len = items.len() as u16;
+            let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
+            for instance in items {
+                let encoded = instance_to_bytes(instance);
+                let encoded_len = encoded.len() as u32;
+                uncompressed.extend(encoded_len.to_le_bytes().iter());
+                uncompressed.extend(encoded);
+            }
+            let compressed = compress(&uncompressed[..]);
+            Chunk {
+                data: prepend_hash(compressed),
+            }
+        } else {
+            Chunk {
+                data: Vec::with_capacity(0),
+            }
+        }
+    }
+
+    /// Reinterprets the bytes of this chunks as a vector of instances.
+    #[allow(clippy::wrong_self_convention)] // this is private, who cares
+    fn to_instances(self) -> Result<Vec<MeshInstance>, Error> {
+        if !self.data.is_empty() {
+            if let Some(verified) = verify_hash(self.data) {
+                let decompressed = decompress(&verified[..]);
+                let len = u16::from_le_bytes(decompressed[0..2].try_into().unwrap());
+                let mut retval = Vec::with_capacity(len as usize);
+                let mut index = std::mem::size_of::<u16>();
+                while index < decompressed.len() {
+                    let encoded_len =
+                        u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap())
+                            as usize;
+                    index += std::mem::size_of::<u32>();
+                    let instance = bytes_to_instance(&decompressed[index..index + encoded_len]);
+                    index += encoded_len;
+                    retval.push(instance);
+                }
+                Ok(retval)
+            } else {
+                Err(Error::new(ErrorKind::InvalidData, "Corrupted instances"))
+            }
+        } else {
+            Ok(Vec::with_capacity(0))
+        }
+    }
 }
 
 /// Converts a Vertex to a vector of bytes.
@@ -618,63 +738,31 @@ fn bytes_to_vertex(data: &[u8]) -> Vertex {
 
 /// Converts a Mesh to a vector of bytes.
 fn mesh_to_bytes(mesh: &Mesh) -> Vec<u8> {
+    let id = u16::to_le_bytes(mesh.id);
     let faces_no = u32::to_le_bytes(mesh.indices.len() as u32);
-    let instances_no = u32::to_le_bytes(mesh.instances.len() as u32);
     let material = u16::to_le_bytes(mesh.material);
-    let mut retval = faces_no
-        .iter()
-        .chain(instances_no.iter())
+    id.iter()
+        .chain(faces_no.iter())
         .chain(material.iter())
         .copied()
-        .collect::<Vec<_>>();
-    retval.extend(mesh.indices.iter().copied().flat_map(u32::to_le_bytes));
-    for matrix in &mesh.instances {
-        let iter = <Matrix4<f32> as AsRef<[f32; 16]>>::as_ref(matrix)
-            .iter()
-            .copied()
-            .flat_map(f32::to_le_bytes);
-        retval.extend(iter);
-    }
-    retval
+        .chain(mesh.indices.iter().copied().flat_map(u32::to_le_bytes))
+        .collect::<Vec<_>>()
 }
 
 /// Converts a vector of bytes to a Mesh.
 fn bytes_to_mesh(data: &[u8]) -> Mesh {
-    let faces_no = u32::from_le_bytes(data[0..4].try_into().unwrap());
-    let instances_no = u32::from_le_bytes(data[4..8].try_into().unwrap());
-    let face_end = (10 + faces_no * 4) as usize;
-    let material = u16::from_le_bytes(data[8..10].try_into().unwrap());
-    let indices = data[10..face_end]
+    let id = u16::from_le_bytes(data[0..2].try_into().unwrap());
+    let faces_no = u32::from_le_bytes(data[2..6].try_into().unwrap());
+    let material = u16::from_le_bytes(data[6..8].try_into().unwrap());
+    let face_end = (8 + faces_no * 4) as usize;
+    let indices = data[8..face_end]
         .chunks_exact(4)
         .map(|x| u32::from_le_bytes(x.try_into().unwrap()))
         .collect::<Vec<_>>();
-    let mut instances = Vec::with_capacity(instances_no as usize);
-    for instance_data in data[face_end..].chunks_exact(16 * 4) {
-        let m00 = f32::from_le_bytes(instance_data[0..4].try_into().unwrap());
-        let m01 = f32::from_le_bytes(instance_data[4..8].try_into().unwrap());
-        let m02 = f32::from_le_bytes(instance_data[8..12].try_into().unwrap());
-        let m03 = f32::from_le_bytes(instance_data[12..16].try_into().unwrap());
-        let m10 = f32::from_le_bytes(instance_data[16..20].try_into().unwrap());
-        let m11 = f32::from_le_bytes(instance_data[20..24].try_into().unwrap());
-        let m12 = f32::from_le_bytes(instance_data[24..28].try_into().unwrap());
-        let m13 = f32::from_le_bytes(instance_data[28..32].try_into().unwrap());
-        let m20 = f32::from_le_bytes(instance_data[32..36].try_into().unwrap());
-        let m21 = f32::from_le_bytes(instance_data[36..40].try_into().unwrap());
-        let m22 = f32::from_le_bytes(instance_data[40..44].try_into().unwrap());
-        let m23 = f32::from_le_bytes(instance_data[44..48].try_into().unwrap());
-        let m30 = f32::from_le_bytes(instance_data[48..52].try_into().unwrap());
-        let m31 = f32::from_le_bytes(instance_data[52..56].try_into().unwrap());
-        let m32 = f32::from_le_bytes(instance_data[56..60].try_into().unwrap());
-        let m33 = f32::from_le_bytes(instance_data[60..64].try_into().unwrap());
-        let matrix = Matrix4::new(
-            m00, m01, m02, m03, m10, m11, m12, m13, m20, m21, m22, m23, m30, m31, m32, m33,
-        );
-        instances.push(matrix);
-    }
     Mesh {
+        id,
         indices,
         material,
-        instances,
     }
 }
 
@@ -942,17 +1030,70 @@ fn bytes_to_material(data: &[u8]) -> (u16, Material) {
     (mat_index, material)
 }
 
+/// Converts a Transform to a vector of bytes.
+fn transform_to_bytes((index, transform): &(u16, Transform)) -> Vec<u8> {
+    let i0 = u16::to_le_bytes(*index).into_iter();
+    let vals: &[f32; 16] = transform.as_ref();
+    let i1 = vals.iter().flat_map(|val| f32::to_le_bytes(*val));
+    i0.chain(i1).collect()
+}
+
+/// Converts a vector of bytes to a Transform.
+fn bytes_to_transform(data: &[u8]) -> (u16, Transform) {
+    let index = u16::from_le_bytes(data[0..2].try_into().unwrap());
+    let data = &data[2..];
+    let matrix = Matrix4::new(
+        f32::from_le_bytes(data[0..4].try_into().unwrap()),
+        f32::from_le_bytes(data[4..8].try_into().unwrap()),
+        f32::from_le_bytes(data[8..12].try_into().unwrap()),
+        f32::from_le_bytes(data[12..16].try_into().unwrap()),
+        f32::from_le_bytes(data[16..20].try_into().unwrap()),
+        f32::from_le_bytes(data[20..24].try_into().unwrap()),
+        f32::from_le_bytes(data[24..28].try_into().unwrap()),
+        f32::from_le_bytes(data[28..32].try_into().unwrap()),
+        f32::from_le_bytes(data[32..36].try_into().unwrap()),
+        f32::from_le_bytes(data[36..40].try_into().unwrap()),
+        f32::from_le_bytes(data[40..44].try_into().unwrap()),
+        f32::from_le_bytes(data[44..48].try_into().unwrap()),
+        f32::from_le_bytes(data[48..52].try_into().unwrap()),
+        f32::from_le_bytes(data[52..56].try_into().unwrap()),
+        f32::from_le_bytes(data[56..60].try_into().unwrap()),
+        f32::from_le_bytes(data[60..64].try_into().unwrap()),
+    );
+    (index, matrix)
+}
+
+/// Converts a MeshInstance to a vector of bytes.
+fn instance_to_bytes(instance: &MeshInstance) -> Vec<u8> {
+    let i0 = u16::to_le_bytes(instance.mesh_id).into_iter();
+    let i1 = u16::to_le_bytes(instance.transform_id).into_iter();
+    i0.chain(i1).collect()
+}
+
+/// Converts a vector of bytes to a MeshInstance.
+fn bytes_to_instance(data: &[u8]) -> MeshInstance {
+    let mesh_id = u16::from_le_bytes(data[0..2].try_into().unwrap());
+    let transform_id = u16::from_le_bytes(data[2..4].try_into().unwrap());
+    MeshInstance {
+        mesh_id,
+        transform_id,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        bytes_to_camera, bytes_to_mesh, bytes_to_texture, bytes_to_vertex, camera_to_bytes,
-        compress, decompress, mesh_to_bytes, texture_to_bytes, vertex_to_bytes,
+        bytes_to_camera, bytes_to_mesh, bytes_to_texture, bytes_to_transform, bytes_to_vertex,
+        camera_to_bytes, compress, decompress, mesh_to_bytes, texture_to_bytes, transform_to_bytes,
+        vertex_to_bytes,
     };
     use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
     use crate::materials::{TextureFormat, TextureInfo};
-    use crate::parser::v1::{bytes_to_material, material_to_bytes, HASH_SIZE};
+    use crate::parser::v1::{
+        bytes_to_instance, bytes_to_material, instance_to_bytes, material_to_bytes, HASH_SIZE,
+    };
     use crate::parser::{parse, ParserVersion, HEADER_LEN};
-    use crate::{serialize, Material, ShaderMat, Texture};
+    use crate::{serialize, Material, MeshInstance, ShaderMat, Texture, Transform};
     use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
     use image::GenericImageView;
     use rand::distributions::Alphanumeric;
@@ -976,46 +1117,22 @@ mod tests {
         buffer
     }
 
-    fn gen_meshes(count: u32, seed: u64) -> Vec<Mesh> {
+    fn gen_meshes(count: u16, seed: u64) -> Vec<Mesh> {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
         let mut buffer = Vec::with_capacity(count as usize);
-        for _ in 0..count {
+        for id in 0..count {
             let high_range = rng.gen_bool(0.1);
-            let has_instances = rng.gen_bool(0.3);
             let indices_no: u32 = if high_range {
                 rng.gen_range(0..100000)
             } else {
                 rng.gen_range(0..1000)
             };
             let material = rng.gen();
-            let instances_no: u8 = if has_instances { rng.gen() } else { 0 };
             let indices = (0..indices_no).map(|_| rng.gen()).collect::<Vec<_>>();
-            let mut instances = Vec::with_capacity(instances_no as usize);
-            for _ in 0..instances_no {
-                let matrix = Matrix4::<f32>::new(
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                    rng.gen(),
-                );
-                instances.push(matrix);
-            }
             let mesh = Mesh {
+                id,
                 indices,
                 material,
-                instances,
             };
             buffer.push(mesh);
         }
@@ -1138,6 +1255,48 @@ mod tests {
         data.into_iter().collect()
     }
 
+    fn gen_transforms(count: u16, seed: u64) -> Vec<(u16, Transform)> {
+        let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
+        let mut data = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let matrix = Matrix4::new(
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+                rng.gen_range(0.0..1.0),
+            );
+            data.push((i, matrix));
+        }
+        data
+    }
+
+    fn gen_instances(count: u16, seed: u64) -> Vec<MeshInstance> {
+        let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
+        let mut data = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let mesh_id = rng.gen();
+            let transform_id = rng.gen();
+            let instance = MeshInstance {
+                mesh_id,
+                transform_id,
+            };
+            data.push(instance)
+        }
+        data
+    }
+
     #[test]
     fn encode_decode_vertex() {
         let vertices = gen_vertices(32, 0xC2B4D5A5A9E49945);
@@ -1180,11 +1339,31 @@ mod tests {
 
     #[test]
     fn encode_decode_materials() {
-        let materials = gen_materials(2048, 0xC7F8CE22512B15FB);
+        let materials = gen_materials(485, 0xC7F8CE22512B15FB);
         for material in materials {
             let data = material_to_bytes(&material);
             let decoded = bytes_to_material(&data);
             assert_eq!(decoded, material);
+        }
+    }
+
+    #[test]
+    fn encode_decode_transforms() {
+        let transforms = gen_transforms(654, 0xBD5EC77C790B70F4);
+        for transform in transforms {
+            let data = transform_to_bytes(&transform);
+            let decoded = bytes_to_transform(&data);
+            assert_eq!(decoded, transform);
+        }
+    }
+
+    #[test]
+    fn encode_decode_instances() {
+        let instances = gen_instances(1435, 0x9714321951EF2533);
+        for instance in instances {
+            let data = instance_to_bytes(&instance);
+            let decoded = bytes_to_instance(&data);
+            assert_eq!(decoded, instance);
         }
     }
 
@@ -1197,6 +1376,8 @@ mod tests {
             file.as_path(),
             ParserVersion::V1,
             &vertices,
+            &[],
+            &[],
             &[],
             &[],
             &[],
@@ -1227,6 +1408,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+            &[],
         )?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
@@ -1248,6 +1431,8 @@ mod tests {
         serialize(
             file.as_path(),
             ParserVersion::V1,
+            &[],
+            &[],
             &[],
             &[],
             &cameras,
@@ -1274,6 +1459,8 @@ mod tests {
         serialize(
             file.as_path(),
             ParserVersion::V1,
+            &[],
+            &[],
             &[],
             &[],
             &[],
@@ -1304,6 +1491,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+            &[],
             &materials,
         )?;
         let mut read = parse(file.as_path())?;
@@ -1319,12 +1508,70 @@ mod tests {
     }
 
     #[test]
+    fn write_and_read_only_transforms() -> Result<(), std::io::Error> {
+        let transforms = gen_transforms(512, 0x091722F61F6D3E1A);
+        let dir = tempdir()?;
+        let file = dir.path().join("write_and_read_transforms.bin");
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &[],
+            &[],
+            &transforms,
+            &[],
+            &[],
+            &[],
+            &[],
+        )?;
+        let mut read = parse(file.as_path())?;
+        remove_file(file.as_path())?;
+        let read_transforms = read.transforms()?;
+        assert_eq!(read_transforms.len(), transforms.len());
+        for i in 0..read_transforms.len() {
+            let val = &read_transforms.get(i).unwrap();
+            let expected = &transforms.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn write_and_read_only_instances() -> Result<(), std::io::Error> {
+        let instances = gen_instances(512, 0x3B88C0CCB06D05CB);
+        let dir = tempdir()?;
+        let file = dir.path().join("write_and_read_instances.bin");
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &[],
+            &[],
+            &[],
+            &instances,
+            &[],
+            &[],
+            &[],
+        )?;
+        let mut read = parse(file.as_path())?;
+        remove_file(file.as_path())?;
+        let read_instances = read.instances()?;
+        assert_eq!(read_instances.len(), instances.len());
+        for i in 0..read_instances.len() {
+            let val = &read_instances.get(i).unwrap();
+            let expected = &instances.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn write_and_read_everything() -> Result<(), std::io::Error> {
         let vertices = gen_vertices(100, 0x98DA1392A52639C2);
         let meshes = gen_meshes(100, 0xEFB101FDF7F185FB);
         let cameras = gen_cameras(100, 0x9B20F550F7EDF740);
         let textures = gen_textures(4, 0x122C4C9E1A51AC4B);
         let materials = gen_materials(100, 0x76D7971188303D82);
+        let instances = gen_instances(100, 0xCAB0F2794E10665C);
+        let transforms = gen_transforms(100, 0x8AFE0C931FBD4D69);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_everything.bin");
         serialize(
@@ -1332,6 +1579,8 @@ mod tests {
             ParserVersion::V1,
             &vertices,
             &meshes,
+            &transforms,
+            &instances,
             &cameras,
             &textures,
             &materials,
@@ -1343,11 +1592,15 @@ mod tests {
         let read_cameras = read.cameras()?;
         let read_textures = read.textures()?;
         let read_materials = read.materials()?;
+        let read_transforms = read.transforms()?;
+        let read_instances = read.instances()?;
         assert_eq!(read_vertices.len(), vertices.len());
         assert_eq!(read_meshes.len(), meshes.len());
         assert_eq!(read_cameras.len(), cameras.len());
         assert_eq!(read_textures.len(), textures.len());
         assert_eq!(read_materials.len(), materials.len());
+        assert_eq!(read_transforms.len(), transforms.len());
+        assert_eq!(read_instances.len(), instances.len());
         for i in 0..read_vertices.len() {
             let val = &read_vertices.get(i).unwrap();
             let expected = &vertices.get(i).unwrap();
@@ -1373,6 +1626,16 @@ mod tests {
             let expected = &materials.get(i).unwrap();
             assert_eq!(val, expected);
         }
+        for i in 0..read_transforms.len() {
+            let val = &read_transforms.get(i).unwrap();
+            let expected = &transforms.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_instances.len() {
+            let val = &read_instances.get(i).unwrap();
+            let expected = &instances.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
         Ok(())
     }
 
@@ -1385,6 +1648,8 @@ mod tests {
             file.as_path(),
             ParserVersion::V1,
             &vertices,
+            &[],
+            &[],
             &[],
             &[],
             &[],
@@ -1420,6 +1685,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+            &[],
         )?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.vertices().is_ok());
@@ -1451,6 +1718,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+            &[],
         )?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.meshes().is_ok());
@@ -1477,6 +1746,8 @@ mod tests {
         serialize(
             file.as_path(),
             ParserVersion::V1,
+            &[],
+            &[],
             &[],
             &[],
             &cameras,
@@ -1508,6 +1779,8 @@ mod tests {
         serialize(
             file.as_path(),
             ParserVersion::V1,
+            &[],
+            &[],
             &[],
             &[],
             &[],
@@ -1543,6 +1816,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+            &[],
             &materials,
         )?;
         let mut read_ok = parse(file.as_path()).unwrap();
@@ -1559,6 +1834,72 @@ mod tests {
         let mut read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.materials().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn corrupted_transforms() -> Result<(), std::io::Error> {
+        let transforms = gen_transforms(100, 0x52220531E08FB566);
+        let dir = tempdir()?;
+        let file = dir.path().join("corrupted_transforms.bin");
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &[],
+            &[],
+            &transforms,
+            &[],
+            &[],
+            &[],
+            &[],
+        )?;
+        let mut read_ok = parse(file.as_path()).unwrap();
+        assert!(read_ok.transforms().is_ok());
+        {
+            //corrupt file
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(file.as_path())?;
+            file.seek(SeekFrom::Start(1000))?;
+            file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
+        }
+        let mut read_corrupted = parse(file.as_path()).unwrap();
+        remove_file(file.as_path())?;
+        assert!(read_corrupted.transforms().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn corrupted_instances() -> Result<(), std::io::Error> {
+        let instances = gen_instances(500, 0x52C7F0FE60D65D06);
+        let dir = tempdir()?;
+        let file = dir.path().join("corrupted_instances.bin");
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &[],
+            &[],
+            &[],
+            &instances,
+            &[],
+            &[],
+            &[],
+        )?;
+        let mut read_ok = parse(file.as_path()).unwrap();
+        assert!(read_ok.instances().is_ok());
+        {
+            //corrupt file
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(file.as_path())?;
+            file.seek(SeekFrom::Start(1000))?;
+            file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
+        }
+        let mut read_corrupted = parse(file.as_path()).unwrap();
+        remove_file(file.as_path())?;
+        assert!(read_corrupted.instances().is_err());
         Ok(())
     }
 
@@ -1582,6 +1923,8 @@ mod tests {
             file.as_path(),
             ParserVersion::V1,
             &vertices,
+            &[],
+            &[],
             &[],
             &[],
             &[],
@@ -1610,6 +1953,8 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
+            &[],
         )?;
         let mut read = parse(file.as_path())?;
         assert_eq!(read.vertices()?.len(), vertices.len());
@@ -1629,6 +1974,8 @@ mod tests {
         let cameras = gen_cameras(25, 0x91D237698C5717D3);
         let textures = gen_textures(4, 0x4AE5995B104BBAB1);
         let materials = gen_materials(25, 0x6FEC53A488FBDB4F);
+        let transforms = gen_transforms(25, 0x1E5CBA94679D9D3B);
+        let instances = gen_instances(100, 0xC79389E3BBC74BCF);
         let dir = tempdir()?;
         let file = dir.path().join("update_all.bin");
         serialize(
@@ -1636,6 +1983,8 @@ mod tests {
             ParserVersion::V1,
             &vertices,
             &meshes,
+            &transforms,
+            &instances,
             &cameras,
             &textures,
             &materials,
@@ -1647,6 +1996,8 @@ mod tests {
         assert_eq!(read.cameras()?.len(), cameras.len());
         assert_eq!(read.textures()?.len(), textures.len());
         assert_eq!(read.materials()?.len(), materials.len());
+        assert_eq!(read.transforms()?.len(), transforms.len());
+        assert_eq!(read.instances()?.len(), instances.len());
         let new_cameras = gen_cameras(100, 0x056F0B996A248BC4);
         let new_materials = gen_materials(100, 0x3ABE1A9BEB00DA7B);
         read.update(Some(&new_cameras), Some(&new_materials))?;
@@ -1655,11 +2006,15 @@ mod tests {
         let read_cameras = read.cameras()?;
         let read_textures = read.textures()?;
         let read_materials = read.materials()?;
+        let read_transforms = read.transforms()?;
+        let read_instances = read.instances()?;
         assert_eq!(read_vertices.len(), vertices.len());
         assert_eq!(read_meshes.len(), meshes.len());
         assert_eq!(read_cameras.len(), new_cameras.len());
         assert_eq!(read_textures.len(), textures.len());
         assert_eq!(read_materials.len(), new_materials.len());
+        assert_eq!(read_transforms.len(), transforms.len());
+        assert_eq!(read_instances.len(), instances.len());
         for i in 0..read_vertices.len() {
             let val = &read_vertices.get(i).unwrap();
             let expected = &vertices.get(i).unwrap();
@@ -1683,6 +2038,16 @@ mod tests {
         for i in 0..read_materials.len() {
             let val = &read_materials.get(i).unwrap();
             let expected = &new_materials.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_transforms.len() {
+            let val = &read_transforms.get(i).unwrap();
+            let expected = &transforms.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_instances.len() {
+            let val = &read_instances.get(i).unwrap();
+            let expected = &instances.get(i).unwrap();
             assert_eq!(val, expected);
         }
         Ok(())
