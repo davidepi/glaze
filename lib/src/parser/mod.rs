@@ -147,7 +147,7 @@ pub fn serialize<P: AsRef<Path>>(
     version: ParserVersion,
     vertices: &[Vertex],
     meshes: &[Mesh],
-    transforms: &[(u16, Matrix4<f32>)],
+    transforms: &[(u16, Transform)],
     instances: &[MeshInstance],
     cameras: &[Camera],
     textures: &[(u16, Texture)],

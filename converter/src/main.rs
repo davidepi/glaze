@@ -1,15 +1,16 @@
 #![allow(clippy::type_complexity)]
-use cgmath::{Point3, Vector2 as Vec2, Vector3 as Vec3};
+use cgmath::{Matrix, Matrix4, Point3, SquareMatrix, Vector2 as Vec2, Vector3 as Vec3};
 use clap::{App, Arg};
 use console::style;
 use glaze::{
-    converted_file, parse, serialize, Camera, Material, Mesh, ParserVersion, PerspectiveCam,
-    Texture, TextureFormat, TextureInfo, Vertex,
+    converted_file, parse, serialize, Camera, Material, Mesh, MeshInstance, ParserVersion,
+    PerspectiveCam, Texture, TextureFormat, TextureInfo, Transform, Vertex,
 };
 use image::io::Reader as ImageReader;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use russimp::material::{MaterialProperty, PropertyTypeInfo};
 use russimp::scene::{PostProcess, Scene as RussimpScene};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::Write;
@@ -25,6 +26,8 @@ struct TempScene {
     cameras: Vec<Camera>,
     textures: Vec<(u16, Texture)>,
     materials: Vec<(u16, Material)>,
+    transforms: Vec<(u16, Transform)>,
+    instances: Vec<MeshInstance>,
 }
 
 macro_rules! error(
@@ -146,6 +149,21 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
     let tex_mm_thread = thread::spawn(move || gen_mipmaps(textures, mm_pb));
     let (vertices, meshes) = mesh_thread.join().unwrap()?;
     let textures = tex_mm_thread.join().unwrap();
+    let (transforms, instances) = if let Some(root) = scene.root {
+        convert_transforms_and_instances(&root)
+    } else {
+        // no scene structure, puts each mesh in the scene with an identity matrix.
+        // this should never happen, even for simple files assimp should generate a base structure.
+        let transforms = vec![(0, Transform::identity())];
+        let instances = meshes
+            .iter()
+            .map(|m| MeshInstance {
+                mesh_id: m.id,
+                transform_id: 0,
+            })
+            .collect();
+        (transforms, instances)
+    };
     mpb.clear().ok();
     Ok(TempScene {
         vertices,
@@ -153,7 +171,58 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
         cameras,
         textures,
         materials,
+        transforms,
+        instances,
     })
+}
+
+fn russimp_to_cgmath_matrix(mat: russimp::Matrix4x4) -> Matrix4<f32> {
+    // russimp uses assimp Matrix4 (row-major) and cgmath expects a column_major
+    // so the matrix have to be transposed
+    let matrix = Matrix4::new(
+        mat.a1, mat.a2, mat.a3, mat.a4, mat.b1, mat.b2, mat.b3, mat.b4, mat.c1, mat.c2, mat.c3,
+        mat.c4, mat.d1, mat.d2, mat.d3, mat.d4,
+    );
+    matrix.transpose()
+}
+
+fn convert_transforms_and_instances(
+    root: &RefCell<russimp::node::Node>,
+) -> (Vec<(u16, Transform)>, Vec<MeshInstance>) {
+    let mut transforms = HashMap::new();
+    let mut instances = Vec::new();
+    conv_trans_inst_rec(root, Matrix4::identity(), &mut transforms, &mut instances);
+    let transforms = transforms
+        .into_iter()
+        .map(|(trans, id)| (id, Transform::from_bytes(trans)))
+        .collect();
+    (transforms, instances)
+}
+
+fn conv_trans_inst_rec(
+    root: &RefCell<russimp::node::Node>,
+    cur_trans: Matrix4<f32>,
+    transforms: &mut HashMap<[u8; 64], u16>,
+    instances: &mut Vec<MeshInstance>,
+) {
+    let node = root.borrow();
+    let cur_trans = russimp_to_cgmath_matrix(node.transformation) * cur_trans;
+    if !node.meshes.is_empty() {
+        let next_id = transforms.len() as u16;
+        // this will probably never report duplicates due to how fp values works...
+        let tid = transforms
+            .entry(Transform::from(cur_trans).to_bytes())
+            .or_insert(next_id);
+        for mesh in &node.meshes {
+            instances.push(MeshInstance {
+                mesh_id: *mesh as u16,
+                transform_id: *tid,
+            });
+        }
+    }
+    for child in &node.children {
+        conv_trans_inst_rec(child, cur_trans, transforms, instances);
+    }
 }
 
 fn gen_mipmaps(mut textures: Vec<(u16, Texture)>, pb: ProgressBar) -> Vec<(u16, Texture)> {
@@ -177,7 +246,7 @@ fn convert_meshes(
     let effort = meshes.iter().fold(0, |acc, m| acc + m.faces.len()) as u64;
     pb.set_length(effort);
     pb.set_message("Converting meshes");
-    for mesh in meshes {
+    for (id, mesh) in meshes.iter().enumerate() {
         let mut indices = Vec::with_capacity(mesh.faces.len() * 3);
         if mesh.uv_components[0] < 2 {
             return Err(std::io::Error::new(
@@ -215,9 +284,9 @@ fn convert_meshes(
             pb.inc(1);
         }
         let mesh = Mesh {
+            id: id as u16,
             indices,
             material: mesh.material_index as u16,
-            instances: Vec::new(),
         };
         retval_meshes.push(mesh);
     }
@@ -429,6 +498,8 @@ fn write_output<P: AsRef<Path>>(
         version,
         &scene.vertices,
         &scene.meshes,
+        &scene.transforms,
+        &scene.instances,
         &scene.cameras,
         &scene.textures,
         &scene.materials,
@@ -522,6 +593,8 @@ mod tests {
             glaze::ParserVersion::V1,
             &scene.vertices,
             &scene.meshes,
+            &scene.transforms,
+            &scene.instances,
             &scene.cameras,
             &scene.textures,
             &scene.materials
@@ -531,11 +604,47 @@ mod tests {
         assert!(parsed.is_ok());
         if let Ok(mut parsed) = parsed {
             assert_eq!(parsed.meshes()?.len(), 1);
+            assert_eq!(parsed.transforms()?.len(), 1);
+            assert_eq!(parsed.instances()?.len(), 1);
             assert_eq!(parsed.cameras()?.len(), 1);
             assert_eq!(parsed.materials()?.len(), 2);
             let textures = parsed.textures()?;
             assert_eq!(textures[0].1.mipmap_levels(), 10);
             assert_eq!(parsed.vertices()?.len(), 24);
+        } else {
+            panic!("Failed to parse back scene")
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_mesh_instances() -> Result<(), Box<dyn Error>> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("resources")
+            .join("test.fbx");
+        let scene = super::preprocess_input(path.to_str().unwrap()).unwrap();
+        let scene = super::convert_input(scene, path.to_str().unwrap()).unwrap();
+        let dir = tempdir()?;
+        let file = dir.path().join("instances.bin");
+        assert!(serialize(
+            &file,
+            glaze::ParserVersion::V1,
+            &scene.vertices,
+            &scene.meshes,
+            &scene.transforms,
+            &scene.instances,
+            &scene.cameras,
+            &scene.textures,
+            &scene.materials
+        )
+        .is_ok());
+        let parsed = parse(&file);
+        assert!(parsed.is_ok());
+        if let Ok(mut parsed) = parsed {
+            assert_eq!(parsed.meshes()?.len(), 1);
+            assert_eq!(parsed.instances()?.len(), 5);
         } else {
             panic!("Failed to parse back scene")
         }

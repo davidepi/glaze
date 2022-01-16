@@ -1,4 +1,6 @@
-use cgmath::Matrix4;
+use std::ops::{Mul, MulAssign};
+
+use cgmath::{Matrix4, SquareMatrix};
 
 /// A collection of triangles in 3D space, having the same material.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,4 +27,58 @@ pub struct MeshInstance {
 }
 
 /// A 4x4 column-major transformation matrix
-pub type Transform = Matrix4<f32>;
+#[repr(C)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct Transform(Matrix4<f32>);
+
+impl Transform {
+    /// Creates an identity transformation.
+    pub fn identity() -> Self {
+        Self(Matrix4::identity())
+    }
+
+    /// Converts the transformation to a sequence of bytes.
+    pub fn to_bytes(&self) -> [u8; 64] {
+        let vals: &[f32; 16] = self.0.as_ref();
+        let mut retval = [0; 64];
+        let mut index = 0;
+        for val in vals {
+            let bytes = f32::to_le_bytes(*val);
+            retval[index] = bytes[0];
+            retval[index + 1] = bytes[1];
+            retval[index + 2] = bytes[2];
+            retval[index + 3] = bytes[3];
+            index += 4;
+        }
+        retval
+    }
+
+    /// Reconstructs the transformation from a sequence of bytes.
+    pub fn from_bytes(data: [u8; 64]) -> Self {
+        let matrix = Matrix4::new(
+            f32::from_le_bytes(data[0..4].try_into().unwrap()),
+            f32::from_le_bytes(data[4..8].try_into().unwrap()),
+            f32::from_le_bytes(data[8..12].try_into().unwrap()),
+            f32::from_le_bytes(data[12..16].try_into().unwrap()),
+            f32::from_le_bytes(data[16..20].try_into().unwrap()),
+            f32::from_le_bytes(data[20..24].try_into().unwrap()),
+            f32::from_le_bytes(data[24..28].try_into().unwrap()),
+            f32::from_le_bytes(data[28..32].try_into().unwrap()),
+            f32::from_le_bytes(data[32..36].try_into().unwrap()),
+            f32::from_le_bytes(data[36..40].try_into().unwrap()),
+            f32::from_le_bytes(data[40..44].try_into().unwrap()),
+            f32::from_le_bytes(data[44..48].try_into().unwrap()),
+            f32::from_le_bytes(data[48..52].try_into().unwrap()),
+            f32::from_le_bytes(data[52..56].try_into().unwrap()),
+            f32::from_le_bytes(data[56..60].try_into().unwrap()),
+            f32::from_le_bytes(data[60..64].try_into().unwrap()),
+        );
+        Self(matrix)
+    }
+}
+
+impl From<Matrix4<f32>> for Transform {
+    fn from(mat: Matrix4<f32>) -> Self {
+        Self(mat)
+    }
+}

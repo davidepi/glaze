@@ -223,7 +223,7 @@ impl ContentV1 {
         mut fout: W,
         vertices: &[Vertex],
         meshes: &[Mesh],
-        transforms: &[(u16, Matrix4<f32>)],
+        transforms: &[(u16, Transform)],
         instances: &[MeshInstance],
         cameras: &[Camera],
         textures: &[(u16, Texture)],
@@ -1033,34 +1033,15 @@ fn bytes_to_material(data: &[u8]) -> (u16, Material) {
 /// Converts a Transform to a vector of bytes.
 fn transform_to_bytes((index, transform): &(u16, Transform)) -> Vec<u8> {
     let i0 = u16::to_le_bytes(*index).into_iter();
-    let vals: &[f32; 16] = transform.as_ref();
-    let i1 = vals.iter().flat_map(|val| f32::to_le_bytes(*val));
+    let i1 = transform.to_bytes();
     i0.chain(i1).collect()
 }
 
 /// Converts a vector of bytes to a Transform.
 fn bytes_to_transform(data: &[u8]) -> (u16, Transform) {
     let index = u16::from_le_bytes(data[0..2].try_into().unwrap());
-    let data = &data[2..];
-    let matrix = Matrix4::new(
-        f32::from_le_bytes(data[0..4].try_into().unwrap()),
-        f32::from_le_bytes(data[4..8].try_into().unwrap()),
-        f32::from_le_bytes(data[8..12].try_into().unwrap()),
-        f32::from_le_bytes(data[12..16].try_into().unwrap()),
-        f32::from_le_bytes(data[16..20].try_into().unwrap()),
-        f32::from_le_bytes(data[20..24].try_into().unwrap()),
-        f32::from_le_bytes(data[24..28].try_into().unwrap()),
-        f32::from_le_bytes(data[28..32].try_into().unwrap()),
-        f32::from_le_bytes(data[32..36].try_into().unwrap()),
-        f32::from_le_bytes(data[36..40].try_into().unwrap()),
-        f32::from_le_bytes(data[40..44].try_into().unwrap()),
-        f32::from_le_bytes(data[44..48].try_into().unwrap()),
-        f32::from_le_bytes(data[48..52].try_into().unwrap()),
-        f32::from_le_bytes(data[52..56].try_into().unwrap()),
-        f32::from_le_bytes(data[56..60].try_into().unwrap()),
-        f32::from_le_bytes(data[60..64].try_into().unwrap()),
-    );
-    (index, matrix)
+    let transform = Transform::from_bytes(data[2..].try_into().unwrap());
+    (index, transform)
 }
 
 /// Converts a MeshInstance to a vector of bytes.
@@ -1277,7 +1258,7 @@ mod tests {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0.0..1.0),
             );
-            data.push((i, matrix));
+            data.push((i, Transform::from(matrix)));
         }
         data
     }
