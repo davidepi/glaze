@@ -616,16 +616,21 @@ unsafe fn draw_objects(
             current_shader = Some(shader);
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
         }
-        device.cmd_bind_descriptor_sets(
-            cmd,
-            vk::PipelineBindPoint::GRAPHICS,
-            pipeline.layout,
-            0,
-            &[frame_data.descriptor.set, desc.set],
-            &[],
-        );
-        device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
-        stats.done_draw_call();
+        let empty_vec = Vec::with_capacity(0);
+        let instances = scene.instances.get(obj).unwrap_or(&empty_vec);
+        for instance in instances {
+            let (_, po_desc) = scene.transforms.get(instance).unwrap();
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                0,
+                &[frame_data.descriptor.set, desc.set, po_desc.set],
+                &[],
+            );
+            device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
+            stats.done_draw_call();
+        }
     }
 }
 

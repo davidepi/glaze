@@ -5,12 +5,15 @@ use super::device::Device;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::Pipeline;
 use crate::materials::{TextureFormat, TextureLoaded};
-use crate::{Camera, Material, Mesh, ParsedScene, ShaderMat, Texture, Vertex};
+use crate::{
+    Camera, Material, Mesh, MeshInstance, ParsedScene, ShaderMat, Texture, Transform, Vertex,
+};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use cgmath::Vector3 as Vec3;
-use fnv::FnvHashMap;
+use fnv::{FnvBuildHasher, FnvHashMap};
 use gpu_allocator::MemoryLocation;
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::mpsc::Sender;
@@ -44,11 +47,16 @@ pub struct VulkanScene {
     pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
     /// Map of all textures in the scene.
     pub(super) textures: FnvHashMap<u16, TextureLoaded>,
+    /// All the transform in the scene.
+    pub(super) transforms: FnvHashMap<u16, (AllocatedBuffer, Descriptor)>,
+    /// All the instances in the scene,
+    pub(super) instances: HashMap<VulkanMesh, Vec<u16>>,
     /// If the materials changed after loading the scene
     mat_changed: bool,
 }
 
 /// A mesh optimized to be rendered using this crates renderer.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct VulkanMesh {
     /// Offset of the mesh in the scene index buffer.
     pub index_offset: u32,
@@ -93,14 +101,34 @@ impl VulkanScene {
             buffers_to_free: Vec::new(),
         };
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 5);
+        let avg_desc = [
+            (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
+            (vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.5),
+        ];
+        let mut dm =
+            DescriptorSetManager::with_cache(device.logical_clone(), &avg_desc, desc_cache);
         wchan.send("[1/4] Loading vertices...".to_string()).ok();
         let vertex_buffer =
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &parsed.vertices()?);
         wchan.send("[2/4] Loading meshes...".to_string()).ok();
-        let (mut meshes, index_buffer) =
-            load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &parsed.meshes()?);
-        let sampler = create_sampler(device);
+        let transforms = load_transforms_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut dm,
+            &mut unf,
+            &parsed.transforms()?,
+        );
+        let (mut meshes, instances, index_buffer) = load_indices_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            &parsed.meshes()?,
+            &parsed.instances()?,
+        );
         wchan.send("[3/4] Loading textures...".to_string()).ok();
+        let sampler = create_sampler(device);
         let scene_textures = parsed.textures()?;
         let textures_no = scene_textures.len();
         let textures = scene_textures
@@ -126,12 +154,6 @@ impl VulkanScene {
             load_materials_parameters(device, &parsed_mats, mm, &mut tcmdm, &mut unf);
         unf.wait_completion(device, mm);
         wchan.send("[4/4] Loading materials...".to_string()).ok();
-        let avg_desc = [
-            (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
-            (vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.5),
-        ];
-        let mut dm =
-            DescriptorSetManager::with_cache(device.logical_clone(), &avg_desc, desc_cache);
         let materials = parsed_mats
             .into_iter()
             .map(|(id, mat)| {
@@ -170,6 +192,8 @@ impl VulkanScene {
             materials,
             pipelines,
             textures,
+            transforms,
+            instances,
             mat_changed: false,
         })
     }
@@ -262,7 +286,15 @@ impl VulkanScene {
                     device,
                     renderpass,
                     render_size,
-                    &[frame_desc_layout, desc.layout],
+                    &[
+                        frame_desc_layout,
+                        desc.layout,
+                        self.transforms
+                            .get(&0)
+                            .expect("Missing per-object descriptors")
+                            .1
+                            .layout,
+                    ],
                 )
             });
         }
@@ -288,6 +320,9 @@ impl VulkanScene {
         if let Ok(last_buffer) = Arc::try_unwrap(self.index_buffer) {
             mm.free_buffer(last_buffer)
         }
+        self.transforms
+            .into_iter()
+            .for_each(|(_, (buf, _))| mm.free_buffer(buf));
         mm.free_buffer(self.params_buffer);
         mm.free_buffer(self.update_buffer);
     }
@@ -393,7 +428,7 @@ fn load_vertices_to_gpu(
     let mapped = cpu_buffer
         .allocation
         .mapped_ptr()
-        .expect("Faield to map memory")
+        .expect("Failed to map memory")
         .cast()
         .as_ptr();
     unsafe { std::ptr::copy_nonoverlapping(vertices.as_ptr(), mapped, vertices.len()) };
@@ -416,6 +451,73 @@ fn load_vertices_to_gpu(
     gpu_buffer
 }
 
+/// Loads all transforms to GPU.
+/// Likely this will become a per-object binding.
+/// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
+fn load_transforms_to_gpu(
+    device: &Device,
+    mm: &mut MemoryManager,
+    tcmdm: &mut CommandManager,
+    dm: &mut DescriptorSetManager,
+    unfinished: &mut UnfinishedExecutions,
+    transforms: &[(u16, Transform)],
+) -> FnvHashMap<u16, (AllocatedBuffer, Descriptor)> {
+    let mut map = FnvHashMap::with_capacity_and_hasher(transforms.len(), FnvBuildHasher::default());
+    for (tid, transform) in transforms {
+        //TODO: maybe a single buffer would be better, considering that I will probably never edit
+        // transforms. I should also consider removing the FnvHashMap and use a Vec given that I am
+        // the one assigning indices to the transforms so I know for sure they are contiguous.
+        let size = std::mem::size_of::<Transform>() as u64;
+        let cpu_buffer = mm.create_buffer(
+            "transform_local",
+            size,
+            vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+            MemoryLocation::CpuToGpu,
+        );
+        let gpu_buffer = mm.create_buffer(
+            "transform_dedicated",
+            size,
+            vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            MemoryLocation::GpuOnly,
+        );
+        let mapped = cpu_buffer
+            .allocation
+            .mapped_ptr()
+            .expect("Failed to map memory")
+            .cast()
+            .as_ptr();
+        unsafe { std::ptr::copy_nonoverlapping(transform, mapped, 1) };
+        let copy_region = vk::BufferCopy {
+            // these are not the allocation offset, but the buffer offset!
+            src_offset: 0,
+            dst_offset: 0,
+            size: cpu_buffer.size,
+        };
+        let command = unsafe {
+            |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+            }
+        };
+        let cmd = tcmdm.get_cmd_buffer();
+        let transfer_queue = device.transfer_queue();
+        let fence = device.immediate_execute(cmd, transfer_queue, command);
+        unfinished.fences.push(fence);
+        unfinished.buffers_to_free.push(cpu_buffer);
+        let buf_info = vk::DescriptorBufferInfo {
+            buffer: gpu_buffer.buffer,
+            offset: 0,
+            range: std::mem::size_of::<Transform>() as u64,
+        };
+        let desc = dm.new_set().bind_buffer(
+            buf_info,
+            vk::DescriptorType::UNIFORM_BUFFER,
+            vk::ShaderStageFlags::VERTEX,
+        );
+        map.insert(*tid, (gpu_buffer, desc.build()));
+    }
+    map
+}
+
 /// Loads all indices to GPU.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
 /// Returns the list of meshes and the index buffer.
@@ -425,7 +527,12 @@ fn load_indices_to_gpu(
     tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
     meshes: &[Mesh],
-) -> (Vec<VulkanMesh>, AllocatedBuffer) {
+    instances: &[MeshInstance],
+) -> (
+    Vec<VulkanMesh>,
+    HashMap<VulkanMesh, Vec<u16>>,
+    AllocatedBuffer,
+) {
     let size =
         (std::mem::size_of::<u32>() * meshes.iter().map(|m| m.indices.len()).sum::<usize>()) as u64;
     let cpu_buffer = mm.create_buffer(
@@ -448,19 +555,33 @@ fn load_indices_to_gpu(
         .cast()
         .as_ptr();
     let mut offset = 0;
+    let mut tmp_instances = FnvHashMap::<u16, Vec<u16>>::with_capacity_and_hasher(
+        instances.len(),
+        FnvBuildHasher::default(),
+    );
+    for instance in instances {
+        tmp_instances
+            .entry(instance.mesh_id)
+            .or_insert_with(|| Vec::with_capacity(1))
+            .push(instance.transform_id);
+    }
+    let mut instances_map = HashMap::with_capacity(tmp_instances.len());
     for mesh in meshes {
         unsafe {
             std::ptr::copy_nonoverlapping(mesh.indices.as_ptr(), mapped, mesh.indices.len());
             mapped = mapped.add(mesh.indices.len());
         };
         let max_index = mesh.indices.iter().max().copied().unwrap_or(0);
-        converted_meshes.push(VulkanMesh {
+        let converted = VulkanMesh {
             index_offset: offset,
             index_count: mesh.indices.len() as u32,
             max_index,
             material: mesh.material,
-        });
+        };
+        converted_meshes.push(converted);
         offset += mesh.indices.len() as u32;
+        let transforms = tmp_instances.get(&mesh.id).unwrap().clone();
+        instances_map.insert(converted, transforms);
     }
     let copy_region = vk::BufferCopy {
         // these are not the allocation offset, but the buffer offset!
@@ -478,7 +599,7 @@ fn load_indices_to_gpu(
     let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.fences.push(fence);
     unfinished.buffers_to_free.push(cpu_buffer);
-    (converted_meshes, gpu_buffer)
+    (converted_meshes, instances_map, gpu_buffer)
 }
 
 /// Builds a single material descriptor set.
@@ -812,8 +933,14 @@ impl RayTraceScene {
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
         let vertex_buffer =
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?);
-        let (meshes, index_buffer) =
-            load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?);
+        let (meshes, _, index_buffer) = load_indices_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            &scene.meshes()?,
+            &scene.instances()?,
+        );
         unf.wait_completion(device, mm);
         let mut builder =
             SceneASBuilder::new(device, mm, ccmdm, &vertex_buffer, &index_buffer, loader);
