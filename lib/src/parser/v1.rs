@@ -2,7 +2,7 @@ use super::{write_header, ParsedScene, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
 use crate::materials::{TextureFormat, TextureInfo};
 use crate::{Material, MeshInstance, Texture, Transform};
-use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
+use cgmath::{Point3, Vector2 as Vec2, Vector3 as Vec3};
 use fnv::FnvHashMap;
 use image::png::{CompressionType, FilterType, PngDecoder, PngEncoder};
 use image::{GrayImage, ImageDecoder, RgbaImage};
@@ -230,13 +230,28 @@ impl ContentV1 {
         materials: &[(u16, Material)],
     ) -> Result<(), Error> {
         let chunks = [
-            (ChunkID::Vertex, Chunk::from_vertices(vertices)),
-            (ChunkID::Mesh, Chunk::from_meshes(meshes)),
-            (ChunkID::Camera, Chunk::from_cameras(cameras)),
-            (ChunkID::Texture, Chunk::from_textures(textures)),
-            (ChunkID::Material, Chunk::from_materials(materials)),
-            (ChunkID::Transform, Chunk::from_transforms(transforms)),
-            (ChunkID::Instance, Chunk::from_instances(instances)),
+            (
+                ChunkID::Vertex,
+                Chunk::encode_fixed(vertices, vertex_to_bytes),
+            ),
+            (ChunkID::Mesh, Chunk::encode_dynamic(meshes, mesh_to_bytes)),
+            (
+                ChunkID::Camera,
+                Chunk::encode_fixed(cameras, camera_to_bytes),
+            ),
+            (ChunkID::Texture, Chunk::encode_textures(textures)),
+            (
+                ChunkID::Material,
+                Chunk::encode_dynamic(materials, material_to_bytes),
+            ),
+            (
+                ChunkID::Transform,
+                Chunk::encode_fixed(transforms, transform_to_bytes),
+            ),
+            (
+                ChunkID::Instance,
+                Chunk::encode_fixed(instances, instance_to_bytes),
+            ),
         ];
         ContentV1::write_chunks(&mut fout, &chunks)
     }
@@ -277,23 +292,36 @@ impl ContentV1 {
 
 impl ParsedScene for ContentV1 {
     fn vertices(&mut self) -> Result<Vec<Vertex>, Error> {
-        self.read_chunk(ChunkID::Vertex)?.to_vertices()
+        self.read_chunk(ChunkID::Vertex)?
+            .decode_fixed(bytes_to_vertex, "Vertex")
     }
 
     fn meshes(&mut self) -> Result<Vec<Mesh>, Error> {
-        self.read_chunk(ChunkID::Mesh)?.to_meshes()
+        self.read_chunk(ChunkID::Mesh)?
+            .decode_dynamic(bytes_to_mesh, "Mesh")
     }
 
+    fn transforms(&mut self) -> Result<Vec<(u16, Transform)>, Error> {
+        self.read_chunk(ChunkID::Transform)?
+            .decode_fixed(bytes_to_transform, "Transform")
+    }
+
+    fn instances(&mut self) -> Result<Vec<MeshInstance>, Error> {
+        self.read_chunk(ChunkID::Instance)?
+            .decode_fixed(bytes_to_instance, "Instance")
+    }
     fn cameras(&mut self) -> Result<Vec<Camera>, Error> {
-        self.read_chunk(ChunkID::Camera)?.to_cameras()
+        self.read_chunk(ChunkID::Camera)?
+            .decode_fixed(bytes_to_camera, "Camera")
     }
 
     fn textures(&mut self) -> Result<Vec<(u16, Texture)>, Error> {
-        self.read_chunk(ChunkID::Texture)?.to_textures()
+        self.read_chunk(ChunkID::Texture)?.decode_textures()
     }
 
     fn materials(&mut self) -> Result<Vec<(u16, Material)>, Error> {
-        self.read_chunk(ChunkID::Material)?.to_materials()
+        self.read_chunk(ChunkID::Material)?
+            .decode_dynamic(bytes_to_material, "Material")
     }
 
     fn update(
@@ -307,12 +335,12 @@ impl ParsedScene for ContentV1 {
         let transforms = self.read_chunk(ChunkID::Transform)?;
         let instances = self.read_chunk(ChunkID::Instance)?;
         let cameras = if let Some(cameras) = cameras {
-            Chunk::from_cameras(cameras)
+            Chunk::encode_fixed(cameras, camera_to_bytes)
         } else {
             self.read_chunk(ChunkID::Camera)?
         };
         let materials = if let Some(materials) = materials {
-            Chunk::from_materials(materials)
+            Chunk::encode_dynamic(materials, material_to_bytes)
         } else {
             self.read_chunk(ChunkID::Material)?
         };
@@ -335,14 +363,6 @@ impl ParsedScene for ContentV1 {
         }
         self.offsets = OffsetsTable::seek_and_parse(&mut self.reader)?;
         Ok(())
-    }
-
-    fn transforms(&mut self) -> Result<Vec<(u16, Transform)>, Error> {
-        self.read_chunk(ChunkID::Transform)?.to_transforms()
-    }
-
-    fn instances(&mut self) -> Result<Vec<MeshInstance>, Error> {
-        self.read_chunk(ChunkID::Instance)?.to_instances()
     }
 }
 
@@ -378,10 +398,11 @@ struct Chunk {
 }
 
 impl Chunk {
-    /// Creates a chunk from a slice of vertices.
-    fn from_vertices(items: &[Vertex]) -> Self {
+    /// Converts the given elements into a Chunk. Used for elements with fixed size when serialized.
+    /// func is the function to convert a single element into an array of bytes.
+    fn encode_fixed<T, const SIZE: usize>(items: &[T], func: fn(&T) -> [u8; SIZE]) -> Self {
         if !items.is_empty() {
-            let uncompressed = items.iter().flat_map(vertex_to_bytes).collect::<Vec<u8>>();
+            let uncompressed = items.iter().flat_map(func).collect::<Vec<u8>>();
             let compressed = compress(&uncompressed[..]);
             Chunk {
                 data: prepend_hash(compressed),
@@ -393,28 +414,46 @@ impl Chunk {
         }
     }
 
-    /// Reinterprets the bytes of this chunks as a vector of vertices.
-    #[allow(clippy::wrong_self_convention)] // this is private, who cares
-    fn to_vertices(self) -> Result<Vec<Vertex>, Error> {
+    /// Converts back the Chunk into a slice of elements.
+    /// Used for elements with fixed size when serialized.
+    /// func is the function to convert an array of bytes into a vector of elements.
+    fn decode_fixed<T, const SIZE: usize>(
+        self,
+        func: fn([u8; SIZE]) -> T,
+        name: &'static str,
+    ) -> Result<Vec<T>, Error> {
         if !self.data.is_empty() {
             if let Some(verified_data) = verify_hash(self.data) {
                 let decompressed = decompress(&verified_data[..]);
-                Ok(decompressed.chunks_exact(32).map(bytes_to_vertex).collect())
+                Ok(decompressed
+                    .chunks_exact(SIZE)
+                    .map(|s| {
+                        let mut a = [0; SIZE];
+                        a.copy_from_slice(s);
+                        a
+                    })
+                    .map(func)
+                    .collect())
             } else {
-                Err(Error::new(ErrorKind::InvalidData, "Corrupted vertices"))
+                Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Corrupted {}", name),
+                ))
             }
         } else {
             Ok(Vec::with_capacity(0))
         }
     }
 
-    /// Creates a chunk from a slice of meshes.
-    fn from_meshes(items: &[Mesh]) -> Self {
+    /// Converts the givens element into a Chunk.
+    /// Used for elements with dynamic size when serialized.
+    /// func is the function to convert a single element into a slice of bytes.
+    fn encode_dynamic<T>(items: &[T], func: fn(&T) -> Vec<u8>) -> Self {
         if !items.is_empty() {
-            let len = items.len() as u32;
+            let len = items.len() as u16;
             let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
-            for mesh in items {
-                let encoded = mesh_to_bytes(mesh);
+            for item in items {
+                let encoded = func(item);
                 let encoded_len = encoded.len() as u32;
                 uncompressed.extend(encoded_len.to_le_bytes().iter());
                 uncompressed.extend(encoded);
@@ -430,75 +469,31 @@ impl Chunk {
         }
     }
 
-    /// Reinterprets the bytes of this chunks as a vector of meshes.
-    #[allow(clippy::wrong_self_convention)] // this is private, who cares
-    fn to_meshes(self) -> Result<Vec<Mesh>, Error> {
+    /// Converts back the Chunk into a vector of elements.
+    /// Used for elements with dynamic size when serialized.
+    /// func is the function to convert a slice of bytes into an vector of elements.
+    fn decode_dynamic<T>(self, func: fn(&[u8]) -> T, name: &'static str) -> Result<Vec<T>, Error> {
         if !self.data.is_empty() {
-            if let Some(verified_data) = verify_hash(self.data) {
-                let decompressed = decompress(&verified_data[..]);
-                let len = u32::from_le_bytes(decompressed[0..4].try_into().unwrap());
-                let mut mesh_bytes = Vec::with_capacity(len as usize);
-                let mut index = 4;
+            if let Some(verified) = verify_hash(self.data) {
+                let decompressed = decompress(&verified[..]);
+                let len = u16::from_le_bytes(decompressed[0..2].try_into().unwrap());
+                let mut retval = Vec::with_capacity(len as usize);
+                let mut index = std::mem::size_of::<u16>();
                 while index < decompressed.len() {
                     let encoded_len =
                         u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap())
                             as usize;
-                    index += 4;
-                    let mesh = &decompressed[index..index + encoded_len];
+                    index += std::mem::size_of::<u32>();
+                    let instance = func(&decompressed[index..index + encoded_len]);
                     index += encoded_len;
-                    mesh_bytes.push(mesh);
-                }
-                let retval = mesh_bytes.into_par_iter().map(bytes_to_mesh).collect();
-                Ok(retval)
-            } else {
-                Err(Error::new(ErrorKind::InvalidData, "Corrupted meshes"))
-            }
-        } else {
-            Ok(Vec::with_capacity(0))
-        }
-    }
-
-    /// Creates a chunk from a slice of cameras.
-    fn from_cameras(items: &[Camera]) -> Self {
-        if !items.is_empty() {
-            let mut uncompressed = Vec::with_capacity(items.len());
-            uncompressed.push(items.len() as u8);
-            for camera in items {
-                let encoded = camera_to_bytes(camera);
-                let encoded_len = encoded.len() as u8;
-                uncompressed.push(encoded_len);
-                uncompressed.extend(encoded);
-            }
-            let compressed = compress(&uncompressed[..]);
-            Chunk {
-                data: prepend_hash(compressed),
-            }
-        } else {
-            Chunk {
-                data: Vec::with_capacity(0),
-            }
-        }
-    }
-
-    /// Reinterprets the bytes of this chunks as a vector of cameras.
-    #[allow(clippy::wrong_self_convention)] // this is private, who cares
-    fn to_cameras(self) -> Result<Vec<Camera>, Error> {
-        if !self.data.is_empty() {
-            if let Some(verified) = verify_hash(self.data) {
-                let decompressed = decompress(&verified[..]);
-                let len = decompressed[0];
-                let mut retval = Vec::with_capacity(len as usize);
-                let mut index = 1;
-                while index < decompressed.len() {
-                    let encoded_len = decompressed[index] as usize;
-                    index += 1;
-                    let camera = bytes_to_camera(&decompressed[index..(index + encoded_len)]);
-                    index += encoded_len;
-                    retval.push(camera);
+                    retval.push(instance);
                 }
                 Ok(retval)
             } else {
-                Err(Error::new(ErrorKind::InvalidData, "Corrupted cameras"))
+                Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Corrupted chunk: {}", name),
+                ))
             }
         } else {
             Ok(Vec::with_capacity(0))
@@ -506,7 +501,8 @@ impl Chunk {
     }
 
     /// Creates a chunk from a slice of textures.
-    fn from_textures(items: &[(u16, Texture)]) -> Self {
+    /// Textures uses an ad-hoc compression so they cannot use [Chunk::encode_dynamic]
+    fn encode_textures(items: &[(u16, Texture)]) -> Self {
         if !items.is_empty() {
             let len = items.len() as u16;
             let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
@@ -527,9 +523,9 @@ impl Chunk {
         }
     }
 
-    /// Reinterprets the bytes of this chunks as a vector of textures.
-    #[allow(clippy::wrong_self_convention)] // this is private, who cares
-    fn to_textures(self) -> Result<Vec<(u16, Texture)>, Error> {
+    /// Converts back the Chunk into a vector of textures.
+    /// Textures uses an ad-hoc compression so they cannot use [Chunk::decode_dynamic]
+    fn decode_textures(self) -> Result<Vec<(u16, Texture)>, Error> {
         if !self.data.is_empty() {
             if let Some(verified) = verify_hash(self.data) {
                 let len = u16::from_le_bytes(verified[0..2].try_into().unwrap());
@@ -555,170 +551,28 @@ impl Chunk {
             Ok(Vec::with_capacity(0))
         }
     }
-
-    /// Creates a chunk from a slice of materials.
-    fn from_materials(items: &[(u16, Material)]) -> Self {
-        if !items.is_empty() {
-            let len = items.len() as u16;
-            let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
-            for material in items {
-                let encoded = material_to_bytes(material);
-                let encoded_len = encoded.len() as u32;
-                uncompressed.extend(encoded_len.to_le_bytes().iter());
-                uncompressed.extend(encoded);
-            }
-            let compressed = compress(&uncompressed[..]);
-            Chunk {
-                data: prepend_hash(compressed),
-            }
-        } else {
-            Chunk {
-                data: Vec::with_capacity(0),
-            }
-        }
-    }
-
-    /// Reinterprets the bytes of this chunks as a vector of materials.
-    #[allow(clippy::wrong_self_convention)] // this is private, who cares
-    fn to_materials(self) -> Result<Vec<(u16, Material)>, Error> {
-        if !self.data.is_empty() {
-            if let Some(verified) = verify_hash(self.data) {
-                let decompressed = decompress(&verified[..]);
-                let len = u16::from_le_bytes(decompressed[0..2].try_into().unwrap());
-                let mut retval = Vec::with_capacity(len as usize);
-                let mut index = std::mem::size_of::<u16>();
-                while index < decompressed.len() {
-                    let encoded_len =
-                        u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap())
-                            as usize;
-                    index += std::mem::size_of::<u32>();
-                    let material = bytes_to_material(&decompressed[index..index + encoded_len]);
-                    index += encoded_len;
-                    retval.push(material);
-                }
-                Ok(retval)
-            } else {
-                Err(Error::new(ErrorKind::InvalidData, "Corrupted materials"))
-            }
-        } else {
-            Ok(Vec::with_capacity(0))
-        }
-    }
-
-    /// Creates a chunk from a slice of transforms.
-    fn from_transforms(items: &[(u16, Transform)]) -> Self {
-        if !items.is_empty() {
-            let len = items.len() as u16;
-            let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
-            for transform in items {
-                let encoded = transform_to_bytes(transform);
-                let encoded_len = encoded.len() as u32;
-                uncompressed.extend(encoded_len.to_le_bytes().iter());
-                uncompressed.extend(encoded);
-            }
-            let compressed = compress(&uncompressed[..]);
-            Chunk {
-                data: prepend_hash(compressed),
-            }
-        } else {
-            Chunk {
-                data: Vec::with_capacity(0),
-            }
-        }
-    }
-
-    /// Reinterprets the bytes of this chunks as a vector of transforms.
-    #[allow(clippy::wrong_self_convention)] // this is private, who cares
-    fn to_transforms(self) -> Result<Vec<(u16, Transform)>, Error> {
-        if !self.data.is_empty() {
-            if let Some(verified) = verify_hash(self.data) {
-                let decompressed = decompress(&verified[..]);
-                let len = u16::from_le_bytes(decompressed[0..2].try_into().unwrap());
-                let mut retval = Vec::with_capacity(len as usize);
-                let mut index = std::mem::size_of::<u16>();
-                while index < decompressed.len() {
-                    let encoded_len =
-                        u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap())
-                            as usize;
-                    index += std::mem::size_of::<u32>();
-                    let transform = bytes_to_transform(&decompressed[index..index + encoded_len]);
-                    index += encoded_len;
-                    retval.push(transform);
-                }
-                Ok(retval)
-            } else {
-                Err(Error::new(ErrorKind::InvalidData, "Corrupted transforms"))
-            }
-        } else {
-            Ok(Vec::with_capacity(0))
-        }
-    }
-
-    /// Creates a chunk from a slice of instances.
-    fn from_instances(items: &[MeshInstance]) -> Self {
-        if !items.is_empty() {
-            let len = items.len() as u16;
-            let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
-            for instance in items {
-                let encoded = instance_to_bytes(instance);
-                let encoded_len = encoded.len() as u32;
-                uncompressed.extend(encoded_len.to_le_bytes().iter());
-                uncompressed.extend(encoded);
-            }
-            let compressed = compress(&uncompressed[..]);
-            Chunk {
-                data: prepend_hash(compressed),
-            }
-        } else {
-            Chunk {
-                data: Vec::with_capacity(0),
-            }
-        }
-    }
-
-    /// Reinterprets the bytes of this chunks as a vector of instances.
-    #[allow(clippy::wrong_self_convention)] // this is private, who cares
-    fn to_instances(self) -> Result<Vec<MeshInstance>, Error> {
-        if !self.data.is_empty() {
-            if let Some(verified) = verify_hash(self.data) {
-                let decompressed = decompress(&verified[..]);
-                let len = u16::from_le_bytes(decompressed[0..2].try_into().unwrap());
-                let mut retval = Vec::with_capacity(len as usize);
-                let mut index = std::mem::size_of::<u16>();
-                while index < decompressed.len() {
-                    let encoded_len =
-                        u32::from_le_bytes(decompressed[index..index + 4].try_into().unwrap())
-                            as usize;
-                    index += std::mem::size_of::<u32>();
-                    let instance = bytes_to_instance(&decompressed[index..index + encoded_len]);
-                    index += encoded_len;
-                    retval.push(instance);
-                }
-                Ok(retval)
-            } else {
-                Err(Error::new(ErrorKind::InvalidData, "Corrupted instances"))
-            }
-        } else {
-            Ok(Vec::with_capacity(0))
-        }
-    }
 }
 
 /// Converts a Vertex to a vector of bytes.
-fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
+fn vertex_to_bytes(vert: &Vertex) -> [u8; 32] {
     let vv: [f32; 3] = Vec3::into(vert.vv);
     let vn: [f32; 3] = Vec3::into(vert.vn);
     let vt: [f32; 2] = Vec2::into(vert.vt);
-    vv.iter()
-        .chain(vn.iter())
-        .chain(vt.iter())
-        .copied()
-        .flat_map(f32::to_le_bytes)
-        .collect()
+    let mut retval = [0; 32];
+    let mut i = 0;
+    for val in vv.iter().chain(vn.iter()).chain(vt.iter()) {
+        let bytes = f32::to_le_bytes(*val);
+        retval[i] = bytes[0];
+        retval[i + 1] = bytes[1];
+        retval[i + 2] = bytes[2];
+        retval[i + 3] = bytes[3];
+        i += 4;
+    }
+    retval
 }
 
 /// Converts a vector of bytes to a Vertex.
-fn bytes_to_vertex(data: &[u8]) -> Vertex {
+fn bytes_to_vertex(data: [u8; 32]) -> Vertex {
     let vv = Vec3::new(
         f32::from_le_bytes(data[0..4].try_into().unwrap()),
         f32::from_le_bytes(data[4..8].try_into().unwrap()),
@@ -767,7 +621,7 @@ fn bytes_to_mesh(data: &[u8]) -> Mesh {
 }
 
 /// Converts a Camera to a vector of bytes.
-fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
+fn camera_to_bytes(camera: &Camera) -> [u8; 49] {
     let camera_type;
     let position;
     let target;
@@ -777,7 +631,7 @@ fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
     let other_arg;
     match camera {
         Camera::Perspective(cam) => {
-            camera_type = &[0];
+            camera_type = 0;
             position = cam.position;
             target = cam.target;
             up = cam.up;
@@ -786,7 +640,7 @@ fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
             far_plane = cam.far;
         }
         Camera::Orthographic(cam) => {
-            camera_type = &[1];
+            camera_type = 1;
             position = cam.position;
             target = cam.target;
             up = cam.up;
@@ -798,23 +652,25 @@ fn camera_to_bytes(camera: &Camera) -> Vec<u8> {
     let pos: [f32; 3] = Point3::into(position);
     let tgt: [f32; 3] = Point3::into(target);
     let upp: [f32; 3] = Vec3::into(up);
-    let oth = f32::to_le_bytes(other_arg);
-    let near = f32::to_le_bytes(near_plane);
-    let far = f32::to_le_bytes(far_plane);
-    let cam_data_iter = pos
-        .iter()
-        .chain(tgt.iter())
-        .chain(upp.iter())
-        .copied()
-        .flat_map(f32::to_le_bytes)
-        .chain(oth.iter().copied())
-        .chain(near.iter().copied())
-        .chain(far.iter().copied());
-    camera_type.iter().copied().chain(cam_data_iter).collect()
+    let mut whole = [0; 49];
+    whole[0] = camera_type;
+    whole[1..5].copy_from_slice(&f32::to_le_bytes(pos[0]));
+    whole[5..9].copy_from_slice(&f32::to_le_bytes(pos[1]));
+    whole[9..13].copy_from_slice(&f32::to_le_bytes(pos[2]));
+    whole[13..17].copy_from_slice(&f32::to_le_bytes(tgt[0]));
+    whole[17..21].copy_from_slice(&f32::to_le_bytes(tgt[1]));
+    whole[21..25].copy_from_slice(&f32::to_le_bytes(tgt[2]));
+    whole[25..29].copy_from_slice(&f32::to_le_bytes(upp[0]));
+    whole[29..33].copy_from_slice(&f32::to_le_bytes(upp[1]));
+    whole[33..37].copy_from_slice(&f32::to_le_bytes(upp[2]));
+    whole[37..41].copy_from_slice(&f32::to_le_bytes(other_arg));
+    whole[41..45].copy_from_slice(&f32::to_le_bytes(near_plane));
+    whole[45..49].copy_from_slice(&f32::to_le_bytes(far_plane));
+    whole
 }
 
 /// Converts a vector of bytes to a Camera.
-fn bytes_to_camera(data: &[u8]) -> Camera {
+fn bytes_to_camera(data: [u8; 49]) -> Camera {
     let cam_type = data[0];
     let position = Point3::new(
         f32::from_le_bytes(data[1..5].try_into().unwrap()),
@@ -1031,28 +887,31 @@ fn bytes_to_material(data: &[u8]) -> (u16, Material) {
 }
 
 /// Converts a Transform to a vector of bytes.
-fn transform_to_bytes((index, transform): &(u16, Transform)) -> Vec<u8> {
-    let i0 = u16::to_le_bytes(*index).into_iter();
+fn transform_to_bytes((index, transform): &(u16, Transform)) -> [u8; 66] {
+    let mut whole = [0; 66];
+    let i0 = u16::to_le_bytes(*index);
     let i1 = transform.to_bytes();
-    i0.chain(i1).collect()
+    whole[0..2].copy_from_slice(&i0);
+    whole[2..].copy_from_slice(&i1);
+    whole
 }
 
 /// Converts a vector of bytes to a Transform.
-fn bytes_to_transform(data: &[u8]) -> (u16, Transform) {
+fn bytes_to_transform(data: [u8; 66]) -> (u16, Transform) {
     let index = u16::from_le_bytes(data[0..2].try_into().unwrap());
     let transform = Transform::from_bytes(data[2..].try_into().unwrap());
     (index, transform)
 }
 
 /// Converts a MeshInstance to a vector of bytes.
-fn instance_to_bytes(instance: &MeshInstance) -> Vec<u8> {
-    let i0 = u16::to_le_bytes(instance.mesh_id).into_iter();
-    let i1 = u16::to_le_bytes(instance.transform_id).into_iter();
-    i0.chain(i1).collect()
+fn instance_to_bytes(instance: &MeshInstance) -> [u8; 4] {
+    let i0 = u16::to_le_bytes(instance.mesh_id);
+    let i1 = u16::to_le_bytes(instance.transform_id);
+    [i0[0], i0[1], i1[0], i1[1]]
 }
 
 /// Converts a vector of bytes to a MeshInstance.
-fn bytes_to_instance(data: &[u8]) -> MeshInstance {
+fn bytes_to_instance(data: [u8; 4]) -> MeshInstance {
     let mesh_id = u16::from_le_bytes(data[0..2].try_into().unwrap());
     let transform_id = u16::from_le_bytes(data[2..4].try_into().unwrap());
     MeshInstance {
@@ -1266,7 +1125,7 @@ mod tests {
     fn gen_instances(count: u16, seed: u64) -> Vec<MeshInstance> {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
         let mut data = Vec::with_capacity(count as usize);
-        for i in 0..count {
+        for _ in 0..count {
             let mesh_id = rng.gen();
             let transform_id = rng.gen();
             let instance = MeshInstance {
@@ -1283,7 +1142,7 @@ mod tests {
         let vertices = gen_vertices(32, 0xC2B4D5A5A9E49945);
         for vertex in vertices {
             let data = vertex_to_bytes(&vertex);
-            let decoded = bytes_to_vertex(&data);
+            let decoded = bytes_to_vertex(data);
             assert_eq!(decoded, vertex);
         }
     }
@@ -1303,7 +1162,7 @@ mod tests {
         let cameras = gen_cameras(128, 0xB983667AE564853E);
         for camera in cameras {
             let data = camera_to_bytes(&camera);
-            let decoded = bytes_to_camera(&data);
+            let decoded = bytes_to_camera(data);
             assert_eq!(decoded, camera);
         }
     }
@@ -1333,7 +1192,7 @@ mod tests {
         let transforms = gen_transforms(654, 0xBD5EC77C790B70F4);
         for transform in transforms {
             let data = transform_to_bytes(&transform);
-            let decoded = bytes_to_transform(&data);
+            let decoded = bytes_to_transform(data);
             assert_eq!(decoded, transform);
         }
     }
@@ -1343,7 +1202,7 @@ mod tests {
         let instances = gen_instances(1435, 0x9714321951EF2533);
         for instance in instances {
             let data = instance_to_bytes(&instance);
-            let decoded = bytes_to_instance(&data);
+            let decoded = bytes_to_instance(data);
             assert_eq!(decoded, instance);
         }
     }

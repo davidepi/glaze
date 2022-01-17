@@ -1,5 +1,3 @@
-use cgmath::Matrix4;
-
 use self::v1::ContentV1;
 use crate::geometry::{Camera, Mesh, Vertex};
 use crate::{Material, MeshInstance, Texture, Transform};
@@ -199,16 +197,16 @@ pub trait ParsedScene {
     fn vertices(&mut self) -> Result<Vec<Vertex>, Error>;
     /// Retrieve only the [Mesh]es contained in the file.
     fn meshes(&mut self) -> Result<Vec<Mesh>, Error>;
+    /// Retrieve only the [Transform]s contained in the file.
+    fn transforms(&mut self) -> Result<Vec<(u16, Transform)>, Error>;
+    /// Retrieve only the [MeshInstance]s contained in the file.
+    fn instances(&mut self) -> Result<Vec<MeshInstance>, Error>;
     /// Retrieve only the [Camera]s contained in the file.
     fn cameras(&mut self) -> Result<Vec<Camera>, Error>;
     /// Retrieve only the [Texture]s contained in the file.
     fn textures(&mut self) -> Result<Vec<(u16, Texture)>, Error>;
     /// Retrieve only the [Material]s contained in the file.
     fn materials(&mut self) -> Result<Vec<(u16, Material)>, Error>;
-    /// Retrieve only the [Transform]s contained in the file.
-    fn transforms(&mut self) -> Result<Vec<(u16, Transform)>, Error>;
-    /// Retrieve only the [MeshInstance]s contained in the file.
-    fn instances(&mut self) -> Result<Vec<MeshInstance>, Error>;
     /// Updates an existing file.
     fn update(
         &mut self,

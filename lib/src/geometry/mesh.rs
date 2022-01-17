@@ -1,5 +1,3 @@
-use std::ops::{Mul, MulAssign};
-
 use cgmath::{Matrix4, SquareMatrix};
 
 /// A collection of triangles in 3D space, having the same material.
