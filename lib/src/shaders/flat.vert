@@ -12,10 +12,12 @@ layout(set=0, binding=0) uniform fd {
     float frame_time;
 } FrameData;
 
+layout(set=2, binding=0) uniform od {
+  mat4 model;
+} ObjectData;
+
 void main() {
-    // add model matrix computation here, for now use identity
-    mat4 model = mat4(1.0);
-    mat4 mvp = FrameData.projview * model;
+    mat4 mvp = FrameData.projview * ObjectData.model;
     gl_Position = mvp * vec4(in_vv, 1.0);
     out_vn = in_vn;
     out_vt = in_vt;
