@@ -444,12 +444,15 @@ impl RealtimeRenderer {
         }
     }
 
-    pub fn get_raytrace(&self) -> Option<RayTraceRenderer> {
+    pub fn get_raytrace(&mut self) -> Option<RayTraceRenderer> {
         if self.instance.supports_raytrace() {
-            if let Some(scene) = &self.scene {
+            if let Some(scene) = &mut self.scene {
                 let instance = self.instance.clone();
                 let mm = self.mm.thread_exclusive();
-                Some(RayTraceRenderer::from_realtime(instance, mm, scene))
+                Some(
+                    RayTraceRenderer::from_realtime(instance, mm, scene)
+                        .expect("Failed to read scene"),
+                )
             } else {
                 None
             }
@@ -617,7 +620,7 @@ unsafe fn draw_objects(
             device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
         }
         let empty_vec = Vec::with_capacity(0);
-        let instances = scene.instances.get(obj).unwrap_or(&empty_vec);
+        let instances = scene.instances.get(&obj.mesh_id).unwrap_or(&empty_vec);
         for instance in instances {
             let (_, po_desc) = scene.transforms.get(instance).unwrap();
             device.cmd_bind_descriptor_sets(
@@ -790,20 +793,20 @@ impl RayTraceRenderer {
     fn from_realtime(
         instance: Rc<PresentInstance>,
         mut mm: MemoryManager,
-        scene: &VulkanScene,
-    ) -> RayTraceRenderer {
+        scene: &mut VulkanScene,
+    ) -> Result<RayTraceRenderer, std::io::Error> {
         let device = instance.device();
         let compute = device.compute_queue();
         let mut ccmdm = CommandManager::new(device.logical_clone(), compute.idx, 15);
         let loader = AccelerationLoader::new(instance.instance(), device.logical());
-        let scene = RayTraceScene::from(device, &loader, scene, &mut mm, &mut ccmdm);
-        RayTraceRenderer {
+        let scene = RayTraceScene::from(device, &loader, scene, &mut mm, &mut ccmdm)?;
+        Ok(RayTraceRenderer {
             ccmdm,
             mm,
             loader,
             instance,
             scene,
-        }
+        })
     }
 
     pub fn destroy(mut self) {

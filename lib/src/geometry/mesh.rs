@@ -1,4 +1,4 @@
-use cgmath::{Matrix4, SquareMatrix};
+use cgmath::{Matrix, Matrix4, SquareMatrix};
 
 /// A collection of triangles in 3D space, having the same material.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,10 +73,36 @@ impl Transform {
         );
         Self(matrix)
     }
+
+    #[cfg(feature = "vulkan")]
+    pub fn to_vulkan_transform(&self) -> ash::vk::TransformMatrixKHR {
+        let transpose = self.0.transpose();
+        let floats: [f32; 16] = *transpose.as_ref();
+        let matrix: [f32; 12] = floats[..12].try_into().unwrap();
+        ash::vk::TransformMatrixKHR { matrix }
+    }
 }
 
 impl From<Matrix4<f32>> for Transform {
     fn from(mat: Matrix4<f32>) -> Self {
         Self(mat)
+    }
+}
+
+#[cfg(all(test, feature = "vulkan"))]
+mod tests {
+    use crate::Transform;
+    use cgmath::Matrix4;
+
+    #[test]
+    fn cgmath_vktransform_memory_layout() {
+        let matrix = Matrix4::new(
+            0.0, 4.0, 8.0, 12.0, 1.0, 5.0, 9.0, 13.0, 2.0, 6.0, 10.0, 14.0, 3.0, 7.0, 11.0, 15.0,
+        );
+        let transform = Transform::from(matrix).to_vulkan_transform();
+        assert_eq!(
+            transform.matrix,
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
+        );
     }
 }

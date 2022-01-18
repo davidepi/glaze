@@ -2,10 +2,10 @@ use super::cmd::CommandManager;
 use super::device::Device;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::scene::VulkanMesh;
-use crate::Vertex;
+use crate::{MeshInstance, Transform, Vertex};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk::{self, AccelerationStructureReferenceKHR, Packed24_8};
-use cgmath::{Matrix, Matrix4, SquareMatrix};
+use fnv::{FnvBuildHasher, FnvHashMap};
 use gpu_allocator::MemoryLocation;
 use std::ptr;
 
@@ -22,19 +22,23 @@ impl AllocatedAS {
 }
 
 pub struct SceneAS {
-    pub blas: Vec<AllocatedAS>,
+    pub blas: FnvHashMap<u16, AllocatedAS>,
     pub tlas: AllocatedAS,
 }
 
 impl SceneAS {
     pub fn destroy(self, loader: &AccelerationLoader, mm: &mut MemoryManager) {
         self.tlas.destroy(mm, loader);
-        self.blas.into_iter().for_each(|b| b.destroy(mm, loader));
+        self.blas
+            .into_iter()
+            .for_each(|(_, b)| b.destroy(mm, loader));
     }
 }
 
 pub struct SceneASBuilder<'scene, 'renderer> {
     vkmeshes: Vec<&'scene VulkanMesh>,
+    instances: Vec<&'scene MeshInstance>,
+    transform: FnvHashMap<u16, &'scene Transform>,
     vb: &'scene AllocatedBuffer,
     ib: &'scene AllocatedBuffer,
     mm: &'renderer mut MemoryManager,
@@ -46,14 +50,16 @@ pub struct SceneASBuilder<'scene, 'renderer> {
 impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
     pub fn new(
         device: &'renderer Device,
+        loader: &'renderer AccelerationLoader,
         mm: &'renderer mut MemoryManager,
         ccmdm: &'renderer mut CommandManager,
         vertex_buffer: &'scene AllocatedBuffer,
         index_buffer: &'scene AllocatedBuffer,
-        loader: &'renderer AccelerationLoader,
     ) -> Self {
         SceneASBuilder {
-            vkmeshes: Vec::new(),
+            vkmeshes: Vec::with_capacity(0),
+            instances: Vec::with_capacity(0),
+            transform: FnvHashMap::with_capacity_and_hasher(0, FnvBuildHasher::default()),
             vb: vertex_buffer,
             ib: index_buffer,
             mm,
@@ -63,8 +69,21 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         }
     }
 
-    pub fn add_mesh(&mut self, vkmesh: &'scene VulkanMesh) {
-        self.vkmeshes.push(vkmesh);
+    pub fn with_meshes(
+        mut self,
+        meshes: &'scene [VulkanMesh],
+        instances: &'scene [MeshInstance],
+        transforms: &'scene [(u16, Transform)],
+    ) -> Self {
+        let meshes = meshes.iter().collect::<Vec<_>>();
+        let transforms = transforms
+            .iter()
+            .map(|(k, v)| (*k, v))
+            .collect::<FnvHashMap<_, _>>();
+        self.vkmeshes = meshes;
+        self.instances = instances.iter().collect();
+        self.transform = transforms;
+        self
     }
 
     pub fn build(mut self) -> SceneAS {
@@ -73,10 +92,11 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         SceneAS { blas, tlas }
     }
 
-    fn build_blases(&mut self) -> Vec<AllocatedAS> {
+    fn build_blases(&mut self) -> FnvHashMap<u16, AllocatedAS> {
         let vkdevice = self.device.logical();
         let mut blas_ci = Vec::with_capacity(self.vkmeshes.len());
-        let mut retval = Vec::with_capacity(self.vkmeshes.len());
+        let mut retval =
+            FnvHashMap::with_capacity_and_hasher(self.vkmeshes.len(), FnvBuildHasher::default());
         let mut scratch_size = 0;
         // first iteration: partial build and get the max memory usage
         for &mesh in &self.vkmeshes {
@@ -145,7 +165,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                 )
             };
             scratch_size = std::cmp::max(scratch_size, req_mem.build_scratch_size);
-            blas_ci.push((build_info, build_range, geometry, req_mem));
+            blas_ci.push((mesh.mesh_id, build_info, build_range, geometry, req_mem));
         }
         // allocates buffer
         let scratch_buf = self.mm.create_buffer(
@@ -170,7 +190,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                 chunks.push(Vec::new());
                 cur_chunk_size = 0;
             }
-            cur_chunk_size += ci.3.acceleration_structure_size;
+            cur_chunk_size += ci.4.acceleration_structure_size;
             chunks.last_mut().unwrap().push(ci);
         }
         // create a query pool (needed to query the size of the compacted ci)
@@ -190,7 +210,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             let mut blas_tmp = Vec::with_capacity(blas_chunk.len());
             let blas_no = blas_chunk.len() as u32;
             unsafe { vkdevice.reset_query_pool(query_pool, 0, blas_no) };
-            for (id, (mut build_info, build_range, geometry, req_mem)) in
+            for (index, (id, mut build_info, build_range, geometry, req_mem)) in
                 blas_chunk.into_iter().enumerate()
             {
                 let cmd = self.ccmdm.get_cmd_buffer();
@@ -206,7 +226,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                 build_info.scratch_data = vk::DeviceOrHostAddressKHR {
                     device_address: scratch_addr,
                 };
-                blas_tmp.push(blas);
+                blas_tmp.push((id, blas));
                 // need to add a barrier, because the operations are all using the same scratch buffer
                 let barrier = vk::MemoryBarrier {
                     s_type: vk::StructureType::MEMORY_BARRIER,
@@ -235,7 +255,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                             &[build_info.dst_acceleration_structure],
                             vk::QueryType::ACCELERATION_STRUCTURE_COMPACTED_SIZE_KHR,
                             query_pool,
-                            id as u32,
+                            index as u32,
                         );
                     }
                 };
@@ -256,9 +276,9 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                 )
             }
             .expect("Failed to get compacted size");
-            for (id, blas) in blas_tmp.iter().enumerate() {
+            for (index, (id, blas)) in blas_tmp.iter().enumerate() {
                 let cmd = self.ccmdm.get_cmd_buffer();
-                let compacted_size = compact_size[id];
+                let compacted_size = compact_size[index];
                 let compacted_blas = allocate_as(self.loader, self.mm, compacted_size, true);
                 let copy_ci = vk::CopyAccelerationStructureInfoKHR {
                     s_type: vk::StructureType::COPY_ACCELERATION_STRUCTURE_INFO_KHR,
@@ -267,7 +287,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                     dst: compacted_blas.accel,
                     mode: vk::CopyAccelerationStructureModeKHR::COMPACT,
                 };
-                retval.push(compacted_blas);
+                retval.insert(*id, compacted_blas);
                 let commands = unsafe {
                     |_: &ash::Device, cmd: vk::CommandBuffer| {
                         self.loader.cmd_copy_acceleration_structure(cmd, &copy_ci);
@@ -280,7 +300,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             self.device.wait_completion(&fences);
             blas_tmp
                 .into_iter()
-                .for_each(|b| b.destroy(self.mm, self.loader));
+                .for_each(|(_, b)| b.destroy(self.mm, self.loader));
         }
         // cleanup the scratch buffer and query pool and return
         self.mm.free_buffer(scratch_buf);
@@ -290,40 +310,40 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         retval
     }
 
-    fn build_tlas(&mut self, blases: &[AllocatedAS]) -> AllocatedAS {
+    fn build_tlas(&mut self, blases: &FnvHashMap<u16, AllocatedAS>) -> AllocatedAS {
         let cmd = self.ccmdm.get_cmd_buffer();
         let vkdevice = self.device.logical();
+        let mut tlas_ci = Vec::with_capacity(self.instances.len());
         // populates the instances
-        // TODO: add correct instancing and shader binding
-        let instances = blases
-            .iter()
-            .enumerate()
-            .map(|(id, blas)| {
-                let as_addr_info = vk::AccelerationStructureDeviceAddressInfoKHR {
-                    s_type: vk::StructureType::ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
-                    p_next: ptr::null(),
-                    acceleration_structure: blas.accel,
-                };
-                let as_addr = unsafe {
-                    self.loader
-                        .get_acceleration_structure_device_address(&as_addr_info)
-                };
-                vk::AccelerationStructureInstanceKHR {
-                    transform: to_transform_mat(Matrix4::identity()),
-                    instance_custom_index_and_mask: Packed24_8::new(id as u32, 0xFF), //TODO add index
-                    instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
-                        0,
-                        vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as u8,
-                    ),
-                    acceleration_structure_reference: AccelerationStructureReferenceKHR {
-                        device_handle: as_addr,
-                    },
-                }
-            })
-            .collect::<Vec<_>>();
+        // TODO: add shader binding
+        for (instance_id, instance) in self.instances.iter().enumerate() {
+            let blas = blases.get(&instance.mesh_id).unwrap();
+            let transform = self.transform.get(&instance.transform_id).unwrap();
+            let as_addr_info = vk::AccelerationStructureDeviceAddressInfoKHR {
+                s_type: vk::StructureType::ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
+                p_next: ptr::null(),
+                acceleration_structure: blas.accel,
+            };
+            let as_addr = unsafe {
+                self.loader
+                    .get_acceleration_structure_device_address(&as_addr_info)
+            };
+            let ci = vk::AccelerationStructureInstanceKHR {
+                transform: transform.to_vulkan_transform(),
+                instance_custom_index_and_mask: Packed24_8::new(instance_id as u32, 0xFF), /* TODO add index */
+                instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
+                    0,
+                    vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as u8,
+                ),
+                acceleration_structure_reference: AccelerationStructureReferenceKHR {
+                    device_handle: as_addr,
+                },
+            };
+            tlas_ci.push(ci);
+        }
         // create a buffer to store all the instances (needed by subsequent methods)
         let inst_buf_size =
-            std::mem::size_of::<vk::AccelerationStructureInstanceKHR>() * instances.len();
+            std::mem::size_of::<vk::AccelerationStructureInstanceKHR>() * tlas_ci.len();
         let inst_cpu_buf = self.mm.create_buffer(
             "Instances CPU buffer",
             inst_buf_size as u64,
@@ -344,7 +364,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             .expect("Failed to map memory")
             .cast()
             .as_ptr();
-        unsafe { std::ptr::copy_nonoverlapping(instances.as_ptr(), mapped, instances.len()) };
+        unsafe { std::ptr::copy_nonoverlapping(tlas_ci.as_ptr(), mapped, tlas_ci.len()) };
         let copy_region = vk::BufferCopy {
             src_offset: 0,
             dst_offset: 0,
@@ -402,7 +422,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             self.loader.get_acceleration_structure_build_sizes(
                 vk::AccelerationStructureBuildTypeKHR::DEVICE,
                 &build_info,
-                &[instances.len() as u32],
+                &[tlas_ci.len() as u32],
             )
         };
         let tlas = allocate_as(
@@ -429,7 +449,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             device_address: scratch_addr,
         };
         let build_range = vk::AccelerationStructureBuildRangeInfoKHR {
-            primitive_count: instances.len() as u32,
+            primitive_count: tlas_ci.len() as u32,
             primitive_offset: 0,
             first_vertex: 0,
             transform_offset: 0,
@@ -502,31 +522,5 @@ fn allocate_as(
     AllocatedAS {
         accel: accs,
         buffer,
-    }
-}
-
-fn to_transform_mat(matrix: Matrix4<f32>) -> vk::TransformMatrixKHR {
-    let transpose = matrix.transpose();
-    let floats: [f32; 16] = *transpose.as_ref();
-    let matrix: [f32; 12] = floats[..12].try_into().unwrap();
-    vk::TransformMatrixKHR { matrix }
-}
-
-#[cfg(test)]
-mod tests {
-    use cgmath::Matrix4;
-
-    use super::to_transform_mat;
-
-    #[test]
-    fn cgmath_vktransform_memory_layout() {
-        let matrix = Matrix4::new(
-            0.0, 4.0, 8.0, 12.0, 1.0, 5.0, 9.0, 13.0, 2.0, 6.0, 10.0, 14.0, 3.0, 7.0, 11.0, 15.0,
-        );
-        let transform = to_transform_mat(matrix);
-        assert_eq!(
-            transform.matrix,
-            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
-        );
     }
 }
