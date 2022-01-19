@@ -209,7 +209,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             let mut fences = Vec::with_capacity(blas_chunk.len());
             let mut blas_tmp = Vec::with_capacity(blas_chunk.len());
             let blas_no = blas_chunk.len() as u32;
-            unsafe { vkdevice.reset_query_pool(query_pool, 0, blas_no) };
+            // unsafe { vkdevice.cmd_reset_query_pool(cmd, query_pool, 0, blas_no) };
             for (index, (id, mut build_info, build_range, geometry, req_mem)) in
                 blas_chunk.into_iter().enumerate()
             {
@@ -236,6 +236,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                 };
                 let commands = unsafe {
                     |_: &ash::Device, cmd: vk::CommandBuffer| {
+                        vkdevice.cmd_reset_query_pool(cmd, query_pool, index as u32, 1);
                         self.loader.cmd_build_acceleration_structures(
                             cmd,
                             &[build_info],
@@ -330,7 +331,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             };
             let ci = vk::AccelerationStructureInstanceKHR {
                 transform: transform.to_vulkan_transform(),
-                instance_custom_index_and_mask: Packed24_8::new(instance_id as u32, 0xFF), /* TODO add index */
+                instance_custom_index_and_mask: Packed24_8::new(instance_id as u32, 0xFF),
                 instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
                     0,
                     vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as u8,
@@ -348,6 +349,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             "Instances CPU buffer",
             inst_buf_size as u64,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::TRANSFER_SRC
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             MemoryLocation::CpuToGpu,
         );
@@ -355,6 +357,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             "Instances CPU buffer",
             inst_buf_size as u64,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             MemoryLocation::GpuOnly,
         );

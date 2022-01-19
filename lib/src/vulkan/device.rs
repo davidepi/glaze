@@ -4,7 +4,7 @@ use ash::vk;
 use fnv::FnvHashMap;
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashSet};
-use std::ffi::CStr;
+use std::ffi::{c_void, CStr};
 use std::ptr;
 use std::sync::{Arc, Mutex};
 
@@ -47,9 +47,10 @@ impl Device {
         instance: &ash::Instance,
         ext: &[&'static CStr],
         features: vk::PhysicalDeviceFeatures,
+        ext_features: Option<*const c_void>,
         surface: &Surface,
     ) -> Option<Self> {
-        create_device(instance, ext, features, Some(surface))
+        create_device(instance, ext, features, ext_features, Some(surface))
     }
 
     /// Creates a new device for computational purposes.
@@ -66,8 +67,9 @@ impl Device {
         instance: &ash::Instance,
         ext: &[&'static CStr],
         features: vk::PhysicalDeviceFeatures,
+        ext_features: Option<*const c_void>,
     ) -> Option<Self> {
-        create_device(instance, ext, features, None)
+        create_device(instance, ext, features, ext_features, None)
     }
 
     /// Returns an atomic reference counted clone of the Vulkan logical device.
@@ -202,8 +204,10 @@ pub fn create_device(
     instance: &ash::Instance,
     ext: &[&'static CStr],
     features: vk::PhysicalDeviceFeatures,
+    ext_features: Option<*const c_void>,
     surface: Option<&Surface>,
 ) -> Option<Device> {
+    // ext features are not checked, just the extensions
     let maybe_physical = PhysicalDevice::list_all(instance)
         .into_iter()
         .filter(|x| {
@@ -228,7 +232,8 @@ pub fn create_device(
     if let Some(physical) = maybe_physical {
         let queue_families = get_queues(instance, physical.device, surface);
         let all_queues = assign_queue_index(queue_families);
-        let logical = create_logical_device(instance, ext, &physical, features, all_queues);
+        let logical =
+            create_logical_device(instance, ext, &physical, features, ext_features, all_queues);
         let gq = unsafe { logical.get_device_queue(all_queues[0].0, all_queues[0].1) };
         let cq = unsafe { logical.get_device_queue(all_queues[1].0, all_queues[1].1) };
         let tq = unsafe { logical.get_device_queue(all_queues[2].0, all_queues[2].1) };
@@ -593,6 +598,7 @@ fn create_logical_device(
     ext: &[&'static CStr],
     device: &PhysicalDevice,
     features_requested: vk::PhysicalDeviceFeatures,
+    ext_features: Option<*const c_void>,
     queues: [(u32, u32); 3],
 ) -> ash::Device {
     let validations = ValidationLayers::application_default();
@@ -621,11 +627,16 @@ fn create_logical_device(
         };
         queue_create_infos.push(queue_create_info);
     }
+    let p_next = if let Some(ext) = ext_features {
+        ext
+    } else {
+        ptr::null()
+    };
     let required_device_extensions = ext.iter().map(|x| x.as_ptr()).collect::<Vec<_>>();
     let validations_arr = validations.as_ptr();
     let device_create_info = vk::DeviceCreateInfo {
         s_type: vk::StructureType::DEVICE_CREATE_INFO,
-        p_next: ptr::null(),
+        p_next,
         flags: vk::DeviceCreateFlags::empty(),
         queue_create_info_count: queue_create_infos.len() as u32,
         p_queue_create_infos: queue_create_infos.as_ptr(),

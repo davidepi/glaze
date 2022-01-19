@@ -97,6 +97,7 @@ impl VulkanScene {
         mm: &mut MemoryManager,
         desc_cache: DLayoutCache,
         wchan: Sender<String>,
+        with_raytrace: bool,
     ) -> Result<Self, std::io::Error> {
         let mut unf = UnfinishedExecutions {
             fences: Vec::new(),
@@ -110,8 +111,14 @@ impl VulkanScene {
         let mut dm =
             DescriptorSetManager::with_cache(device.logical_clone(), &avg_desc, desc_cache);
         wchan.send("[1/4] Loading vertices...".to_string()).ok();
-        let vertex_buffer =
-            load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &parsed.vertices()?);
+        let vertex_buffer = load_vertices_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            &parsed.vertices()?,
+            with_raytrace,
+        );
         wchan.send("[2/4] Loading meshes...".to_string()).ok();
         let transforms = load_transforms_to_gpu(
             device,
@@ -121,8 +128,14 @@ impl VulkanScene {
             &mut unf,
             &parsed.transforms()?,
         );
-        let (mut meshes, index_buffer) =
-            load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &parsed.meshes()?);
+        let (mut meshes, index_buffer) = load_indices_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            &parsed.meshes()?,
+            with_raytrace,
+        );
         let instances = instances_to_map(&parsed.instances()?);
         wchan.send("[3/4] Loading textures...".to_string()).ok();
         let sampler = create_sampler(device);
@@ -408,6 +421,7 @@ fn load_vertices_to_gpu(
     tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
     vertices: &[Vertex],
+    with_raytrace: bool,
 ) -> AllocatedBuffer {
     let size = (std::mem::size_of::<Vertex>() * vertices.len()) as u64;
     let cpu_buffer = mm.create_buffer(
@@ -416,10 +430,16 @@ fn load_vertices_to_gpu(
         vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
         MemoryLocation::CpuToGpu,
     );
+    let raytrace_flags = if with_raytrace {
+        vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+            | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+    } else {
+        vk::BufferUsageFlags::empty()
+    };
     let gpu_buffer = mm.create_buffer(
         "vertices_dedicated",
         size,
-        vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+        vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | raytrace_flags,
         MemoryLocation::GpuOnly,
     );
     let mapped = cpu_buffer
@@ -524,6 +544,7 @@ fn load_indices_to_gpu(
     tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
     meshes: &[Mesh],
+    with_raytrace: bool,
 ) -> (Vec<VulkanMesh>, AllocatedBuffer) {
     let size =
         (std::mem::size_of::<u32>() * meshes.iter().map(|m| m.indices.len()).sum::<usize>()) as u64;
@@ -533,10 +554,16 @@ fn load_indices_to_gpu(
         vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
         MemoryLocation::CpuToGpu,
     );
+    let raytrace_flags = if with_raytrace {
+        vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+            | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
+    } else {
+        vk::BufferUsageFlags::empty()
+    };
     let gpu_buffer = mm.create_buffer(
         "indices_dedicated",
         size,
-        vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+        vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | raytrace_flags,
         MemoryLocation::GpuOnly,
     );
     let mut converted_meshes = Vec::with_capacity(meshes.len());
@@ -936,9 +963,9 @@ impl RayTraceScene {
         };
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
         let vertex_buffer =
-            load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?);
+            load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?, true);
         let (meshes, index_buffer) =
-            load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?);
+            load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?, true);
         unf.wait_completion(device, mm);
         let instances = scene.instances()?;
         let transforms = scene.transforms()?;

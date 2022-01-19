@@ -5,9 +5,41 @@ use crate::vulkan::device::{Device, SurfaceSupport};
 use crate::vulkan::surface::Surface;
 use crate::DeviceInfo;
 use ash::vk;
-use std::ffi::{CStr, CString};
+use std::ffi::{c_void, CStr, CString};
 use std::ptr;
 use winit::window::Window;
+
+/// Raytrace features require a verbose setup and I need to do it twice
+/// This cannot be put in a function because it uses pointers (maybe I can pin? however this works)
+macro_rules! raytrace_features {
+    ($name: ident) => {
+        let mut buf = [vk::PhysicalDeviceBufferDeviceAddressFeaturesKHR {
+            s_type: vk::StructureType::PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES_KHR,
+            p_next: ptr::null_mut(),
+            buffer_device_address: vk::TRUE,
+            buffer_device_address_capture_replay: vk::FALSE,
+            buffer_device_address_multi_device: vk::FALSE,
+        }];
+        let mut acc = [vk::PhysicalDeviceAccelerationStructureFeaturesKHR {
+            s_type: vk::StructureType::PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
+            p_next: buf.as_mut_ptr() as *mut c_void,
+            acceleration_structure: vk::TRUE,
+            acceleration_structure_capture_replay: vk::FALSE,
+            acceleration_structure_indirect_build: vk::FALSE,
+            acceleration_structure_host_commands: vk::FALSE,
+            descriptor_binding_acceleration_structure_update_after_bind: vk::FALSE,
+        }];
+        let $name = [vk::PhysicalDeviceRayTracingPipelineFeaturesKHR {
+            s_type: vk::StructureType::PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR,
+            p_next: acc.as_mut_ptr() as *mut c_void,
+            ray_tracing_pipeline: vk::TRUE,
+            ray_tracing_pipeline_shader_group_handle_capture_replay: vk::FALSE,
+            ray_tracing_pipeline_shader_group_handle_capture_replay_mixed: vk::FALSE,
+            ray_tracing_pipeline_trace_rays_indirect: vk::FALSE,
+            ray_traversal_primitive_culling: vk::FALSE,
+        }];
+    };
+}
 
 /// Trait used by Vulkan instance wrappers.
 ///
@@ -61,13 +93,19 @@ impl PresentInstance {
     /// - VK_MVK_macos_surface (only when compiled for macOs)
     ///
     /// Additionally, to support raytrace, the following extensions are required:
+    /// - VK_KHR_buffer_device_address
     /// - VK_KHR_deferred_host_operations
     /// - VK_KHR_acceleration_structure
     /// - VK_KHR_ray_tracing_pipeline
     ///
     /// # Features
     /// The following features are required to be supported on the physical device:
-    /// - sampler anisotropy
+    /// - samplerAnisotropy from the original Vulkan 1.0 specification
+    ///
+    /// Additionally, to support raytrace, the following extensions are required:
+    /// - bufferDeviceAddress from VK_KHR_buffer_device_address
+    /// - accelerationStructure from VK_KHR_acceleration_structure
+    /// - rayTracingPipeline from VK_KHR_ray_tracing_pipeline
     ///
     /// # Examples
     /// Basic usage:
@@ -78,9 +116,9 @@ impl PresentInstance {
     /// ```
     pub fn new(window: &Window) -> Option<Self> {
         let instance_extensions = required_extensions();
-        let present_only_ext = vec![ash::extensions::khr::Swapchain::name()];
-        let present_and_raytrace_ext = vec![
+        let device_extensions = vec![
             ash::extensions::khr::Swapchain::name(),
+            ash::extensions::khr::BufferDeviceAddress::name(),
             ash::extensions::khr::DeferredHostOperations::name(),
             ash::extensions::khr::AccelerationStructure::name(),
             ash::extensions::khr::RayTracingPipeline::name(),
@@ -91,14 +129,16 @@ impl PresentInstance {
         };
         let instance = BasicInstance::new(&instance_extensions);
         let surface = Surface::new(&instance.entry, &instance.instance, window);
+        raytrace_features!(ext_features);
         let maybe_raytrace_device = Device::new_present(
             &instance.instance,
-            &present_and_raytrace_ext,
+            &device_extensions,
             device_features,
+            Some(ext_features.as_ptr() as *const c_void),
             &surface,
         );
         if let Some(device) = maybe_raytrace_device {
-            let enabled_extensions = present_and_raytrace_ext
+            let enabled_extensions = device_extensions
                 .into_iter()
                 .map(CStr::to_bytes)
                 .flat_map(std::str::from_utf8)
@@ -114,14 +154,16 @@ impl PresentInstance {
                 instance,
             })
         } else {
+            let device_extensions = vec![ash::extensions::khr::Swapchain::name()];
             let maybe_device = Device::new_present(
                 &instance.instance,
-                &present_only_ext,
+                &device_extensions,
                 device_features,
+                None,
                 &surface,
             );
             if let Some(device) = maybe_device {
-                let enabled_extensions = present_only_ext
+                let enabled_extensions = device_extensions
                     .into_iter()
                     .map(CStr::to_bytes)
                     .flat_map(std::str::from_utf8)
@@ -208,12 +250,15 @@ impl RayTraceInstance {
     /// # Extensions
     /// The following Vulkan extensions are required:
     /// - VK_EXT_debug_utils (only when compiled in debug mode)
+    /// - VK_KHR_buffer_device_address
     /// - VK_KHR_deferred_host_operations
     /// - VK_KHR_acceleration_structure
     /// - VK_KHR_ray_tracing_pipeline
     ///
     /// # Features
-    /// No features are required to be supported on the physical device:
+    /// - bufferDeviceAddress from VK_KHR_buffer_device_address
+    /// - accelerationStructure from VK_KHR_acceleration_structure
+    /// - rayTracingPipeline from VK_KHR_ray_tracing_pipeline
     ///
     /// # Examples
     /// Basic usage:
@@ -226,6 +271,7 @@ impl RayTraceInstance {
             ash::extensions::ext::DebugUtils::name(),
         ];
         let device_extensions = vec![
+            ash::extensions::khr::BufferDeviceAddress::name(),
             ash::extensions::khr::DeferredHostOperations::name(),
             ash::extensions::khr::AccelerationStructure::name(),
             ash::extensions::khr::RayTracingPipeline::name(),
@@ -233,9 +279,14 @@ impl RayTraceInstance {
         let device_features = vk::PhysicalDeviceFeatures {
             ..Default::default()
         };
+        raytrace_features!(raytracing_features);
         let instance = BasicInstance::new(&instance_extensions);
-        let maybe_device =
-            Device::new_compute(&instance.instance, &device_extensions, device_features);
+        let maybe_device = Device::new_compute(
+            &instance.instance,
+            &device_extensions,
+            device_features,
+            Some(raytracing_features.as_ptr() as *const c_void),
+        );
         if let Some(device) = maybe_device {
             let enabled_extensions = device_extensions
                 .into_iter()

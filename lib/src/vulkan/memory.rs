@@ -43,6 +43,7 @@ impl MemoryManager {
         device: Arc<ash::Device>,
         physical_device: vk::PhysicalDevice,
         frames_in_flight: u8,
+        buffer_device_address: bool,
     ) -> Self {
         let debug_settings = if cfg!(debug_assertions) {
             AllocatorDebugSettings {
@@ -68,7 +69,7 @@ impl MemoryManager {
             device: (*device).clone(),
             physical_device,
             debug_settings,
-            buffer_device_address: false,
+            buffer_device_address,
         };
         let allocator = Arc::new(Mutex::new(
             Allocator::new(&acd).expect("Failed to create memory allocator"),

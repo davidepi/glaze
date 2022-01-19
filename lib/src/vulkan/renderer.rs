@@ -140,6 +140,7 @@ impl RealtimeRenderer {
             instance.device().logical_clone(),
             instance.device().physical().device,
             FRAMES_IN_FLIGHT as u8,
+            instance.supports_raytrace(),
         );
         let gcmdm = CommandManager::new(
             instance.device().logical_clone(),
@@ -376,9 +377,17 @@ impl RealtimeRenderer {
         let is_alive = Arc::new(false);
         let token_thread = is_alive.clone();
         let (wchan, rchan) = mpsc::channel();
+        let with_raytrace = self.instance().supports_raytrace();
         let load_tid = std::thread::spawn(move || {
             let _is_alive = is_alive;
-            let scene = VulkanScene::load(&device_clone, parsed, &mut send_mm, send_cache, wchan);
+            let scene = VulkanScene::load(
+                &device_clone,
+                parsed,
+                &mut send_mm,
+                send_cache,
+                wchan,
+                with_raytrace,
+            );
             (send_mm, scene)
         });
         self.scene_loading = Some(SceneLoad {
@@ -778,6 +787,7 @@ impl RayTraceRenderer {
             device.logical_clone(),
             device.physical().device,
             0,
+            true,
         );
         let loader = AccelerationLoader::new(instance.instance(), device.logical());
         let scene = RayTraceScene::new(device, &loader, scene, &mut mm, &mut ccmdm)?;
@@ -811,5 +821,31 @@ impl RayTraceRenderer {
 
     pub fn destroy(mut self) {
         self.scene.destroy(&self.loader, &mut self.mm);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RayTraceRenderer;
+    use crate::{parse, RayTraceInstance};
+    use std::path::PathBuf;
+    use std::rc::Rc;
+
+    #[test]
+    fn load_raytrace() {
+        env_logger::init();
+        if let Some(instance) = RayTraceInstance::new() {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("resources")
+                .join("cube.glaze");
+
+            let parsed = parse(path).unwrap();
+            let r = RayTraceRenderer::new(Rc::new(instance), parsed).unwrap();
+            r.destroy();
+        } else {
+            // SKIPPED does not exists in carg test...
+        }
     }
 }
