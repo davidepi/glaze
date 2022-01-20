@@ -6,12 +6,11 @@ mod viewport;
 
 fn main() {
     env_logger::init();
-    let mut event_loop = EventLoop::new();
-    let iw = InteractiveView::new(&mut event_loop);
+    let event_loop = EventLoop::new();
+    let iw = InteractiveView::new(&event_loop);
     match iw {
-        Ok(mut iw) => {
-            iw.main_loop(&mut event_loop);
-            iw.destroy();
+        Ok(iw) => {
+            iw.main_loop(event_loop);
         }
         Err(e) => {
             log::error!("{}", e);

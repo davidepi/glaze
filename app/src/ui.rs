@@ -81,9 +81,8 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
         });
         ui.menu("Render", || {
             if MenuItem::new("Start").build(ui) {
-                if let Some(renderer) = renderer.get_raytrace() {
+                if let Some(_renderer) = renderer.get_raytrace() {
                     println!("Successfully created");
-                    renderer.destroy();
                 } else {
                     println!("Not supported");
                 }

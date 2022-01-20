@@ -8,31 +8,23 @@ use ash::vk::{self, AccelerationStructureReferenceKHR, Packed24_8};
 use fnv::{FnvBuildHasher, FnvHashMap};
 use gpu_allocator::MemoryLocation;
 use std::ptr;
+use std::sync::Arc;
 
 pub struct AllocatedAS {
     pub accel: vk::AccelerationStructureKHR,
     pub buffer: AllocatedBuffer,
+    loader: Arc<AccelerationLoader>,
 }
 
-impl AllocatedAS {
-    pub fn destroy(self, mm: &mut MemoryManager, loader: &AccelerationLoader) {
-        unsafe { loader.destroy_acceleration_structure(self.accel, None) };
-        mm.free_buffer(self.buffer);
+impl Drop for AllocatedAS {
+    fn drop(&mut self) {
+        unsafe { self.loader.destroy_acceleration_structure(self.accel, None) };
     }
 }
 
 pub struct SceneAS {
     pub blas: FnvHashMap<u16, AllocatedAS>,
     pub tlas: AllocatedAS,
-}
-
-impl SceneAS {
-    pub fn destroy(self, loader: &AccelerationLoader, mm: &mut MemoryManager) {
-        self.tlas.destroy(mm, loader);
-        self.blas
-            .into_iter()
-            .for_each(|(_, b)| b.destroy(mm, loader));
-    }
 }
 
 pub struct SceneASBuilder<'scene, 'renderer> {
@@ -44,13 +36,13 @@ pub struct SceneASBuilder<'scene, 'renderer> {
     mm: &'renderer mut MemoryManager,
     ccmdm: &'renderer mut CommandManager,
     device: &'renderer Device,
-    loader: &'renderer AccelerationLoader,
+    loader: Arc<AccelerationLoader>,
 }
 
 impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
     pub fn new(
         device: &'renderer Device,
-        loader: &'renderer AccelerationLoader,
+        loader: Arc<AccelerationLoader>,
         mm: &'renderer mut MemoryManager,
         ccmdm: &'renderer mut CommandManager,
         vertex_buffer: &'scene AllocatedBuffer,
@@ -215,7 +207,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             {
                 let cmd = self.ccmdm.get_cmd_buffer();
                 let blas = allocate_as(
-                    self.loader,
+                    self.loader.clone(),
                     self.mm,
                     req_mem.acceleration_structure_size,
                     true,
@@ -280,7 +272,8 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             for (index, (id, blas)) in blas_tmp.iter().enumerate() {
                 let cmd = self.ccmdm.get_cmd_buffer();
                 let compacted_size = compact_size[index];
-                let compacted_blas = allocate_as(self.loader, self.mm, compacted_size, true);
+                let compacted_blas =
+                    allocate_as(self.loader.clone(), self.mm, compacted_size, true);
                 let copy_ci = vk::CopyAccelerationStructureInfoKHR {
                     s_type: vk::StructureType::COPY_ACCELERATION_STRUCTURE_INFO_KHR,
                     p_next: ptr::null(),
@@ -299,15 +292,9 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             }
             // wait for compaction, then cleanup the tmp blases
             self.device.wait_completion(&fences);
-            blas_tmp
-                .into_iter()
-                .for_each(|(_, b)| b.destroy(self.mm, self.loader));
         }
-        // cleanup the scratch buffer and query pool and return
-        self.mm.free_buffer(scratch_buf);
-        unsafe {
-            vkdevice.destroy_query_pool(query_pool, None);
-        }
+        // cleanup the query pool and return
+        unsafe { vkdevice.destroy_query_pool(query_pool, None) };
         retval
     }
 
@@ -362,7 +349,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             MemoryLocation::GpuOnly,
         );
         let mapped = inst_cpu_buf
-            .allocation
+            .allocation()
             .mapped_ptr()
             .expect("Failed to map memory")
             .cast()
@@ -429,7 +416,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             )
         };
         let tlas = allocate_as(
-            self.loader,
+            self.loader.clone(),
             self.mm,
             req_mem.acceleration_structure_size,
             false,
@@ -484,16 +471,12 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         let compute = self.device.compute_queue();
         let fence = self.device.immediate_execute(cmd, compute, command);
         self.device.wait_completion(&[fence]);
-        // free everything
-        self.mm.free_buffer(inst_cpu_buf);
-        self.mm.free_buffer(inst_gpu_buf);
-        self.mm.free_buffer(scratch_buf);
         tlas
     }
 }
 
 fn allocate_as(
-    loader: &AccelerationLoader,
+    loader: Arc<AccelerationLoader>,
     mm: &mut MemoryManager,
     size: u64,
     is_blas: bool,
@@ -525,5 +508,6 @@ fn allocate_as(
     AllocatedAS {
         accel: accs,
         buffer,
+        loader,
     }
 }

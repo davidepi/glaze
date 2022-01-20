@@ -16,6 +16,7 @@ use font_kit::source::SystemSource;
 use gpu_allocator::MemoryLocation;
 use imgui::{DrawCmdParams, FontSource, TextureId};
 use std::ptr;
+use std::sync::Arc;
 
 /// initial buffer size for the imgui vertex buffer
 const INITIAL_VERTEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawVert>() as u64;
@@ -43,14 +44,19 @@ pub struct ImguiRenderer {
     /// index buffer
     index_buf: AllocatedBuffer,
     /// font atlas image
-    font: AllocatedImage,
-    font_descriptor: Descriptor,
+    font: (AllocatedImage, Descriptor),
+    /// pipeline for colored textures
     pipeline: Pipeline,
-    // pipeline for single_channel images (sampler takes .rrr instead of .rgb)
+    /// pipeline for single_channel images (sampler takes .rrr instead of .rgb)
     pipeline_bw: Pipeline,
+    /// sampler for the UI textures
     sampler: vk::Sampler,
+    /// descriptor manager reserved for the UI resources
     dm: DescriptorSetManager,
+    /// descriptors of the various textures
     tex_descs: FnvHashMap<u16, Descriptor>,
+    /// vulkan device handle
+    device: Arc<ash::Device>,
 }
 
 impl ImguiRenderer {
@@ -109,7 +115,7 @@ impl ImguiRenderer {
                 1,
             );
             let mapped = fonts_cpu_buf
-                .allocation
+                .allocation()
                 .mapped_ptr()
                 .expect("Failed to map buffer")
                 .cast()
@@ -124,7 +130,6 @@ impl ImguiRenderer {
                 &fonts_gpu_buf,
                 fonts_extent,
             );
-            mm.free_buffer(fonts_cpu_buf);
         }
         let vertex_buf = mm.create_buffer(
             "Imgui vertex buffer",
@@ -176,48 +181,35 @@ impl ImguiRenderer {
         // assign tex_id AFTER building the font atlas or it gets reset
         let mut fonts = context.fonts();
         fonts.tex_id = FONT_ATLAS_TEXTURE_ID;
-        let pipeline = build_imgui_pipeline(device.logical(), swapchain, &font_descriptor, false);
-        let pipeline_bw = build_imgui_pipeline(device.logical(), swapchain, &font_descriptor, true);
+        let pipeline =
+            build_imgui_pipeline(device.logical_clone(), swapchain, &font_descriptor, false);
+        let pipeline_bw =
+            build_imgui_pipeline(device.logical_clone(), swapchain, &font_descriptor, true);
         Self {
             vertex_size,
             vertex_buf,
             index_size,
             index_buf,
-            font: fonts_gpu_buf,
+            font: (fonts_gpu_buf, font_descriptor),
             pipeline,
             pipeline_bw,
             sampler,
-            font_descriptor,
             dm,
             tex_descs: FnvHashMap::default(),
+            device: device.logical_clone(),
         }
     }
 
     /// Updates the underlying swapchain (and therefore the imgui render size)
-    pub(super) fn update_swapchain(&mut self, device: &ash::Device, swapchain: &Swapchain) {
-        let mut pipeline = build_imgui_pipeline(device, swapchain, &self.font_descriptor, false);
-        let mut pipeline_bw = build_imgui_pipeline(device, swapchain, &self.font_descriptor, true);
-        std::mem::swap(&mut self.pipeline, &mut pipeline);
-        std::mem::swap(&mut self.pipeline_bw, &mut pipeline_bw);
-        pipeline.destroy(device);
-        pipeline_bw.destroy(device);
-    }
-
-    /// destroy the imgui renderer
-    pub(super) fn destroy(self, device: &ash::Device, mm: &mut MemoryManager) {
-        self.pipeline.destroy(device);
-        self.pipeline_bw.destroy(device);
-        unsafe { device.destroy_sampler(self.sampler, None) };
-        mm.free_buffer(self.vertex_buf);
-        mm.free_buffer(self.index_buf);
-        mm.free_image(self.font);
+    pub(super) fn update_swapchain(&mut self, swapchain: &Swapchain) {
+        self.pipeline = build_imgui_pipeline(self.device.clone(), swapchain, &self.font.1, false);
+        self.pipeline_bw = build_imgui_pipeline(self.device.clone(), swapchain, &self.font.1, true);
     }
 
     /// draw the ui. This should be called inside an existing render pass.
     /// cmd is a command buffer for a graphic queue.
     pub(super) fn draw(
         &mut self,
-        device: &ash::Device,
         cmd: vk::CommandBuffer,
         draw_data: &imgui::DrawData,
         mm: &mut MemoryManager,
@@ -237,7 +229,7 @@ impl ImguiRenderer {
             );
             self.vertex_size = new_size;
             std::mem::swap(&mut self.vertex_buf, &mut new_vertex_buf);
-            mm.deferred_free_buffer(new_vertex_buf);
+            mm.deferred_free(new_vertex_buf, 2);
         }
         // reallocate index buffer if not enough
         let idx_required_mem =
@@ -252,7 +244,7 @@ impl ImguiRenderer {
             );
             self.index_size = new_size;
             std::mem::swap(&mut self.index_buf, &mut new_index_buf);
-            mm.deferred_free_buffer(new_index_buf);
+            mm.deferred_free(new_index_buf, 2);
         }
         // setup pipeline
         let scale = Vec2::new(
@@ -265,20 +257,24 @@ impl ImguiRenderer {
         );
         let imguipc = ImguiPC { scale, translate };
         unsafe {
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, self.pipeline.pipeline);
-            device.cmd_push_constants(
+            self.device.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline.pipeline,
+            );
+            self.device.cmd_push_constants(
                 cmd,
                 self.pipeline.layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
                 as_u8_slice(&imguipc),
             );
-            device.cmd_bind_descriptor_sets(
+            self.device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.layout,
                 0,
-                &[self.font_descriptor.set],
+                &[self.font.1.set],
                 &[],
             );
         }
@@ -290,7 +286,7 @@ impl ImguiRenderer {
         let clip_scale = draw_data.framebuffer_scale;
         for draw_list in draw_data.draw_lists() {
             unsafe {
-                device.cmd_bind_vertex_buffers(
+                self.device.cmd_bind_vertex_buffers(
                     cmd,
                     0,
                     &[self.vertex_buf.buffer],
@@ -298,7 +294,7 @@ impl ImguiRenderer {
                 )
             };
             unsafe {
-                device.cmd_bind_index_buffer(
+                self.device.cmd_bind_index_buffer(
                     cmd,
                     self.index_buf.buffer,
                     idx_offset as u64 * std::mem::size_of::<imgui::DrawIdx>() as u64,
@@ -308,7 +304,7 @@ impl ImguiRenderer {
             let vertices = draw_list.vtx_buffer();
             let dst_ptr = self
                 .vertex_buf
-                .allocation
+                .allocation()
                 .mapped_ptr()
                 .unwrap()
                 .cast::<imgui::DrawVert>()
@@ -319,7 +315,7 @@ impl ImguiRenderer {
             let indices = draw_list.idx_buffer();
             let dst_ptr = self
                 .index_buf
-                .allocation
+                .allocation()
                 .mapped_ptr()
                 .unwrap()
                 .cast::<imgui::DrawIdx>()
@@ -361,12 +357,12 @@ impl ImguiRenderer {
                                     // set default pipeline
                                     pipeline_bw = false;
                                     unsafe {
-                                        device.cmd_bind_pipeline(
+                                        self.device.cmd_bind_pipeline(
                                             cmd,
                                             vk::PipelineBindPoint::GRAPHICS,
                                             self.pipeline.pipeline,
                                         );
-                                        device.cmd_push_constants(
+                                        self.device.cmd_push_constants(
                                             cmd,
                                             self.pipeline.layout,
                                             vk::ShaderStageFlags::VERTEX,
@@ -376,12 +372,12 @@ impl ImguiRenderer {
                                     }
                                 }
                                 unsafe {
-                                    device.cmd_bind_descriptor_sets(
+                                    self.device.cmd_bind_descriptor_sets(
                                         cmd,
                                         vk::PipelineBindPoint::GRAPHICS,
                                         self.pipeline.layout,
                                         0,
-                                        &[self.font_descriptor.set],
+                                        &[self.font.1.set],
                                         &[],
                                     );
                                 }
@@ -410,12 +406,12 @@ impl ImguiRenderer {
                                     // set default pipeline
                                     pipeline_bw = false;
                                     unsafe {
-                                        device.cmd_bind_pipeline(
+                                        self.device.cmd_bind_pipeline(
                                             cmd,
                                             vk::PipelineBindPoint::GRAPHICS,
                                             self.pipeline.pipeline,
                                         );
-                                        device.cmd_push_constants(
+                                        self.device.cmd_push_constants(
                                             cmd,
                                             self.pipeline.layout,
                                             vk::ShaderStageFlags::VERTEX,
@@ -428,12 +424,12 @@ impl ImguiRenderer {
                                     // set bw pipeline
                                     pipeline_bw = true;
                                     unsafe {
-                                        device.cmd_bind_pipeline(
+                                        self.device.cmd_bind_pipeline(
                                             cmd,
                                             vk::PipelineBindPoint::GRAPHICS,
                                             self.pipeline_bw.pipeline,
                                         );
-                                        device.cmd_push_constants(
+                                        self.device.cmd_push_constants(
                                             cmd,
                                             self.pipeline_bw.layout,
                                             vk::ShaderStageFlags::VERTEX,
@@ -443,7 +439,7 @@ impl ImguiRenderer {
                                     }
                                 }
                                 unsafe {
-                                    device.cmd_bind_descriptor_sets(
+                                    self.device.cmd_bind_descriptor_sets(
                                         cmd,
                                         vk::PipelineBindPoint::GRAPHICS,
                                         self.pipeline.layout,
@@ -458,8 +454,8 @@ impl ImguiRenderer {
                             bound_texture = texture_id;
                         }
                         unsafe {
-                            device.cmd_set_scissor(cmd, 0, &scissors);
-                            device.cmd_draw_indexed(
+                            self.device.cmd_set_scissor(cmd, 0, &scissors);
+                            self.device.cmd_draw_indexed(
                                 cmd,
                                 count as u32,
                                 1,
@@ -477,11 +473,17 @@ impl ImguiRenderer {
     }
 }
 
+impl Drop for ImguiRenderer {
+    fn drop(&mut self) {
+        unsafe { self.device.destroy_sampler(self.sampler, None) };
+    }
+}
+
 /// Builds the imgui pipeline. font_descriptor is the descriptor set containing the font texture.
 /// bw indicates that the pipeline uses a grayscale texture (uses .rrr instead of .rgb to avoid
 /// having red tint on single channel textures).
 fn build_imgui_pipeline(
-    device: &ash::Device,
+    device: Arc<ash::Device>,
     swapchain: &Swapchain,
     font_descriptor: &Descriptor,
     bw: bool,

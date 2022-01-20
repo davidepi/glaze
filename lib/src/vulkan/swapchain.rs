@@ -91,9 +91,6 @@ impl Swapchain {
 /// handle as parameter for the ash::vk::SwapchainCreateInfoKHR).
 fn destroy(sc: &mut Swapchain, partial: bool) {
     unsafe {
-        sc.render_passes
-            .drain(..)
-            .for_each(|r| r.destroy(sc.instance.device().logical()));
         sc.image_views
             .drain(..)
             .for_each(|iw| sc.instance.device().logical().destroy_image_view(iw, None));
@@ -189,7 +186,7 @@ fn swapchain_init(
         .collect::<Vec<_>>();
     let render_passes = image_views
         .iter()
-        .map(|iw| FinalRenderPass::new(device.logical(), format.format, *iw, extent))
+        .map(|iw| FinalRenderPass::new(device.logical_clone(), format.format, *iw, extent))
         .collect();
     Swapchain {
         swapchain,

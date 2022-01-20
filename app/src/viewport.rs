@@ -5,7 +5,6 @@ use std::rc::Rc;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
-use winit::platform::run_return::EventLoopExtRunReturn;
 use winit::window::{Window, WindowBuilder};
 
 use crate::ui::{draw_ui, UiState};
@@ -23,7 +22,7 @@ pub struct InteractiveView {
 }
 
 impl InteractiveView {
-    pub fn new(event_loop: &mut EventLoop<()>) -> Result<InteractiveView, Box<dyn Error>> {
+    pub fn new(event_loop: &EventLoop<()>) -> Result<InteractiveView, Box<dyn Error>> {
         if let Some(monitor) = event_loop.primary_monitor() {
             let monitor_size = monitor.size();
             let default_size = PhysicalSize::new(monitor_size.width / 2, monitor_size.height / 2);
@@ -61,8 +60,8 @@ impl InteractiveView {
         }
     }
 
-    pub fn main_loop(&mut self, event_loop: &mut EventLoop<()>) {
-        event_loop.run_return(|event, _, control_flow| {
+    pub fn main_loop(mut self, event_loop: EventLoop<()>) -> ! {
+        event_loop.run(move |event, _, control_flow| {
             self.platform
                 .handle_event(self.imgui.io_mut(), &self.window, &event);
             match event {
@@ -78,8 +77,8 @@ impl InteractiveView {
                         self.renderer
                             .update_render_size(size.width, size.height, scale);
                     }
-                    WindowEvent::KeyboardInput { input, .. } => handle_keyboard(input, self),
-                    WindowEvent::CursorMoved { position, .. } => mouse_moved(position, self),
+                    WindowEvent::KeyboardInput { input, .. } => handle_keyboard(input, &mut self),
+                    WindowEvent::CursorMoved { position, .. } => mouse_moved(position, &mut self),
                     WindowEvent::MouseInput { state, button, .. } => {
                         if button == MouseButton::Right {
                             if state == ElementState::Pressed {
@@ -117,11 +116,6 @@ impl InteractiveView {
                 _ => (),
             }
         });
-    }
-
-    pub fn destroy(self) {
-        self.renderer.wait_idle();
-        self.renderer.destroy()
     }
 }
 

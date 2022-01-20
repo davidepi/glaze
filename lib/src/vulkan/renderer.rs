@@ -61,11 +61,15 @@ struct SceneLoad {
     /// Last message received from the channel.
     last_message: String,
     /// Thread join handle.
-    join_handle: std::thread::JoinHandle<(MemoryManager, Result<VulkanScene, std::io::Error>)>,
+    join_handle: std::thread::JoinHandle<Result<VulkanScene, std::io::Error>>,
 }
 
 /// Realtime renderer capable of rendering a scene to a presentation surface.
 pub struct RealtimeRenderer {
+    /// Scene to be rendered.
+    scene: Option<VulkanScene>,
+    /// Scene being loaded.
+    scene_loading: Option<SceneLoad>,
     /// Swapchain of the renderer.
     swapchain: Swapchain,
     /// Sampler used to copy the forward pass attachment to the swapchain image.
@@ -78,16 +82,10 @@ pub struct RealtimeRenderer {
     imgui_renderer: ImguiRenderer,
     /// Manager for the descriptor pools and sets.
     dm: DescriptorSetManager,
-    /// Manager for the memory allocation.
-    mm: MemoryManager,
     /// Graphic Command Manager. Manager for the command pools and buffers of a graphic queue.
     gcmdm: CommandManager,
     /// Synchronization structures for each frame.
     sync: PresentSync<FRAMES_IN_FLIGHT>,
-    /// Scene to be rendered.
-    scene: Option<VulkanScene>,
-    /// Scene being loaded.
-    scene_loading: Option<SceneLoad>,
     /// Per-frame data, for each frame.
     frame_data: [FrameDataBuf; FRAMES_IN_FLIGHT],
     /// Clear color of the forward pass.
@@ -100,6 +98,8 @@ pub struct RealtimeRenderer {
     frame_no: usize,
     /// Stats about the renderer.
     stats: InternalStats,
+    /// Manager for the memory allocation.
+    mm: MemoryManager,
     /// Vulkan instance.
     instance: Rc<PresentInstance>,
 }
@@ -139,7 +139,6 @@ impl RealtimeRenderer {
             instance.instance(),
             instance.device().logical_clone(),
             instance.device().physical().device,
-            FRAMES_IN_FLIGHT as u8,
             instance.supports_raytrace(),
         );
         let gcmdm = CommandManager::new(
@@ -183,11 +182,11 @@ impl RealtimeRenderer {
                 descriptor,
             });
         }
-        let sync = PresentSync::create(instance.device());
+        let sync = PresentSync::create(instance.device().logical_clone());
         let copy_sampler = create_copy_sampler(instance.device().logical());
         let clear_color = [0.15, 0.15, 0.15, 1.0];
         let mut forward_pass = RenderPass::forward(
-            instance.device().logical(),
+            instance.device().logical_clone(),
             copy_sampler,
             &mut mm,
             &mut dm,
@@ -197,29 +196,29 @@ impl RealtimeRenderer {
         let imgui_renderer =
             ImguiRenderer::new(imgui, instance.device(), &mut mm, dm.cache(), &swapchain);
         let copy_pipeline = create_copy_pipeline(
-            instance.device().logical(),
+            instance.device().logical_clone(),
             swapchain.extent(),
             swapchain.renderpass(),
             &[forward_pass.copy_descriptor.layout],
         );
         RealtimeRenderer {
+            scene: None,
+            scene_loading: None,
             swapchain,
             copy_sampler,
             copy_pipeline,
             forward_pass,
             imgui_renderer,
             dm,
-            mm,
             gcmdm,
             sync,
-            scene: None,
-            scene_loading: None,
             frame_data: frame_data.try_into().unwrap(),
             clear_color,
             start_time: Instant::now(),
             render_scale,
             frame_no: 0,
             stats: InternalStats::default(),
+            mm,
             instance,
         }
     }
@@ -304,39 +303,33 @@ impl RealtimeRenderer {
     /// The render size will be (window_width * render_scale, window_height * render_scale).
     pub fn update_render_size(&mut self, window_width: u32, window_height: u32, scale: f32) {
         self.wait_idle();
-        if let Some(scene) = &mut self.scene {
-            scene.deinit_pipelines(self.instance.device().logical());
-        }
         self.render_scale = scale;
         self.swapchain.recreate(window_width, window_height);
-        self.imgui_renderer
-            .update_swapchain(self.instance.device().logical(), &self.swapchain);
+        self.imgui_renderer.update_swapchain(&self.swapchain);
         let render_size = vk::Extent2D {
             width: (window_width as f32 * scale) as u32,
             height: (window_height as f32 * scale) as u32,
         };
         let mut forward_pass = RenderPass::forward(
-            self.instance.device().logical(),
+            self.instance.device().logical_clone(),
             self.copy_sampler,
             &mut self.mm,
             &mut self.dm,
             render_size,
         );
         forward_pass.clear_color[0].color.float32 = self.clear_color;
-        std::mem::swap(&mut self.forward_pass, &mut forward_pass);
-        forward_pass.destroy(self.instance.device().logical(), &mut self.mm);
-        let mut copy_pipeline = create_copy_pipeline(
-            self.instance.device().logical(),
+        self.forward_pass = forward_pass;
+        self.copy_pipeline = create_copy_pipeline(
+            self.instance.device().logical_clone(),
             self.swapchain.extent(),
             self.swapchain.renderpass(),
             &[self.forward_pass.copy_descriptor.layout],
         );
-        std::mem::swap(&mut self.copy_pipeline, &mut copy_pipeline);
-        copy_pipeline.destroy(self.instance.device().logical());
         if let Some(scene) = &mut self.scene {
+            scene.deinit_pipelines();
             scene.init_pipelines(
                 render_size,
-                self.instance.device().logical(),
+                self.instance.device().logical_clone(),
                 self.forward_pass.renderpass,
                 self.frame_data[0].descriptor.layout,
             );
@@ -367,11 +360,8 @@ impl RealtimeRenderer {
     /// ```
     pub fn change_scene(&mut self, parsed: Box<dyn ParsedScene + Send>) {
         self.wait_idle();
-        if let Some(mut scene) = self.scene.take() {
-            scene.deinit_pipelines(self.instance.device().logical());
-            scene.unload(self.instance.device(), &mut self.mm);
-        }
-        let mut send_mm = self.mm.thread_exclusive();
+        self.scene.take(); // drop previous scene, if existing
+        let mut send_mm = self.mm.clone();
         let send_cache = self.dm.cache();
         let device_clone = self.instance.device().clone();
         let is_alive = Arc::new(false);
@@ -380,15 +370,14 @@ impl RealtimeRenderer {
         let with_raytrace = self.instance().supports_raytrace();
         let load_tid = std::thread::spawn(move || {
             let _is_alive = is_alive;
-            let scene = VulkanScene::load(
+            VulkanScene::load(
                 &device_clone,
                 parsed,
                 &mut send_mm,
                 send_cache,
                 wchan,
                 with_raytrace,
-            );
-            (send_mm, scene)
+            )
         });
         self.scene_loading = Some(SceneLoad {
             reader: rchan,
@@ -405,8 +394,7 @@ impl RealtimeRenderer {
             if Arc::strong_count(&scene_loading.is_alive) == 1 {
                 // loading finished, swap scene
                 let scene_loading = self.scene_loading.take().unwrap();
-                let (send_mm, scene) = scene_loading.join_handle.join().unwrap();
-                self.mm.merge(send_mm);
+                let scene = scene_loading.join_handle.join().unwrap();
                 if let Ok(mut new) = scene {
                     let render_size = vk::Extent2D {
                         width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
@@ -414,7 +402,7 @@ impl RealtimeRenderer {
                     };
                     new.init_pipelines(
                         render_size,
-                        self.instance.device().logical(),
+                        self.instance.device().logical_clone(),
                         self.forward_pass.renderpass,
                         self.frame_data[0].descriptor.layout,
                     );
@@ -457,7 +445,7 @@ impl RealtimeRenderer {
         if self.instance.supports_raytrace() {
             if let Some(scene) = &mut self.scene {
                 let instance = self.instance.clone();
-                let mm = self.mm.thread_exclusive();
+                let mm = self.mm.clone();
                 Some(
                     RayTraceRenderer::from_realtime(instance, mm, scene)
                         .expect("Failed to read scene"),
@@ -470,30 +458,6 @@ impl RealtimeRenderer {
         }
     }
 
-    /// Terminates rendering and frees all resources.
-    pub fn destroy(mut self) {
-        self.wait_idle();
-        self.imgui_renderer
-            .destroy(self.instance.device().logical(), &mut self.mm);
-        if let Some(mut scene) = self.scene.take() {
-            scene.deinit_pipelines(self.instance.device().logical());
-            scene.unload(self.instance.device(), &mut self.mm);
-        }
-        for data in self.frame_data {
-            self.mm.free_buffer(data.buffer);
-        }
-        unsafe {
-            self.instance
-                .device()
-                .logical()
-                .destroy_sampler(self.copy_sampler, None);
-        };
-        self.forward_pass
-            .destroy(self.instance.device().logical(), &mut self.mm);
-        self.copy_pipeline.destroy(self.instance.device().logical());
-        self.sync.destroy(self.instance.device());
-    }
-
     /// Draws a single frame.
     ///
     /// If there is a GUI to draw, the `imgui_data` should contain the GUI data.
@@ -501,13 +465,13 @@ impl RealtimeRenderer {
         self.stats.update();
         self.finish_change_scene();
         let frame_sync = self.sync.get(self.frame_no);
-        frame_sync.wait_acquire(self.instance.device());
+        let device = self.instance.device().logical();
+        frame_sync.wait_acquire(device);
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
             let cmd = self.gcmdm.get_cmd_buffer();
             let current_time = Instant::now();
             let frame_data = &mut self.frame_data[self.frame_no % FRAMES_IN_FLIGHT];
             frame_data.data.frame_time = (current_time - self.start_time).as_secs_f32();
-            let device = self.instance.device().logical();
             let cmd_ci = vk::CommandBufferBeginInfo {
                 s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
                 p_next: ptr::null(),
@@ -518,14 +482,14 @@ impl RealtimeRenderer {
                 device
                     .begin_command_buffer(cmd, &cmd_ci)
                     .expect("Failed to begin command buffer");
-                self.forward_pass.begin(device, cmd);
+                self.forward_pass.begin(cmd);
                 if let Some(scene) = &self.scene {
                     let ar = self.swapchain.extent().width as f32
                         / self.swapchain.extent().height as f32;
                     draw_objects(scene, ar, frame_data, device, cmd, &mut self.stats);
                 }
-                self.forward_pass.end(device, cmd);
-                acquired.renderpass.begin(device, cmd);
+                self.forward_pass.end(cmd);
+                acquired.renderpass.begin(cmd);
                 copy_renderpass_to_swapchain(
                     device,
                     cmd,
@@ -538,7 +502,6 @@ impl RealtimeRenderer {
                 if let Some(dd) = imgui_data {
                     if dd.total_vtx_count > 0 {
                         self.imgui_renderer.draw(
-                            device,
                             cmd,
                             dd,
                             &mut self.mm,
@@ -547,7 +510,7 @@ impl RealtimeRenderer {
                         );
                     }
                 }
-                acquired.renderpass.end(device, cmd);
+                acquired.renderpass.end(cmd);
                 device
                     .end_command_buffer(cmd)
                     .expect("Failed to end command buffer");
@@ -583,12 +546,24 @@ impl RealtimeRenderer {
                     .expect("Failed to submit render task");
             }
             self.swapchain.queue_present(queue.queue, &present_ci);
-            self.mm.frame_end_clean();
+            self.mm.free_deferred();
             self.frame_no += 1;
             self.stats.done_frame();
         } else {
             // out of date swapchain. the resize is called by winit so wait next frame
         }
+    }
+}
+
+impl Drop for RealtimeRenderer {
+    fn drop(&mut self) {
+        self.wait_idle();
+        unsafe {
+            self.instance
+                .device()
+                .logical()
+                .destroy_sampler(self.copy_sampler, None);
+        };
     }
 }
 
@@ -610,7 +585,7 @@ unsafe fn draw_objects(
     //write frame_data to the buffer
     let buf_ptr = frame_data
         .buffer
-        .allocation
+        .allocation()
         .mapped_ptr()
         .expect("Failed to map buffer")
         .cast()
@@ -677,7 +652,7 @@ fn create_copy_sampler(device: &ash::Device) -> vk::Sampler {
 
 /// Creates the pipeline used to copy the forward pass color attachment into the swapchain image.
 fn create_copy_pipeline(
-    device: &ash::Device,
+    device: Arc<ash::Device>,
     extent: vk::Extent2D,
     renderpass: vk::RenderPass,
     dset_layout: &[vk::DescriptorSetLayout],
@@ -767,11 +742,11 @@ impl InternalStats {
 }
 
 pub struct RayTraceRenderer {
+    scene: RayTraceScene,
     ccmdm: CommandManager,
     mm: MemoryManager,
-    loader: AccelerationLoader,
+    loader: Arc<AccelerationLoader>,
     instance: Rc<dyn Instance>,
-    scene: RayTraceScene,
 }
 
 impl RayTraceRenderer {
@@ -786,17 +761,19 @@ impl RayTraceRenderer {
             instance.instance(),
             device.logical_clone(),
             device.physical().device,
-            0,
             true,
         );
-        let loader = AccelerationLoader::new(instance.instance(), device.logical());
-        let scene = RayTraceScene::new(device, &loader, scene, &mut mm, &mut ccmdm)?;
+        let loader = Arc::new(AccelerationLoader::new(
+            instance.instance(),
+            device.logical(),
+        ));
+        let scene = RayTraceScene::new(device, loader.clone(), scene, &mut mm, &mut ccmdm)?;
         Ok(RayTraceRenderer {
+            scene,
             ccmdm,
             mm,
             loader,
             instance,
-            scene,
         })
     }
 
@@ -808,19 +785,18 @@ impl RayTraceRenderer {
         let device = instance.device();
         let compute = device.compute_queue();
         let mut ccmdm = CommandManager::new(device.logical_clone(), compute.idx, 15);
-        let loader = AccelerationLoader::new(instance.instance(), device.logical());
-        let scene = RayTraceScene::from(device, &loader, scene, &mut mm, &mut ccmdm)?;
+        let loader = Arc::new(AccelerationLoader::new(
+            instance.instance(),
+            device.logical(),
+        ));
+        let scene = RayTraceScene::from(device, loader.clone(), scene, &mut mm, &mut ccmdm)?;
         Ok(RayTraceRenderer {
+            scene,
             ccmdm,
             mm,
             loader,
             instance,
-            scene,
         })
-    }
-
-    pub fn destroy(mut self) {
-        self.scene.destroy(&self.loader, &mut self.mm);
     }
 }
 
@@ -842,8 +818,7 @@ mod tests {
                 .join("cube.glaze");
 
             let parsed = parse(path).unwrap();
-            let r = RayTraceRenderer::new(Rc::new(instance), parsed).unwrap();
-            r.destroy();
+            let _ = RayTraceRenderer::new(Rc::new(instance), parsed).unwrap();
         } else {
             // SKIPPED does not exists in carg test...
         }

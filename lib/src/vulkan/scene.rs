@@ -53,6 +53,7 @@ pub struct VulkanScene {
     pub(super) instances: FnvHashMap<u16, Vec<u16>>,
     /// If the materials changed after loading the scene
     mat_changed: bool,
+    device: Arc<ash::Device>,
 }
 
 /// A mesh optimized to be rendered using this crates renderer.
@@ -80,11 +81,8 @@ struct UnfinishedExecutions {
 }
 
 impl UnfinishedExecutions {
-    fn wait_completion(self, device: &Device, mm: &mut MemoryManager) {
+    fn wait_completion(self, device: &Device) {
         device.wait_completion(&self.fences);
-        self.buffers_to_free
-            .into_iter()
-            .for_each(|b| mm.free_buffer(b));
     }
 }
 
@@ -162,7 +160,7 @@ impl VulkanScene {
         let parsed_mats = parsed.materials()?;
         let params_buffer =
             load_materials_parameters(device, &parsed_mats, mm, &mut tcmdm, &mut unf);
-        unf.wait_completion(device, mm);
+        unf.wait_completion(device);
         wchan.send("[4/4] Loading materials...".to_string()).ok();
         let materials = parsed_mats
             .into_iter()
@@ -205,6 +203,7 @@ impl VulkanScene {
             transforms,
             instances,
             mat_changed: false,
+            device: device.logical_clone(),
         })
     }
 
@@ -223,7 +222,7 @@ impl VulkanScene {
         let params = MaterialParams::from(&new);
         let mapped = self
             .update_buffer
-            .allocation
+            .allocation()
             .mapped_ptr()
             .expect("Failed to map memory")
             .cast()
@@ -268,7 +267,7 @@ impl VulkanScene {
         // build the new shader if not existing
         self.pipelines.entry(new_shader).or_insert_with(|| {
             new.shader.build_pipeline().build(
-                device.logical(),
+                device.logical_clone(),
                 rpass,
                 render_size,
                 &[frame_desc_layout, new_desc.layout],
@@ -285,12 +284,13 @@ impl VulkanScene {
     pub(super) fn init_pipelines(
         &mut self,
         render_size: vk::Extent2D,
-        device: &ash::Device,
+        device: Arc<ash::Device>,
         renderpass: vk::RenderPass,
         frame_desc_layout: vk::DescriptorSetLayout,
     ) {
         self.pipelines = FnvHashMap::default();
         for (_, shader, desc) in self.materials.values() {
+            let device = device.clone();
             self.pipelines.entry(*shader).or_insert_with(|| {
                 shader.build_pipeline().build(
                     device,
@@ -311,30 +311,8 @@ impl VulkanScene {
     }
 
     /// Destroys the scene's pipelines.
-    pub(super) fn deinit_pipelines(&mut self, device: &ash::Device) {
-        for (_, pipeline) in self.pipelines.drain() {
-            pipeline.destroy(device);
-        }
-    }
-
-    /// Unloads the scene from the GPU memory
-    pub(super) fn unload(self, device: &Device, mm: &mut MemoryManager) {
-        self.textures
-            .into_iter()
-            .chain([(u16::MAX, self.dflt_tex)])
-            .for_each(|(_, tex)| mm.free_image(tex.image));
-        unsafe { device.logical().destroy_sampler(self.sampler, None) };
-        if let Ok(last_buffer) = Arc::try_unwrap(self.vertex_buffer) {
-            mm.free_buffer(last_buffer);
-        }
-        if let Ok(last_buffer) = Arc::try_unwrap(self.index_buffer) {
-            mm.free_buffer(last_buffer)
-        }
-        self.transforms
-            .into_iter()
-            .for_each(|(_, (buf, _))| mm.free_buffer(buf));
-        mm.free_buffer(self.params_buffer);
-        mm.free_buffer(self.update_buffer);
+    pub(super) fn deinit_pipelines(&mut self) {
+        self.pipelines.clear();
     }
 
     /// Returns a material in the scene, given its ID.
@@ -378,6 +356,13 @@ impl VulkanScene {
         } else {
             self.file.update(Some(&cameras), None)
         }
+    }
+}
+
+impl Drop for VulkanScene {
+    fn drop(&mut self) {
+        self.deinit_pipelines();
+        unsafe { self.device.destroy_sampler(self.sampler, None) };
     }
 }
 
@@ -443,7 +428,7 @@ fn load_vertices_to_gpu(
         MemoryLocation::GpuOnly,
     );
     let mapped = cpu_buffer
-        .allocation
+        .allocation()
         .mapped_ptr()
         .expect("Failed to map memory")
         .cast()
@@ -498,7 +483,7 @@ fn load_transforms_to_gpu(
             MemoryLocation::GpuOnly,
         );
         let mapped = cpu_buffer
-            .allocation
+            .allocation()
             .mapped_ptr()
             .expect("Failed to map memory")
             .cast()
@@ -568,7 +553,7 @@ fn load_indices_to_gpu(
     );
     let mut converted_meshes = Vec::with_capacity(meshes.len());
     let mut mapped = cpu_buffer
-        .allocation
+        .allocation()
         .mapped_ptr()
         .expect("Failed to map memory")
         .cast()
@@ -724,7 +709,7 @@ fn load_materials_parameters(
         MemoryLocation::GpuOnly,
     );
     let mut mapped = cpu_buffer
-        .allocation
+        .allocation()
         .mapped_ptr()
         .expect("Failed to map memory")
         .cast()
@@ -792,7 +777,7 @@ fn load_texture_to_gpu(
         mip_levels as u32,
     );
     let mut mapped = buffer
-        .allocation
+        .allocation()
         .mapped_ptr()
         .expect("Failed to map memory")
         .cast()
@@ -952,7 +937,7 @@ pub struct RayTraceScene {
 impl RayTraceScene {
     pub fn new(
         device: &Device,
-        loader: &AccelerationLoader,
+        loader: Arc<AccelerationLoader>,
         mut scene: Box<dyn ParsedScene>,
         mm: &mut MemoryManager,
         ccmdm: &mut CommandManager,
@@ -966,7 +951,7 @@ impl RayTraceScene {
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?, true);
         let (meshes, index_buffer) =
             load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?, true);
-        unf.wait_completion(device, mm);
+        unf.wait_completion(device);
         let instances = scene.instances()?;
         let transforms = scene.transforms()?;
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
@@ -981,7 +966,7 @@ impl RayTraceScene {
 
     pub fn from(
         device: &Device,
-        loader: &AccelerationLoader,
+        loader: Arc<AccelerationLoader>,
         scene: &mut VulkanScene,
         mm: &mut MemoryManager,
         ccmdm: &mut CommandManager,
@@ -998,15 +983,5 @@ impl RayTraceScene {
             index_buffer,
             acc,
         })
-    }
-
-    pub fn destroy(self, loader: &AccelerationLoader, mm: &mut MemoryManager) {
-        if let Ok(last_buffer) = Arc::try_unwrap(self.vertex_buffer) {
-            mm.free_buffer(last_buffer);
-        }
-        if let Ok(last_buffer) = Arc::try_unwrap(self.index_buffer) {
-            mm.free_buffer(last_buffer);
-        }
-        self.acc.destroy(loader, mm);
     }
 }

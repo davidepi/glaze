@@ -1,10 +1,9 @@
-use super::device::Device;
 use ash::vk;
 use std::convert::TryInto;
 use std::ptr;
+use std::sync::Arc;
 
 /// Contains the necessary synchronization objects used during a draw operation for a single frame.
-#[derive(Debug)]
 pub struct PresentFrameSync {
     /// Fence used to stop the CPU until an image is ready to be acquired.
     pub acquire: vk::Fence,
@@ -12,31 +11,22 @@ pub struct PresentFrameSync {
     pub image_available: vk::Semaphore,
     /// Semaphore used to signal when the image is ready to be presented.
     pub render_finished: vk::Semaphore,
+    device: Arc<ash::Device>,
 }
 
 impl PresentFrameSync {
     /// Creates a new PresentFrameSync object
-    fn create(device: &Device) -> Self {
+    fn create(device: Arc<ash::Device>) -> Self {
         PresentFrameSync {
-            acquire: create_fence(device, true),
-            image_available: create_semaphore(device),
-            render_finished: create_semaphore(device),
-        }
-    }
-
-    /// Destroys the PresentFrameSync object
-    fn destroy(self, device: &Device) {
-        let device = device.logical();
-        unsafe {
-            device.destroy_fence(self.acquire, None);
-            device.destroy_semaphore(self.image_available, None);
-            device.destroy_semaphore(self.render_finished, None);
+            acquire: create_fence(&device, true),
+            image_available: create_semaphore(&device),
+            render_finished: create_semaphore(&device),
+            device,
         }
     }
 
     /// waits until the image is ready to be acquired
-    pub fn wait_acquire(&mut self, device: &Device) {
-        let device = device.logical();
+    pub fn wait_acquire(&mut self, device: &ash::Device) {
         let fence = &[self.acquire];
         unsafe {
             device
@@ -47,6 +37,26 @@ impl PresentFrameSync {
     }
 }
 
+impl Drop for PresentFrameSync {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.destroy_fence(self.acquire, None);
+            self.device.destroy_semaphore(self.image_available, None);
+            self.device.destroy_semaphore(self.render_finished, None);
+        }
+    }
+}
+
+impl std::fmt::Debug for PresentFrameSync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PresentFrameSync")
+            .field("acquire", &self.acquire)
+            .field("image_available", &self.image_available)
+            .field("render_finished", &self.render_finished)
+            .finish()
+    }
+}
+
 /// Constains all the synchronization objects for all frames.
 pub struct PresentSync<const FRAMES_IN_FLIGHT: usize> {
     frames: [PresentFrameSync; FRAMES_IN_FLIGHT],
@@ -54,9 +64,9 @@ pub struct PresentSync<const FRAMES_IN_FLIGHT: usize> {
 
 impl<const FRAMES_IN_FLIGHT: usize> PresentSync<FRAMES_IN_FLIGHT> {
     /// Creates a PresentSync object
-    pub fn create(device: &Device) -> Self {
+    pub fn create(device: Arc<ash::Device>) -> Self {
         let frames = (0..FRAMES_IN_FLIGHT)
-            .map(|_| PresentFrameSync::create(device))
+            .map(|_| PresentFrameSync::create(device.clone()))
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();
@@ -68,17 +78,10 @@ impl<const FRAMES_IN_FLIGHT: usize> PresentSync<FRAMES_IN_FLIGHT> {
         let idx = frame_no % FRAMES_IN_FLIGHT;
         unsafe { self.frames.get_unchecked_mut(idx) }
     }
-
-    /// Destroys all synchronization objects
-    pub fn destroy(self, device: &Device) {
-        for frame in self.frames {
-            frame.destroy(device)
-        }
-    }
 }
 
 /// Creates a fence
-fn create_fence(device: &Device, signaled: bool) -> vk::Fence {
+fn create_fence(device: &ash::Device, signaled: bool) -> vk::Fence {
     let ci = vk::FenceCreateInfo {
         s_type: vk::StructureType::FENCE_CREATE_INFO,
         p_next: ptr::null(),
@@ -88,15 +91,15 @@ fn create_fence(device: &Device, signaled: bool) -> vk::Fence {
             vk::FenceCreateFlags::empty()
         },
     };
-    unsafe { device.logical().create_fence(&ci, None) }.expect("Failed to create fence")
+    unsafe { device.create_fence(&ci, None) }.expect("Failed to create fence")
 }
 
 /// Creates a semaphore
-fn create_semaphore(device: &Device) -> vk::Semaphore {
+fn create_semaphore(device: &ash::Device) -> vk::Semaphore {
     let ci = vk::SemaphoreCreateInfo {
         s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
         p_next: ptr::null(),
         flags: vk::SemaphoreCreateFlags::empty(),
     };
-    unsafe { device.logical().create_semaphore(&ci, None) }.expect("Failed to create semaphore")
+    unsafe { device.create_semaphore(&ci, None) }.expect("Failed to create semaphore")
 }

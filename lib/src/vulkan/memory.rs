@@ -1,37 +1,95 @@
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
 use gpu_allocator::{AllocatorDebugSettings, MemoryLocation};
-use std::ptr;
 use std::sync::{Arc, Mutex};
+use std::{fmt, ptr};
 
 /// An allocated buffer-memory pair.
-#[derive(Debug)]
 pub struct AllocatedBuffer {
     /// Handle for the raw buffer
     pub buffer: vk::Buffer,
     /// Size of the buffer
     pub size: u64, //not necessarily the same as allocation size
     /// Allocated area on the memory
-    pub allocation: Allocation,
+    allocation: Option<Allocation>,
+    device: Arc<ash::Device>,
+    allocator: Arc<Mutex<Allocator>>,
+}
+
+impl AllocatedBuffer {
+    /// Returns a reference to the allocated memory.
+    pub fn allocation(&self) -> &Allocation {
+        unsafe {
+            // SAFETY: the allocation Option is None only in the Drop method
+            self.allocation.as_ref().unwrap_unchecked()
+        }
+    }
+}
+
+impl std::fmt::Debug for AllocatedBuffer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AllocatedBuffer")
+            .field("buffer", &self.buffer)
+            .field("size", &self.size)
+            .field("allocation", &self.allocation)
+            .finish()
+    }
+}
+
+impl Drop for AllocatedBuffer {
+    fn drop(&mut self) {
+        unsafe { self.device.destroy_buffer(self.buffer, None) };
+        if let Ok(mut allocator) = self.allocator.lock() {
+            // SAFETY: the allocation Option is None only after this block
+            let allocation = unsafe { self.allocation.take().unwrap_unchecked() };
+            if allocator.free(allocation).is_err() {
+                log::warn!("Failed to free memory");
+            }
+        }
+    }
 }
 
 /// An allocated buffer-image-imageview tuple.
-#[derive(Debug)]
 pub struct AllocatedImage {
     /// Handle for the raw image
     pub image: vk::Image,
     /// Handle for the raw image view
     pub image_view: vk::ImageView,
     /// Allocated area on the memory
-    pub allocation: Allocation,
+    allocation: Option<Allocation>,
+    device: Arc<ash::Device>,
+    allocator: Arc<Mutex<Allocator>>,
+}
+
+impl Drop for AllocatedImage {
+    fn drop(&mut self) {
+        unsafe { self.device.destroy_image_view(self.image_view, None) };
+        unsafe { self.device.destroy_image(self.image, None) };
+        if let Ok(mut allocator) = self.allocator.lock() {
+            // SAFETY: the allocation Option is None only after this block
+            let allocation = unsafe { self.allocation.take().unwrap_unchecked() };
+            if allocator.free(allocation).is_err() {
+                log::warn!("Failed to free memory");
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for AllocatedImage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AllocatedImage")
+            .field("image", &self.image)
+            .field("image_view", &self.image_view)
+            .field("allocation", &self.allocation)
+            .finish()
+    }
 }
 
 /// Manages allocations performed on the GPU.
 pub struct MemoryManager {
-    device: Arc<ash::Device>,
-    frames_in_flight: u8,
-    deferred_buffers: Vec<(AllocatedBuffer, u8)>,
+    deferred_buffers: Vec<(u8, AllocatedBuffer)>,
     allocator: Arc<Mutex<Allocator>>,
+    device: Arc<ash::Device>,
 }
 
 impl MemoryManager {
@@ -42,7 +100,6 @@ impl MemoryManager {
         instance: &ash::Instance,
         device: Arc<ash::Device>,
         physical_device: vk::PhysicalDevice,
-        frames_in_flight: u8,
         buffer_device_address: bool,
     ) -> Self {
         let debug_settings = if cfg!(debug_assertions) {
@@ -75,10 +132,9 @@ impl MemoryManager {
             Allocator::new(&acd).expect("Failed to create memory allocator"),
         ));
         MemoryManager {
-            device,
-            frames_in_flight,
             deferred_buffers: Vec::new(),
             allocator,
+            device,
         }
     }
 
@@ -123,7 +179,9 @@ impl MemoryManager {
         AllocatedBuffer {
             buffer,
             size,
-            allocation,
+            allocation: Some(allocation),
+            device: self.device.clone(),
+            allocator: self.allocator.clone(),
         }
     }
 
@@ -202,82 +260,46 @@ impl MemoryManager {
         AllocatedImage {
             image,
             image_view: iw,
-            allocation,
-        }
-    }
-
-    /// Immediately frees an AllocatedImage.
-    pub fn free_image(&mut self, image: AllocatedImage) {
-        unsafe { self.device.destroy_image_view(image.image_view, None) };
-        unsafe { self.device.destroy_image(image.image, None) };
-        if self
-            .allocator
-            .lock()
-            .unwrap()
-            .free(image.allocation)
-            .is_err()
-        {
-            log::warn!("Failed to free memory");
-        }
-    }
-
-    /// Immediately frees an AllocatedBuffer.
-    pub fn free_buffer(&mut self, buf: AllocatedBuffer) {
-        unsafe { self.device.destroy_buffer(buf.buffer, None) };
-        if self.allocator.lock().unwrap().free(buf.allocation).is_err() {
-            log::warn!("Failed to free memory");
-        }
-    }
-
-    /// Adds an AllocatedBuffer to be freed after all frames_in_flight have been cycled once.
-    ///
-    /// This is done to avoid freeing the buffer between the time when the command is sent and the
-    /// time when the command is executed.
-    pub fn deferred_free_buffer(&mut self, buf: AllocatedBuffer) {
-        self.deferred_buffers.push((buf, 0));
-    }
-
-    /// Increases the counter of elapsed frames.
-    /// If there are some deferred buffers to be freed an at least frames_in_flight frames have
-    /// passed since their addition, they are freed.
-    pub fn frame_end_clean(&mut self) {
-        if !self.deferred_buffers.is_empty() {
-            let mut retain = Vec::with_capacity(self.deferred_buffers.len());
-            let mut drop = Vec::with_capacity(self.deferred_buffers.len());
-            while let Some((buf, mut frame_count)) = self.deferred_buffers.pop() {
-                frame_count += 1;
-                if frame_count > self.frames_in_flight {
-                    drop.push(buf);
-                } else {
-                    retain.push((buf, frame_count));
-                }
-            }
-            drop.into_iter().for_each(|buf| self.free_buffer(buf));
-            self.deferred_buffers = retain;
-        }
-    }
-
-    /// Clones this MemoryManager to be used in another thread.
-    /// The inner allocator is the same, however each clone has its own list of deferred buffers.
-    pub fn thread_exclusive(&self) -> Self {
-        MemoryManager {
+            allocation: Some(allocation),
             device: self.device.clone(),
-            frames_in_flight: self.frames_in_flight,
-            deferred_buffers: Vec::new(),
             allocator: self.allocator.clone(),
         }
     }
 
-    /// Consumes a command manager previously taken with [MemoryManager::thread_exclusive].
-    pub fn merge(&mut self, mut other: Self) {
-        self.deferred_buffers.append(&mut other.deferred_buffers);
+    /// Adds a buffer to be freed after a certain amount of time.
+    ///
+    /// Time is expressed in "ticks". Each invocation of the [MemoryManager::free_deferred] will
+    /// delete all the buffers with wait_time equal to 0, and decrement the remainings by 1.
+    ///
+    /// This method is particularly useful when the buffer is allocated for a single frame and
+    /// cannot be freed until the frame has completed also on the GPU.
+    pub fn deferred_free(&mut self, buf: AllocatedBuffer, wait_time: u8) {
+        self.deferred_buffers.push((wait_time, buf));
+    }
+
+    /// Updates the wait time of the buffers passed with [MemoryManager::deferred_free].
+    ///
+    /// Frees all the buffers with wait_time equal to 0, then proceeds to decrease the counter of
+    /// every other buffer by 1.
+    pub fn free_deferred(&mut self) {
+        // TODO: replace these two methods with Vec::retain_mut when it's stable
+        self.deferred_buffers
+            .retain(|(wait_time, _)| *wait_time > 0);
+        self.deferred_buffers
+            .iter_mut()
+            .for_each(|(wait_time, _)| *wait_time -= 1);
     }
 }
 
-impl Drop for MemoryManager {
-    fn drop(&mut self) {
-        while let Some((buf, _)) = self.deferred_buffers.pop() {
-            self.free_buffer(buf);
+impl Clone for MemoryManager {
+    fn clone(&self) -> Self {
+        // deferred buffers can not be accessed in any way it is just a temporary storage for
+        // soon-to-be-deleted stuffs. There is no point in copying the content and deleting it
+        // twice.
+        Self {
+            deferred_buffers: Vec::new(),
+            allocator: self.allocator.clone(),
+            device: self.device.clone(),
         }
     }
 }

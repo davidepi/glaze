@@ -2,6 +2,7 @@ use crate::geometry::Vertex;
 use ash::vk;
 use std::ffi::CString;
 use std::ptr;
+use std::sync::Arc;
 
 /// A Vulkan pipeline paired with a pipeline layout.
 pub struct Pipeline {
@@ -9,14 +10,14 @@ pub struct Pipeline {
     pub pipeline: vk::Pipeline,
     /// The raw Vulkan pipeline layout.
     pub layout: vk::PipelineLayout,
+    device: Arc<ash::Device>,
 }
 
-impl Pipeline {
-    /// Destroys both the pipeline and the pipeline layout.
-    pub fn destroy(&self, device: &ash::Device) {
+impl Drop for Pipeline {
+    fn drop(&mut self) {
         unsafe {
-            device.destroy_pipeline_layout(self.layout, None);
-            device.destroy_pipeline(self.pipeline, None);
+            self.device.destroy_pipeline_layout(self.layout, None);
+            self.device.destroy_pipeline(self.pipeline, None);
         }
     }
 }
@@ -81,7 +82,7 @@ impl PipelineBuilder {
     /// - `set_layout`: the layout of all descriptor sets used by this pipeline
     pub fn build(
         self,
-        device: &ash::Device,
+        device: Arc<ash::Device>,
         renderpass: vk::RenderPass,
         viewport_extent: vk::Extent2D,
         set_layout: &[vk::DescriptorSetLayout],
@@ -94,7 +95,7 @@ impl PipelineBuilder {
                 p_next: ptr::null(),
                 flags: vk::PipelineShaderStageCreateFlags::empty(),
                 stage: *stage,
-                module: create_shader_module(device, shader),
+                module: create_shader_module(&device, shader),
                 p_name: func.as_c_str().as_ptr(),
                 p_specialization_info: ptr::null(),
             })
@@ -193,8 +194,12 @@ impl PipelineBuilder {
         .expect("Failed to create Graphics Pipeline")[0];
         shader_stages
             .iter()
-            .for_each(|ci| destroy_shader_module(device, ci.module));
-        Pipeline { pipeline, layout }
+            .for_each(|ci| destroy_shader_module(&device, ci.module));
+        Pipeline {
+            pipeline,
+            layout,
+            device,
+        }
     }
 
     /// Disables the depth-test for the pipeline.
