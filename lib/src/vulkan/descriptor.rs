@@ -202,7 +202,7 @@ pub struct DescriptorSetLayoutCache {
 
 impl DescriptorSetLayoutCache {
     /// Creates an empty descriptor set layout cache
-    fn empty(device: Arc<ash::Device>) -> DescriptorSetLayoutCache {
+    pub fn new(device: Arc<ash::Device>) -> DescriptorSetLayoutCache {
         DescriptorSetLayoutCache {
             cache: HashMap::new(),
             device,
@@ -255,20 +255,10 @@ pub struct DescriptorSetManager {
 }
 
 impl DescriptorSetManager {
-    /// Creates a new descriptor set manager with the given average usage
-    pub fn new(
-        device: Arc<ash::Device>,
-        avg_desc: &[(vk::DescriptorType, f32)],
-    ) -> DescriptorSetManager {
-        let alloc = DescriptorAllocator::new(device.clone(), avg_desc);
-        let cache = Arc::new(Mutex::new(DescriptorSetLayoutCache::empty(device)));
-        DescriptorSetManager { cache, alloc }
-    }
-
     /// Creates a new empty descriptor set manager, sharing an existing cache.
     /// The cache can be obtained from an existing manager with the [DescriptorSetManager::cache]
     /// function.
-    pub fn with_cache(
+    pub fn new(
         device: Arc<ash::Device>,
         avg_desc: &[(vk::DescriptorType, f32)],
         cache: DLayoutCache,

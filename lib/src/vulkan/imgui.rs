@@ -76,8 +76,7 @@ impl ImguiRenderer {
         let vertex_size = INITIAL_VERTEX_SIZE;
         let index_size = INITIAL_INDEX_SIZE;
         let avg_sizes = [(vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0)];
-        let mut dm =
-            DescriptorSetManager::with_cache(device.logical_clone(), &avg_sizes, layout_cache);
+        let mut dm = DescriptorSetManager::new(device.logical_clone(), &avg_sizes, layout_cache);
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
         let fonts_gpu_buf;
         {

@@ -1,6 +1,6 @@
 use super::acceleration::{SceneAS, SceneASBuilder};
 use super::cmd::CommandManager;
-use super::descriptor::{DLayoutCache, Descriptor, DescriptorSetManager};
+use super::descriptor::{Descriptor, DescriptorSetManager};
 use super::device::Device;
 use super::instance::Instance;
 use super::memory::{AllocatedBuffer, MemoryManager};
@@ -91,11 +91,11 @@ impl UnfinishedExecutions {
 
 impl VulkanScene {
     /// Converts a parsed scene into a vulkan scene.
-    /// wchan is used to send feedbacks about the current loading status.
-    pub(super) fn load(
+    ///
+    /// `wchan` is used to send feedbacks about the current loading status.
+    pub fn load(
         instance: Arc<PresentInstance>,
         mut parsed: Box<dyn ParsedScene + Send>,
-        desc_cache: DLayoutCache,
         wchan: Sender<String>,
     ) -> Result<Self, std::io::Error> {
         let device = instance.device();
@@ -110,8 +110,11 @@ impl VulkanScene {
             (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
             (vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.5),
         ];
-        let mut dm =
-            DescriptorSetManager::with_cache(device.logical_clone(), &avg_desc, desc_cache);
+        let mut dm = DescriptorSetManager::new(
+            device.logical_clone(),
+            &avg_desc,
+            instance.desc_layout_cache(),
+        );
         wchan.send("[1/4] Loading vertices...".to_string()).ok();
         let vertex_buffer = load_vertices_to_gpu(
             device,

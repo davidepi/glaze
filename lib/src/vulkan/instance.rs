@@ -1,15 +1,17 @@
+use super::descriptor::DLayoutCache;
+use super::memory::MemoryManager;
 #[cfg(debug_assertions)]
 use crate::vulkan::debug::logger::VkDebugLogger;
 use crate::vulkan::debug::ValidationLayers;
+use crate::vulkan::descriptor::DescriptorSetLayoutCache;
 use crate::vulkan::device::{Device, SurfaceSupport};
 use crate::vulkan::surface::Surface;
 use crate::DeviceInfo;
 use ash::vk;
 use std::ffi::{c_void, CStr, CString};
 use std::ptr;
+use std::sync::{Arc, Mutex};
 use winit::window::Window;
-
-use super::memory::MemoryManager;
 
 /// Raytrace features require a verbose setup and I need to do it twice
 /// This cannot be put in a function because it uses pointers (maybe I can pin? however this works)
@@ -59,6 +61,9 @@ pub trait Instance {
 
     /// Returns the memory manager for this instance.
     fn allocator(&self) -> &MemoryManager;
+
+    /// Returns the descriptors used across this device.
+    fn desc_layout_cache(&self) -> DLayoutCache;
 }
 
 /// Vulkan instance for a device supporting a presentation surface.
@@ -74,6 +79,7 @@ pub struct PresentInstance {
     enabled_extensions: Vec<String>,
     raytrace: bool,
     surface: Surface,
+    cache: DLayoutCache,
     mm: MemoryManager,
     device: Device,
     //the following one must be destroyed for last
@@ -150,6 +156,9 @@ impl PresentInstance {
                 device.physical().device,
                 true,
             );
+            let cache = Arc::new(Mutex::new(DescriptorSetLayoutCache::new(
+                device.logical_clone(),
+            )));
             let enabled_extensions = device_extensions
                 .into_iter()
                 .map(CStr::to_bytes)
@@ -162,6 +171,7 @@ impl PresentInstance {
                 enabled_extensions,
                 raytrace: true,
                 surface,
+                cache,
                 mm,
                 device,
                 instance,
@@ -176,6 +186,9 @@ impl PresentInstance {
                 &surface,
             );
             if let Some(device) = maybe_device {
+                let cache = Arc::new(Mutex::new(DescriptorSetLayoutCache::new(
+                    device.logical_clone(),
+                )));
                 let mm = MemoryManager::new(
                     &instance.instance,
                     device.logical_clone(),
@@ -194,6 +207,7 @@ impl PresentInstance {
                     enabled_extensions,
                     raytrace: false,
                     surface,
+                    cache,
                     mm,
                     device,
                     instance,
@@ -248,6 +262,10 @@ impl Instance for PresentInstance {
     fn allocator(&self) -> &MemoryManager {
         &self.mm
     }
+
+    fn desc_layout_cache(&self) -> DLayoutCache {
+        Arc::clone(&self.cache)
+    }
 }
 
 /// Vulkan instance for a device supporting raytracing.
@@ -261,6 +279,7 @@ pub struct RayTraceInstance {
     #[cfg(debug_assertions)]
     _logger: VkDebugLogger,
     enabled_extensions: Vec<String>,
+    cache: DLayoutCache,
     mm: MemoryManager,
     device: Device,
     //the following one must be destroyed for last
@@ -313,6 +332,9 @@ impl RayTraceInstance {
             Some(raytracing_features.as_ptr() as *const c_void),
         );
         if let Some(device) = maybe_device {
+            let cache = Arc::new(Mutex::new(DescriptorSetLayoutCache::new(
+                device.logical_clone(),
+            )));
             let mm = MemoryManager::new(
                 &instance.instance,
                 device.logical_clone(),
@@ -329,6 +351,7 @@ impl RayTraceInstance {
                 #[cfg(debug_assertions)]
                 _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
                 enabled_extensions,
+                cache,
                 mm,
                 device,
                 instance,
@@ -354,6 +377,10 @@ impl Instance for RayTraceInstance {
 
     fn allocator(&self) -> &MemoryManager {
         &self.mm
+    }
+
+    fn desc_layout_cache(&self) -> DLayoutCache {
+        Arc::clone(&self.cache)
     }
 }
 

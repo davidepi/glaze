@@ -1,16 +1,19 @@
 use glaze::{
-    parse, Camera, OrthographicCam, PerspectiveCam, RealtimeRenderer, ShaderMat, TextureFormat,
-    VulkanScene,
+    parse, Camera, OrthographicCam, PerspectiveCam, PresentInstance, RealtimeRenderer, ShaderMat,
+    TextureFormat, VulkanScene,
 };
 use imgui::{
     CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
     Selectable, SelectableFlags, Slider, SliderFlags, TextureId, Ui,
 };
 use nfd2::Response;
+use std::sync::mpsc::TryRecvError;
+use std::sync::{mpsc, Arc};
 use std::time::Instant;
 use winit::window::Window;
 
 pub struct UiState {
+    instance: Arc<PresentInstance>,
     open_loading_popup: bool,
     current_tick: usize,
     last_tick_time: Instant,
@@ -30,11 +33,13 @@ pub struct UiState {
     materials_selected: Option<u16>,
     stats_window: bool,
     info_window: bool,
+    loading_scene: Option<SceneLoad>,
 }
 
 impl UiState {
-    pub fn new() -> Self {
+    pub fn new(instance: Arc<PresentInstance>) -> Self {
         UiState {
+            instance,
             open_loading_popup: false,
             current_tick: 0,
             last_tick_time: Instant::now(),
@@ -54,22 +59,26 @@ impl UiState {
             materials_selected: None,
             stats_window: true,
             info_window: false,
+            loading_scene: None,
         }
     }
+}
 
-    pub fn change_scene(&mut self) {
-        self.textures_selected = None;
-        self.materials_selected = None;
-        // I need to open the popup in the same scope of the rendering
-        self.open_loading_popup = true;
-    }
+/// Contains the loading scene state.
+struct SceneLoad {
+    /// The channel receaving updates on the loading progress.
+    reader: mpsc::Receiver<String>,
+    /// Last message extracted from the reader.
+    last_message: String,
+    /// Thread join handle.
+    join_handle: std::thread::JoinHandle<Result<VulkanScene, std::io::Error>>,
 }
 
 pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
     ui.main_menu_bar(|| {
         ui.menu("File", || {
-            if MenuItem::new("Open").build(ui) {
-                open_scene(renderer, state);
+            if MenuItem::new("Open").build(ui) && state.loading_scene.is_none() {
+                open_scene(state);
             }
             if MenuItem::new("Save").build(ui) {
                 if let Some(scene) = renderer.scene_mut() {
@@ -99,19 +108,19 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
         });
     });
     if state.stats_window {
-        window_stats(ui, state, window, renderer);
+        window_stats(ui, window, &state.instance, renderer);
     }
     if state.settings_window {
         window_settings(ui, state, window, renderer);
     }
     if state.textures_window {
-        window_textures(ui, state, window, renderer);
+        window_textures(ui, state, renderer);
     }
     if state.materials_window {
-        window_materials(ui, state, window, renderer);
+        window_materials(ui, state, renderer);
     }
     if state.info_window {
-        window_info(ui, state, window, renderer);
+        window_info(ui, state);
     }
     if state.open_loading_popup {
         state.open_loading_popup = false;
@@ -123,27 +132,49 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
         .movable(false)
         .begin_popup(ui)
     {
-        if let Some(load_msg) = renderer.is_loading() {
-            // let spinner_ticks = ['⠁', '⠂', '⠄', '⡀', '⢀', '⠠', '⠐', '⠈'];
+        // update message if necessary
+        let finished = if let Some(loading) = &mut state.loading_scene {
+            match loading.reader.try_recv() {
+                Ok(msg) => {
+                    loading.last_message = msg;
+                    false
+                }
+                Err(e) => match e {
+                    TryRecvError::Empty => false,
+                    TryRecvError::Disconnected => true,
+                },
+            }
+        } else {
+            true //should never fall here unless some serious bugs exist in the UI
+        };
+        if finished {
+            // swap scene
+            let scene = state
+                .loading_scene
+                .take()
+                .unwrap()
+                .join_handle
+                .join()
+                .expect("Failed to wait thread");
+            match scene {
+                Ok(loaded) => renderer.change_scene(loaded),
+                Err(e) => log::error!("Failed to load scene {e}"),
+            }
+            ui.close_current_popup();
+        } else {
             let spinner_ticks = ['\\', '|', '/', '-'];
             let tick = spinner_ticks[state.current_tick % spinner_ticks.len()];
             if state.last_tick_time.elapsed().as_millis() > 50 {
                 state.current_tick += 1;
                 state.last_tick_time = Instant::now();
             }
-            ui.text(format!("{} {}", tick, load_msg));
-        } else {
-            ui.close_current_popup();
-        };
+            let load_msg = &state.loading_scene.as_ref().unwrap().last_message;
+            ui.text(format!("{tick} {load_msg}"));
+        }
     }
 }
 
-fn window_settings(
-    ui: &Ui,
-    state: &mut UiState,
-    window: &mut Window,
-    renderer: &mut RealtimeRenderer,
-) {
+fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut RealtimeRenderer) {
     let mut closed = state.settings_window;
     imgui::Window::new("Settings")
         .size([400.0, 400.0], Condition::Appearing)
@@ -266,7 +297,7 @@ fn window_settings(
     state.settings_window = closed;
 }
 
-fn window_textures(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut RealtimeRenderer) {
+fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
     let closed = &mut state.textures_window;
     let selected = &mut state.textures_selected;
     let scene = renderer.scene();
@@ -338,7 +369,7 @@ fn channels_to_string(colortype: TextureFormat) -> &'static str {
     }
 }
 
-fn window_materials(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut RealtimeRenderer) {
+fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) {
     let closed = &mut state.materials_window;
     let selected = &mut state.materials_selected;
     let scene = renderer.scene();
@@ -488,9 +519,9 @@ fn texture_selector(
     (selected, clicked_on_preview)
 }
 
-fn window_stats(ui: &Ui, _: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
+fn window_stats(ui: &Ui, window: &Window, instance: &PresentInstance, renderer: &RealtimeRenderer) {
     let inner_sz = window.inner_size();
-    let device = renderer.instance().device_properties();
+    let device = instance.device_properties();
     imgui::Window::new("Stats")
         .size([400.0, 400.0], Condition::Appearing)
         .position([inner_sz.width as f32 - 200.0, 50.0], Condition::Always)
@@ -511,9 +542,9 @@ fn window_stats(ui: &Ui, _: &mut UiState, window: &mut Window, renderer: &mut Re
         });
 }
 
-fn window_info(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut RealtimeRenderer) {
+fn window_info(ui: &Ui, state: &mut UiState) {
     let closed = &mut state.info_window;
-    let device = renderer.instance().device_properties();
+    let device = state.instance.device_properties();
     if let Some(window) = imgui::Window::new("Info")
         .opened(closed)
         .size([300.0, 200.0], Condition::Appearing)
@@ -526,20 +557,30 @@ fn window_info(ui: &Ui, state: &mut UiState, _: &mut Window, renderer: &mut Real
         ui.text(format!("Driver version: {}", device.driver_ver));
         ui.separator();
         ui.text("Loaded extensions:");
-        for ext in renderer.instance().loaded_extensions() {
+        for ext in state.instance.loaded_extensions() {
             ui.text(ext);
         }
         window.end()
     }
 }
 
-fn open_scene(renderer: &mut RealtimeRenderer, state: &mut UiState) {
+fn open_scene(state: &mut UiState) {
     let dialog = nfd2::open_file_dialog(None, None);
     match dialog {
         Ok(Response::Okay(path)) => match parse(path) {
             Ok(parsed) => {
-                renderer.change_scene(parsed);
-                state.change_scene();
+                let (wchan, rchan) = mpsc::channel();
+                let instance_clone = Arc::clone(&state.instance);
+                let thandle =
+                    std::thread::spawn(move || VulkanScene::load(instance_clone, parsed, wchan));
+                state.loading_scene = Some(SceneLoad {
+                    reader: rchan,
+                    last_message: "Loading...".to_string(),
+                    join_handle: thandle,
+                });
+                state.textures_selected = None;
+                state.materials_selected = None;
+                state.open_loading_popup = true;
             }
             Err(err) => log::error!("Failed to parse scene file: {}", err),
         },

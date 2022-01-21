@@ -37,13 +37,13 @@ impl InteractiveView {
             let instance =
                 Arc::new(PresentInstance::new(&window).expect("No GPU or window system found"));
             let renderer = RealtimeRenderer::create(
-                instance,
+                instance.clone(),
                 &mut imgui,
                 default_size.width,
                 default_size.height,
                 1.0,
             );
-            let state = UiState::new();
+            let state = UiState::new(instance);
             Ok(InteractiveView {
                 window,
                 renderer,

@@ -13,7 +13,6 @@ use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
-use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -50,25 +49,10 @@ struct FrameDataBuf {
     descriptor: Descriptor,
 }
 
-/// Contains the loading scene state.
-/// Recall that scene loading is performed asynchronously.
-struct SceneLoad {
-    /// The channel receaving updates on the loading progress.
-    reader: Receiver<String>,
-    /// This arc counter drops to 1 when the scene is loaded (inner value is unused).
-    is_alive: Arc<bool>,
-    /// Last message received from the channel.
-    last_message: String,
-    /// Thread join handle.
-    join_handle: std::thread::JoinHandle<Result<VulkanScene, std::io::Error>>,
-}
-
 /// Realtime renderer capable of rendering a scene to a presentation surface.
 pub struct RealtimeRenderer {
     /// Scene to be rendered.
     scene: Option<VulkanScene>,
-    /// Scene being loaded.
-    scene_loading: Option<SceneLoad>,
     /// Swapchain of the renderer.
     swapchain: Swapchain,
     /// Sampler used to copy the forward pass attachment to the swapchain image.
@@ -131,7 +115,11 @@ impl RealtimeRenderer {
             (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
             (vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0),
         ];
-        let mut dm = DescriptorSetManager::new(instance.device().logical_clone(), &avg_desc);
+        let mut dm = DescriptorSetManager::new(
+            instance.device().logical_clone(),
+            &avg_desc,
+            instance.desc_layout_cache(),
+        );
         let mm = instance.allocator();
         let gcmdm = CommandManager::new(
             instance.device().logical_clone(),
@@ -194,7 +182,6 @@ impl RealtimeRenderer {
         );
         RealtimeRenderer {
             scene: None,
-            scene_loading: None,
             swapchain,
             copy_sampler,
             copy_pipeline,
@@ -259,17 +246,6 @@ impl RealtimeRenderer {
         self.scene.as_ref()
     }
 
-    /// Returns the current loading status of the scene.
-    ///
-    /// Returns None if no scene is being loaded.
-    pub fn is_loading(&self) -> Option<&String> {
-        if let Some(loading) = &self.scene_loading {
-            Some(&loading.last_message)
-        } else {
-            None
-        }
-    }
-
     /// Returns a mutable reference to the scene being renderered.
     ///
     /// Returns None if no scene is loaded.
@@ -328,6 +304,8 @@ impl RealtimeRenderer {
     }
 
     /// Loads a new scene in the renderer.
+    ///
+    /// The scene must be parsed and loaded externally.
     /// # Examples
     /// Basic usage:
     /// ``` no_run
@@ -338,7 +316,7 @@ impl RealtimeRenderer {
     /// let instance = glaze::PresentInstance::new(&window).expect("No GPU found");
     /// let arc_instance = std::sync::Arc::new(instance);
     /// let mut renderer = glaze::RealtimeRenderer::create(
-    ///     arc_instance,
+    ///     arc_instance.clone(),
     ///     &mut imgui,
     ///     window.inner_size().width,
     ///     window.inner_size().height,
@@ -347,59 +325,25 @@ impl RealtimeRenderer {
     /// // parse scene
     /// let scene_path = "/path/to/scene";
     /// let parsed = glaze::parse(scene_path).expect("Failed to parse scene");
-    /// renderer.change_scene(parsed);
+    /// let (wchan, rchan) = std::sync::mpsc::channel();
+    /// let loaded = glaze::VulkanScene::load(arc_instance, parsed, wchan).unwrap();
+    /// renderer.change_scene(loaded);
     /// ```
-    pub fn change_scene(&mut self, parsed: Box<dyn ParsedScene + Send>) {
+    pub fn change_scene(&mut self, mut loaded: VulkanScene) {
         self.wait_idle();
         self.scene.take(); // drop previous scene, if existing
-        let send_cache = self.dm.cache();
-        let instance_clone = self.instance.clone();
-        let is_alive = Arc::new(false);
-        let token_thread = is_alive.clone();
-        let (wchan, rchan) = mpsc::channel();
-        let load_tid = std::thread::spawn(move || {
-            let _is_alive = is_alive;
-            VulkanScene::load(instance_clone, parsed, send_cache, wchan)
-        });
-        self.scene_loading = Some(SceneLoad {
-            reader: rchan,
-            last_message: "Loading...".to_string(),
-            is_alive: token_thread,
-            join_handle: load_tid,
-        });
-    }
-
-    /// Checks if the scene loading is finished and replaces the current loaded scene with the new
-    /// one.
-    fn finish_change_scene(&mut self) {
-        if let Some(scene_loading) = &mut self.scene_loading {
-            if Arc::strong_count(&scene_loading.is_alive) == 1 {
-                // loading finished, swap scene
-                let scene_loading = self.scene_loading.take().unwrap();
-                let scene = scene_loading.join_handle.join().unwrap();
-                if let Ok(mut new) = scene {
-                    let render_size = vk::Extent2D {
-                        width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
-                        height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
-                    };
-                    new.init_pipelines(
-                        render_size,
-                        self.instance.device().logical_clone(),
-                        self.forward_pass.renderpass,
-                        self.frame_data[0].descriptor.layout,
-                    );
-                    self.scene = Some(new);
-                    self.start_time = Instant::now();
-                } else {
-                    log::error!("Failed to load scene");
-                }
-            } else {
-                //still loading, update message (if necessary)
-                if let Ok(msg) = scene_loading.reader.try_recv() {
-                    scene_loading.last_message = msg;
-                }
-            }
-        }
+        let render_size = vk::Extent2D {
+            width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
+            height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
+        };
+        loaded.init_pipelines(
+            render_size,
+            self.instance.device().logical_clone(),
+            self.forward_pass.renderpass,
+            self.frame_data[0].descriptor.layout,
+        );
+        self.scene = Some(loaded);
+        self.start_time = Instant::now();
     }
 
     /// Updates a single material.
@@ -443,7 +387,6 @@ impl RealtimeRenderer {
     /// If there is a GUI to draw, the `imgui_data` should contain the GUI data.
     pub fn draw_frame(&mut self, imgui_data: Option<&imgui::DrawData>) {
         self.stats.update();
-        self.finish_change_scene();
         let frame_sync = self.sync.get(self.frame_no);
         let device = self.instance.device().logical();
         frame_sync.wait_acquire(device);
