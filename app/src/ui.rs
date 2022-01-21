@@ -6,7 +6,7 @@ use imgui::{
     CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
     Selectable, SelectableFlags, Slider, SliderFlags, TextureId, Ui,
 };
-use nfd2::Response;
+use native_dialog::FileDialog;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
@@ -565,9 +565,9 @@ fn window_info(ui: &Ui, state: &mut UiState) {
 }
 
 fn open_scene(state: &mut UiState) {
-    let dialog = nfd2::open_file_dialog(None, None);
+    let dialog = FileDialog::new().show_open_single_file();
     match dialog {
-        Ok(Response::Okay(path)) => match parse(path) {
+        Ok(Some(path)) => match parse(path) {
             Ok(parsed) => {
                 let (wchan, rchan) = mpsc::channel();
                 let instance_clone = Arc::clone(&state.instance);
@@ -584,7 +584,7 @@ fn open_scene(state: &mut UiState) {
             }
             Err(err) => log::error!("Failed to parse scene file: {}", err),
         },
-        Ok(Response::Cancel) => (),
+        Ok(None) => (),
         _ => log::error!("Error opening file dialog"),
     }
 }
