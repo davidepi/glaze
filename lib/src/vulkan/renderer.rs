@@ -546,7 +546,6 @@ impl RealtimeRenderer {
                     .expect("Failed to submit render task");
             }
             self.swapchain.queue_present(queue.queue, &present_ci);
-            self.mm.free_deferred();
             self.frame_no += 1;
             self.stats.done_frame();
         } else {

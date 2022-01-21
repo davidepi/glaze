@@ -55,6 +55,9 @@ pub struct ImguiRenderer {
     dm: DescriptorSetManager,
     /// descriptors of the various textures
     tex_descs: FnvHashMap<u16, Descriptor>,
+    /// Buffers that cannot be freed immediately, as they require the GPU to finish first.
+    /// The first value is the number of invokation of the "draw" method before they are dropped.
+    free_later: Vec<(u8, AllocatedBuffer)>,
     /// vulkan device handle
     device: Arc<ash::Device>,
 }
@@ -196,6 +199,7 @@ impl ImguiRenderer {
             sampler,
             dm,
             tex_descs: FnvHashMap::default(),
+            free_later: Vec::new(),
             device: device.logical_clone(),
         }
     }
@@ -229,7 +233,7 @@ impl ImguiRenderer {
             );
             self.vertex_size = new_size;
             std::mem::swap(&mut self.vertex_buf, &mut new_vertex_buf);
-            mm.deferred_free(new_vertex_buf, 2);
+            self.free_later.push((5, new_vertex_buf));
         }
         // reallocate index buffer if not enough
         let idx_required_mem =
@@ -244,7 +248,7 @@ impl ImguiRenderer {
             );
             self.index_size = new_size;
             std::mem::swap(&mut self.index_buf, &mut new_index_buf);
-            mm.deferred_free(new_index_buf, 2);
+            self.free_later.push((5, new_index_buf));
         }
         // setup pipeline
         let scale = Vec2::new(
@@ -470,6 +474,17 @@ impl ImguiRenderer {
                 }
             }
         }
+        self.free_deferred_buffers();
+    }
+
+    /// Decreases the counter of deferred frees and drops them when the counter is 0.
+    ///
+    /// Deferred frees are buffers that will be used in the next frame only. So they cannot be
+    /// dropped immediately (the GPU has to complete the frame first).
+    fn free_deferred_buffers(&mut self) {
+        //TODO: replace with retain_mut once stable
+        self.free_later.retain(|(t, _)| *t > 0);
+        self.free_later.iter_mut().for_each(|(t, _)| *t -= 1);
     }
 }
 

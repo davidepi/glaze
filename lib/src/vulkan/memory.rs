@@ -86,8 +86,8 @@ impl std::fmt::Debug for AllocatedImage {
 }
 
 /// Manages allocations performed on the GPU.
+#[derive(Clone)]
 pub struct MemoryManager {
-    deferred_buffers: Vec<(u8, AllocatedBuffer)>,
     allocator: Arc<Mutex<Allocator>>,
     device: Arc<ash::Device>,
 }
@@ -131,11 +131,7 @@ impl MemoryManager {
         let allocator = Arc::new(Mutex::new(
             Allocator::new(&acd).expect("Failed to create memory allocator"),
         ));
-        MemoryManager {
-            deferred_buffers: Vec::new(),
-            allocator,
-            device,
-        }
+        MemoryManager { allocator, device }
     }
 
     /// Creates a new AllocatedBuffer with the given name, size, usage and location.
@@ -263,43 +259,6 @@ impl MemoryManager {
             allocation: Some(allocation),
             device: self.device.clone(),
             allocator: self.allocator.clone(),
-        }
-    }
-
-    /// Adds a buffer to be freed after a certain amount of time.
-    ///
-    /// Time is expressed in "ticks". Each invocation of the [MemoryManager::free_deferred] will
-    /// delete all the buffers with wait_time equal to 0, and decrement the remainings by 1.
-    ///
-    /// This method is particularly useful when the buffer is allocated for a single frame and
-    /// cannot be freed until the frame has completed also on the GPU.
-    pub fn deferred_free(&mut self, buf: AllocatedBuffer, wait_time: u8) {
-        self.deferred_buffers.push((wait_time, buf));
-    }
-
-    /// Updates the wait time of the buffers passed with [MemoryManager::deferred_free].
-    ///
-    /// Frees all the buffers with wait_time equal to 0, then proceeds to decrease the counter of
-    /// every other buffer by 1.
-    pub fn free_deferred(&mut self) {
-        // TODO: replace these two methods with Vec::retain_mut when it's stable
-        self.deferred_buffers
-            .retain(|(wait_time, _)| *wait_time > 0);
-        self.deferred_buffers
-            .iter_mut()
-            .for_each(|(wait_time, _)| *wait_time -= 1);
-    }
-}
-
-impl Clone for MemoryManager {
-    fn clone(&self) -> Self {
-        // deferred buffers can not be accessed in any way it is just a temporary storage for
-        // soon-to-be-deleted stuffs. There is no point in copying the content and deleting it
-        // twice.
-        Self {
-            deferred_buffers: Vec::new(),
-            allocator: self.allocator.clone(),
-            device: self.device.clone(),
         }
     }
 }
