@@ -3,7 +3,7 @@ use super::renderpass::FinalRenderPass;
 use super::sync::PresentFrameSync;
 use ash::vk;
 use std::ptr;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// The swapchain image used as target for the current frame
 pub struct AcquiredImage<'a> {
@@ -20,12 +20,12 @@ pub struct Swapchain {
     extent: vk::Extent2D,
     image_views: Vec<vk::ImageView>,
     render_passes: Vec<FinalRenderPass>,
-    instance: Rc<PresentInstance>,
+    instance: Arc<PresentInstance>,
 }
 
 impl Swapchain {
     /// Creates a new swapchain with the given size.
-    pub fn create(instance: Rc<PresentInstance>, width: u32, height: u32) -> Self {
+    pub fn create(instance: Arc<PresentInstance>, width: u32, height: u32) -> Self {
         swapchain_init(instance, width, height, None)
     }
 
@@ -109,7 +109,7 @@ impl Drop for Swapchain {
 /// Creates a new swapchain with the given size. If an old swapchain is present, it will be recycled
 /// for a faster initialization.
 fn swapchain_init(
-    instance: Rc<PresentInstance>,
+    instance: Arc<PresentInstance>,
     width: u32,
     height: u32,
     old: Option<vk::SwapchainKHR>,

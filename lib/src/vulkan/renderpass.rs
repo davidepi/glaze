@@ -33,7 +33,7 @@ impl RenderPass {
     pub fn forward(
         device: Arc<ash::Device>,
         copy_sampler: vk::Sampler,
-        mm: &mut MemoryManager,
+        mm: &MemoryManager,
         descriptor_creator: &mut DescriptorSetManager,
         extent: vk::Extent2D,
     ) -> RenderPass {

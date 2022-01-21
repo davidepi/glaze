@@ -2,11 +2,13 @@ use super::acceleration::{SceneAS, SceneASBuilder};
 use super::cmd::CommandManager;
 use super::descriptor::{DLayoutCache, Descriptor, DescriptorSetManager};
 use super::device::Device;
+use super::instance::Instance;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::Pipeline;
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{
-    Camera, Material, Mesh, MeshInstance, ParsedScene, ShaderMat, Texture, Transform, Vertex,
+    Camera, Material, Mesh, MeshInstance, ParsedScene, PresentInstance, RayTraceInstance,
+    ShaderMat, Texture, Transform, Vertex,
 };
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
@@ -53,7 +55,8 @@ pub struct VulkanScene {
     pub(super) instances: FnvHashMap<u16, Vec<u16>>,
     /// If the materials changed after loading the scene
     mat_changed: bool,
-    device: Arc<ash::Device>,
+    /// Instance storing this scene.
+    instance: Arc<PresentInstance>,
 }
 
 /// A mesh optimized to be rendered using this crates renderer.
@@ -90,13 +93,14 @@ impl VulkanScene {
     /// Converts a parsed scene into a vulkan scene.
     /// wchan is used to send feedbacks about the current loading status.
     pub(super) fn load(
-        device: &Device,
+        instance: Arc<PresentInstance>,
         mut parsed: Box<dyn ParsedScene + Send>,
-        mm: &mut MemoryManager,
         desc_cache: DLayoutCache,
         wchan: Sender<String>,
-        with_raytrace: bool,
     ) -> Result<Self, std::io::Error> {
+        let device = instance.device();
+        let mm = instance.allocator();
+        let with_raytrace = instance.supports_raytrace();
         let mut unf = UnfinishedExecutions {
             fences: Vec::new(),
             buffers_to_free: Vec::new(),
@@ -203,7 +207,7 @@ impl VulkanScene {
             transforms,
             instances,
             mat_changed: false,
-            device: device.logical_clone(),
+            instance,
         })
     }
 
@@ -362,7 +366,12 @@ impl VulkanScene {
 impl Drop for VulkanScene {
     fn drop(&mut self) {
         self.deinit_pipelines();
-        unsafe { self.device.destroy_sampler(self.sampler, None) };
+        unsafe {
+            self.instance
+                .device()
+                .logical()
+                .destroy_sampler(self.sampler, None)
+        };
     }
 }
 
@@ -402,7 +411,7 @@ fn create_sampler(device: &Device) -> vk::Sampler {
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
 fn load_vertices_to_gpu(
     device: &Device,
-    mm: &mut MemoryManager,
+    mm: &MemoryManager,
     tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
     vertices: &[Vertex],
@@ -458,7 +467,7 @@ fn load_vertices_to_gpu(
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
 fn load_transforms_to_gpu(
     device: &Device,
-    mm: &mut MemoryManager,
+    mm: &MemoryManager,
     tcmdm: &mut CommandManager,
     dm: &mut DescriptorSetManager,
     unfinished: &mut UnfinishedExecutions,
@@ -525,7 +534,7 @@ fn load_transforms_to_gpu(
 /// Returns the list of meshes and the index buffer.
 fn load_indices_to_gpu(
     device: &Device,
-    mm: &mut MemoryManager,
+    mm: &MemoryManager,
     tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
     meshes: &[Mesh],
@@ -685,7 +694,7 @@ fn build_mat_desc_set(
 fn load_materials_parameters(
     device: &Device,
     materials: &[(u16, Material)],
-    mm: &mut MemoryManager,
+    mm: &MemoryManager,
     tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
 ) -> AllocatedBuffer {
@@ -744,7 +753,7 @@ fn load_materials_parameters(
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
 fn load_texture_to_gpu(
     device: &Device,
-    mm: &mut MemoryManager,
+    mm: &MemoryManager,
     tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
     texture: Texture,
@@ -929,6 +938,7 @@ fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
 }
 
 pub struct RayTraceScene {
+    instance: Arc<dyn Instance>,
     vertex_buffer: Arc<AllocatedBuffer>,
     index_buffer: Arc<AllocatedBuffer>,
     acc: SceneAS,
@@ -936,16 +946,17 @@ pub struct RayTraceScene {
 
 impl RayTraceScene {
     pub fn new(
-        device: &Device,
+        instance: Arc<RayTraceInstance>,
         loader: Arc<AccelerationLoader>,
         mut scene: Box<dyn ParsedScene>,
-        mm: &mut MemoryManager,
         ccmdm: &mut CommandManager,
     ) -> Result<Self, std::io::Error> {
         let mut unf = UnfinishedExecutions {
             fences: Vec::new(),
             buffers_to_free: Vec::new(),
         };
+        let mm = instance.allocator();
+        let device = instance.device();
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
         let vertex_buffer =
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?, true);
@@ -958,6 +969,7 @@ impl RayTraceScene {
             .with_meshes(&meshes, &instances, &transforms);
         let acc = builder.build();
         Ok(Self {
+            instance,
             vertex_buffer: Arc::new(vertex_buffer),
             index_buffer: Arc::new(index_buffer),
             acc,
@@ -965,12 +977,13 @@ impl RayTraceScene {
     }
 
     pub fn from(
-        device: &Device,
         loader: Arc<AccelerationLoader>,
         scene: &mut VulkanScene,
-        mm: &mut MemoryManager,
+        mm: &MemoryManager,
         ccmdm: &mut CommandManager,
     ) -> Result<Self, std::io::Error> {
+        let instance = Arc::clone(&scene.instance);
+        let device = instance.device();
         let vertex_buffer = scene.vertex_buffer.clone();
         let index_buffer = scene.index_buffer.clone();
         let instances = scene.file.instances()?;
@@ -979,6 +992,7 @@ impl RayTraceScene {
             .with_meshes(&scene.meshes, &instances, &transforms);
         let acc = builder.build();
         Ok(Self {
+            instance,
             vertex_buffer,
             index_buffer,
             acc,

@@ -136,7 +136,7 @@ impl MemoryManager {
 
     /// Creates a new AllocatedBuffer with the given name, size, usage and location.
     pub fn create_buffer(
-        &mut self,
+        &self,
         name: &'static str,
         size: u64,
         usage: vk::BufferUsageFlags,
@@ -183,7 +183,7 @@ impl MemoryManager {
 
     /// Creates a new AllocatedImage on the GPU memory.
     pub fn create_image_gpu(
-        &mut self,
+        &self,
         name: &'static str,
         format: vk::Format,
         extent: vk::Extent2D,

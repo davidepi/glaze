@@ -1,12 +1,13 @@
 use super::cmd::CommandManager;
 use super::descriptor::{DLayoutCache, Descriptor, DescriptorSetManager};
 use super::device::Device;
-use super::memory::{AllocatedBuffer, AllocatedImage, MemoryManager};
+use super::instance::Instance;
+use super::memory::{AllocatedBuffer, AllocatedImage};
 use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderer::InternalStats;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
-use crate::{include_shader, TextureFormat};
+use crate::{include_shader, PresentInstance, TextureFormat};
 use ash::vk;
 use cgmath::Vector2 as Vec2;
 use fnv::FnvHashMap;
@@ -59,18 +60,19 @@ pub struct ImguiRenderer {
     /// The first value is the number of invokation of the "draw" method before they are dropped.
     free_later: Vec<(u8, AllocatedBuffer)>,
     /// vulkan device handle
-    device: Arc<ash::Device>,
+    instance: Arc<PresentInstance>,
 }
 
 impl ImguiRenderer {
     /// Creates a new imgui renderer
     pub(super) fn new(
         context: &mut imgui::Context,
-        device: &Device,
-        mm: &mut MemoryManager,
+        instance: Arc<PresentInstance>,
         layout_cache: DLayoutCache,
         swapchain: &Swapchain,
     ) -> Self {
+        let device = instance.device();
+        let mm = instance.allocator();
         let vertex_size = INITIAL_VERTEX_SIZE;
         let index_size = INITIAL_INDEX_SIZE;
         let avg_sizes = [(vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0)];
@@ -200,14 +202,24 @@ impl ImguiRenderer {
             dm,
             tex_descs: FnvHashMap::default(),
             free_later: Vec::new(),
-            device: device.logical_clone(),
+            instance,
         }
     }
 
     /// Updates the underlying swapchain (and therefore the imgui render size)
     pub(super) fn update_swapchain(&mut self, swapchain: &Swapchain) {
-        self.pipeline = build_imgui_pipeline(self.device.clone(), swapchain, &self.font.1, false);
-        self.pipeline_bw = build_imgui_pipeline(self.device.clone(), swapchain, &self.font.1, true);
+        self.pipeline = build_imgui_pipeline(
+            self.instance.device().logical_clone(),
+            swapchain,
+            &self.font.1,
+            false,
+        );
+        self.pipeline_bw = build_imgui_pipeline(
+            self.instance.device().logical_clone(),
+            swapchain,
+            &self.font.1,
+            true,
+        );
     }
 
     /// draw the ui. This should be called inside an existing render pass.
@@ -216,10 +228,12 @@ impl ImguiRenderer {
         &mut self,
         cmd: vk::CommandBuffer,
         draw_data: &imgui::DrawData,
-        mm: &mut MemoryManager,
         scene: Option<&VulkanScene>,
         stats: &mut InternalStats,
     ) {
+        let device = self.instance.device();
+        let vkdevice = device.logical();
+        let mm = self.instance.allocator();
         // reallocate vertex buffer if not enough
         let vert_required_mem =
             (draw_data.total_vtx_count as usize * std::mem::size_of::<imgui::DrawVert>()) as u64;
@@ -261,19 +275,19 @@ impl ImguiRenderer {
         );
         let imguipc = ImguiPC { scale, translate };
         unsafe {
-            self.device.cmd_bind_pipeline(
+            vkdevice.cmd_bind_pipeline(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.pipeline,
             );
-            self.device.cmd_push_constants(
+            vkdevice.cmd_push_constants(
                 cmd,
                 self.pipeline.layout,
                 vk::ShaderStageFlags::VERTEX,
                 0,
                 as_u8_slice(&imguipc),
             );
-            self.device.cmd_bind_descriptor_sets(
+            vkdevice.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.layout,
@@ -290,7 +304,7 @@ impl ImguiRenderer {
         let clip_scale = draw_data.framebuffer_scale;
         for draw_list in draw_data.draw_lists() {
             unsafe {
-                self.device.cmd_bind_vertex_buffers(
+                vkdevice.cmd_bind_vertex_buffers(
                     cmd,
                     0,
                     &[self.vertex_buf.buffer],
@@ -298,7 +312,7 @@ impl ImguiRenderer {
                 )
             };
             unsafe {
-                self.device.cmd_bind_index_buffer(
+                vkdevice.cmd_bind_index_buffer(
                     cmd,
                     self.index_buf.buffer,
                     idx_offset as u64 * std::mem::size_of::<imgui::DrawIdx>() as u64,
@@ -361,12 +375,12 @@ impl ImguiRenderer {
                                     // set default pipeline
                                     pipeline_bw = false;
                                     unsafe {
-                                        self.device.cmd_bind_pipeline(
+                                        vkdevice.cmd_bind_pipeline(
                                             cmd,
                                             vk::PipelineBindPoint::GRAPHICS,
                                             self.pipeline.pipeline,
                                         );
-                                        self.device.cmd_push_constants(
+                                        vkdevice.cmd_push_constants(
                                             cmd,
                                             self.pipeline.layout,
                                             vk::ShaderStageFlags::VERTEX,
@@ -376,7 +390,7 @@ impl ImguiRenderer {
                                     }
                                 }
                                 unsafe {
-                                    self.device.cmd_bind_descriptor_sets(
+                                    vkdevice.cmd_bind_descriptor_sets(
                                         cmd,
                                         vk::PipelineBindPoint::GRAPHICS,
                                         self.pipeline.layout,
@@ -410,12 +424,12 @@ impl ImguiRenderer {
                                     // set default pipeline
                                     pipeline_bw = false;
                                     unsafe {
-                                        self.device.cmd_bind_pipeline(
+                                        vkdevice.cmd_bind_pipeline(
                                             cmd,
                                             vk::PipelineBindPoint::GRAPHICS,
                                             self.pipeline.pipeline,
                                         );
-                                        self.device.cmd_push_constants(
+                                        vkdevice.cmd_push_constants(
                                             cmd,
                                             self.pipeline.layout,
                                             vk::ShaderStageFlags::VERTEX,
@@ -428,12 +442,12 @@ impl ImguiRenderer {
                                     // set bw pipeline
                                     pipeline_bw = true;
                                     unsafe {
-                                        self.device.cmd_bind_pipeline(
+                                        vkdevice.cmd_bind_pipeline(
                                             cmd,
                                             vk::PipelineBindPoint::GRAPHICS,
                                             self.pipeline_bw.pipeline,
                                         );
-                                        self.device.cmd_push_constants(
+                                        vkdevice.cmd_push_constants(
                                             cmd,
                                             self.pipeline_bw.layout,
                                             vk::ShaderStageFlags::VERTEX,
@@ -443,7 +457,7 @@ impl ImguiRenderer {
                                     }
                                 }
                                 unsafe {
-                                    self.device.cmd_bind_descriptor_sets(
+                                    vkdevice.cmd_bind_descriptor_sets(
                                         cmd,
                                         vk::PipelineBindPoint::GRAPHICS,
                                         self.pipeline.layout,
@@ -458,8 +472,8 @@ impl ImguiRenderer {
                             bound_texture = texture_id;
                         }
                         unsafe {
-                            self.device.cmd_set_scissor(cmd, 0, &scissors);
-                            self.device.cmd_draw_indexed(
+                            vkdevice.cmd_set_scissor(cmd, 0, &scissors);
+                            vkdevice.cmd_draw_indexed(
                                 cmd,
                                 count as u32,
                                 1,
@@ -490,7 +504,12 @@ impl ImguiRenderer {
 
 impl Drop for ImguiRenderer {
     fn drop(&mut self) {
-        unsafe { self.device.destroy_sampler(self.sampler, None) };
+        unsafe {
+            self.instance
+                .device()
+                .logical()
+                .destroy_sampler(self.sampler, None)
+        };
     }
 }
 

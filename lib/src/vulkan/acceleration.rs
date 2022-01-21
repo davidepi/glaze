@@ -4,14 +4,14 @@ use super::memory::{AllocatedBuffer, MemoryManager};
 use super::scene::VulkanMesh;
 use crate::{MeshInstance, Transform, Vertex};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
-use ash::vk::{self, AccelerationStructureReferenceKHR, Packed24_8};
+use ash::vk;
 use fnv::{FnvBuildHasher, FnvHashMap};
 use gpu_allocator::MemoryLocation;
 use std::ptr;
 use std::sync::Arc;
 
 pub struct AllocatedAS {
-    pub accel: vk::AccelerationStructureKHR,
+    pub accel: ash::vk::AccelerationStructureKHR,
     pub buffer: AllocatedBuffer,
     loader: Arc<AccelerationLoader>,
 }
@@ -33,7 +33,7 @@ pub struct SceneASBuilder<'scene, 'renderer> {
     transform: FnvHashMap<u16, &'scene Transform>,
     vb: &'scene AllocatedBuffer,
     ib: &'scene AllocatedBuffer,
-    mm: &'renderer mut MemoryManager,
+    mm: &'renderer MemoryManager,
     ccmdm: &'renderer mut CommandManager,
     device: &'renderer Device,
     loader: Arc<AccelerationLoader>,
@@ -43,7 +43,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
     pub fn new(
         device: &'renderer Device,
         loader: Arc<AccelerationLoader>,
-        mm: &'renderer mut MemoryManager,
+        mm: &'renderer MemoryManager,
         ccmdm: &'renderer mut CommandManager,
         vertex_buffer: &'scene AllocatedBuffer,
         index_buffer: &'scene AllocatedBuffer,
@@ -318,12 +318,12 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             };
             let ci = vk::AccelerationStructureInstanceKHR {
                 transform: transform.to_vulkan_transform(),
-                instance_custom_index_and_mask: Packed24_8::new(instance_id as u32, 0xFF),
-                instance_shader_binding_table_record_offset_and_flags: Packed24_8::new(
+                instance_custom_index_and_mask: vk::Packed24_8::new(instance_id as u32, 0xFF),
+                instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
                     0,
                     vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as u8,
                 ),
-                acceleration_structure_reference: AccelerationStructureReferenceKHR {
+                acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
                     device_handle: as_addr,
                 },
             };
@@ -477,7 +477,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
 
 fn allocate_as(
     loader: Arc<AccelerationLoader>,
-    mm: &mut MemoryManager,
+    mm: &MemoryManager,
     size: u64,
     is_blas: bool,
 ) -> AllocatedAS {

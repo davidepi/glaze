@@ -9,6 +9,8 @@ use std::ffi::{c_void, CStr, CString};
 use std::ptr;
 use winit::window::Window;
 
+use super::memory::MemoryManager;
+
 /// Raytrace features require a verbose setup and I need to do it twice
 /// This cannot be put in a function because it uses pointers (maybe I can pin? however this works)
 macro_rules! raytrace_features {
@@ -54,6 +56,9 @@ pub trait Instance {
 
     /// Returns the list of extensions enabled for this instance.
     fn extensions(&self) -> &[String];
+
+    /// Returns the memory manager for this instance.
+    fn allocator(&self) -> &MemoryManager;
 }
 
 /// Vulkan instance for a device supporting a presentation surface.
@@ -66,10 +71,11 @@ pub trait Instance {
 pub struct PresentInstance {
     #[cfg(debug_assertions)]
     _logger: VkDebugLogger,
-    surface: Surface,
-    device: Device,
-    raytrace: bool,
     enabled_extensions: Vec<String>,
+    raytrace: bool,
+    surface: Surface,
+    mm: MemoryManager,
+    device: Device,
     //the following one must be destroyed for last
     instance: BasicInstance,
 }
@@ -138,6 +144,12 @@ impl PresentInstance {
             &surface,
         );
         if let Some(device) = maybe_raytrace_device {
+            let mm = MemoryManager::new(
+                &instance.instance,
+                device.logical_clone(),
+                device.physical().device,
+                true,
+            );
             let enabled_extensions = device_extensions
                 .into_iter()
                 .map(CStr::to_bytes)
@@ -147,10 +159,11 @@ impl PresentInstance {
             Some(PresentInstance {
                 #[cfg(debug_assertions)]
                 _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
-                surface,
-                device,
-                raytrace: true,
                 enabled_extensions,
+                raytrace: true,
+                surface,
+                mm,
+                device,
                 instance,
             })
         } else {
@@ -163,6 +176,12 @@ impl PresentInstance {
                 &surface,
             );
             if let Some(device) = maybe_device {
+                let mm = MemoryManager::new(
+                    &instance.instance,
+                    device.logical_clone(),
+                    device.physical().device,
+                    false,
+                );
                 let enabled_extensions = device_extensions
                     .into_iter()
                     .map(CStr::to_bytes)
@@ -172,10 +191,11 @@ impl PresentInstance {
                 Some(PresentInstance {
                     #[cfg(debug_assertions)]
                     _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
-                    surface,
-                    device,
-                    raytrace: false,
                     enabled_extensions,
+                    raytrace: false,
+                    surface,
+                    mm,
+                    device,
                     instance,
                 })
             } else {
@@ -224,6 +244,10 @@ impl Instance for PresentInstance {
     fn extensions(&self) -> &[String] {
         &self.enabled_extensions
     }
+
+    fn allocator(&self) -> &MemoryManager {
+        &self.mm
+    }
 }
 
 /// Vulkan instance for a device supporting raytracing.
@@ -236,8 +260,9 @@ impl Instance for PresentInstance {
 pub struct RayTraceInstance {
     #[cfg(debug_assertions)]
     _logger: VkDebugLogger,
-    device: Device,
     enabled_extensions: Vec<String>,
+    mm: MemoryManager,
+    device: Device,
     //the following one must be destroyed for last
     instance: BasicInstance,
 }
@@ -288,6 +313,12 @@ impl RayTraceInstance {
             Some(raytracing_features.as_ptr() as *const c_void),
         );
         if let Some(device) = maybe_device {
+            let mm = MemoryManager::new(
+                &instance.instance,
+                device.logical_clone(),
+                device.physical().device,
+                true,
+            );
             let enabled_extensions = device_extensions
                 .into_iter()
                 .map(CStr::to_bytes)
@@ -297,8 +328,9 @@ impl RayTraceInstance {
             Some(RayTraceInstance {
                 #[cfg(debug_assertions)]
                 _logger: VkDebugLogger::new(&instance.entry, &instance.instance),
-                device,
                 enabled_extensions,
+                mm,
+                device,
                 instance,
             })
         } else {
@@ -318,6 +350,10 @@ impl Instance for RayTraceInstance {
 
     fn extensions(&self) -> &[String] {
         &self.enabled_extensions
+    }
+
+    fn allocator(&self) -> &MemoryManager {
+        &self.mm
     }
 }
 

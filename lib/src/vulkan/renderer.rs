@@ -2,7 +2,7 @@ use super::cmd::CommandManager;
 use super::descriptor::{Descriptor, DescriptorSetManager};
 use super::imgui::ImguiRenderer;
 use super::instance::{Instance, PresentInstance};
-use super::memory::{AllocatedBuffer, MemoryManager};
+use super::memory::AllocatedBuffer;
 use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderpass::RenderPass;
 use super::scene::{RayTraceScene, VulkanScene};
@@ -13,7 +13,6 @@ use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
-use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -98,10 +97,8 @@ pub struct RealtimeRenderer {
     frame_no: usize,
     /// Stats about the renderer.
     stats: InternalStats,
-    /// Manager for the memory allocation.
-    mm: MemoryManager,
     /// Vulkan instance.
-    instance: Rc<PresentInstance>,
+    instance: Arc<PresentInstance>,
 }
 
 impl RealtimeRenderer {
@@ -114,9 +111,9 @@ impl RealtimeRenderer {
     /// let window = winit::window::Window::new(&event_loop).unwrap();
     /// let mut imgui = imgui::Context::create();
     /// let instance = glaze::PresentInstance::new(&window).expect("No GPU found");
-    /// let rc_instance = std::rc::Rc::new(instance);
+    /// let arc_instance = std::sync::Arc::new(instance);
     /// let renderer = glaze::RealtimeRenderer::create(
-    ///     rc_instance,
+    ///     arc_instance,
     ///     &mut imgui,
     ///     window.inner_size().width,
     ///     window.inner_size().height,
@@ -124,7 +121,7 @@ impl RealtimeRenderer {
     /// );
     /// ```
     pub fn create(
-        instance: Rc<PresentInstance>,
+        instance: Arc<PresentInstance>,
         imgui: &mut imgui::Context,
         window_width: u32,
         window_height: u32,
@@ -135,12 +132,7 @@ impl RealtimeRenderer {
             (vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0),
         ];
         let mut dm = DescriptorSetManager::new(instance.device().logical_clone(), &avg_desc);
-        let mut mm = MemoryManager::new(
-            instance.instance(),
-            instance.device().logical_clone(),
-            instance.device().physical().device,
-            instance.supports_raytrace(),
-        );
+        let mm = instance.allocator();
         let gcmdm = CommandManager::new(
             instance.device().logical_clone(),
             instance.device().graphic_queue().idx,
@@ -188,13 +180,12 @@ impl RealtimeRenderer {
         let mut forward_pass = RenderPass::forward(
             instance.device().logical_clone(),
             copy_sampler,
-            &mut mm,
+            mm,
             &mut dm,
             render_size,
         );
         forward_pass.clear_color[0].color.float32 = clear_color;
-        let imgui_renderer =
-            ImguiRenderer::new(imgui, instance.device(), &mut mm, dm.cache(), &swapchain);
+        let imgui_renderer = ImguiRenderer::new(imgui, instance.clone(), dm.cache(), &swapchain);
         let copy_pipeline = create_copy_pipeline(
             instance.device().logical_clone(),
             swapchain.extent(),
@@ -218,7 +209,6 @@ impl RealtimeRenderer {
             render_scale,
             frame_no: 0,
             stats: InternalStats::default(),
-            mm,
             instance,
         }
     }
@@ -310,10 +300,11 @@ impl RealtimeRenderer {
             width: (window_width as f32 * scale) as u32,
             height: (window_height as f32 * scale) as u32,
         };
+        let mm = self.instance.allocator();
         let mut forward_pass = RenderPass::forward(
             self.instance.device().logical_clone(),
             self.copy_sampler,
-            &mut self.mm,
+            mm,
             &mut self.dm,
             render_size,
         );
@@ -345,9 +336,9 @@ impl RealtimeRenderer {
     /// let window = winit::window::Window::new(&event_loop).unwrap();
     /// let mut imgui = imgui::Context::create();
     /// let instance = glaze::PresentInstance::new(&window).expect("No GPU found");
-    /// let rc_instance = std::rc::Rc::new(instance);
+    /// let arc_instance = std::sync::Arc::new(instance);
     /// let mut renderer = glaze::RealtimeRenderer::create(
-    ///     rc_instance,
+    ///     arc_instance,
     ///     &mut imgui,
     ///     window.inner_size().width,
     ///     window.inner_size().height,
@@ -361,23 +352,14 @@ impl RealtimeRenderer {
     pub fn change_scene(&mut self, parsed: Box<dyn ParsedScene + Send>) {
         self.wait_idle();
         self.scene.take(); // drop previous scene, if existing
-        let mut send_mm = self.mm.clone();
         let send_cache = self.dm.cache();
-        let device_clone = self.instance.device().clone();
+        let instance_clone = self.instance.clone();
         let is_alive = Arc::new(false);
         let token_thread = is_alive.clone();
         let (wchan, rchan) = mpsc::channel();
-        let with_raytrace = self.instance().supports_raytrace();
         let load_tid = std::thread::spawn(move || {
             let _is_alive = is_alive;
-            VulkanScene::load(
-                &device_clone,
-                parsed,
-                &mut send_mm,
-                send_cache,
-                wchan,
-                with_raytrace,
-            )
+            VulkanScene::load(instance_clone, parsed, send_cache, wchan)
         });
         self.scene_loading = Some(SceneLoad {
             reader: rchan,
@@ -445,10 +427,8 @@ impl RealtimeRenderer {
         if self.instance.supports_raytrace() {
             if let Some(scene) = &mut self.scene {
                 let instance = self.instance.clone();
-                let mm = self.mm.clone();
                 Some(
-                    RayTraceRenderer::from_realtime(instance, mm, scene)
-                        .expect("Failed to read scene"),
+                    RayTraceRenderer::from_realtime(instance, scene).expect("Failed to read scene"),
                 )
             } else {
                 None
@@ -501,13 +481,8 @@ impl RealtimeRenderer {
                 // tried doing it on its own attachment but results in blending problems
                 if let Some(dd) = imgui_data {
                     if dd.total_vtx_count > 0 {
-                        self.imgui_renderer.draw(
-                            cmd,
-                            dd,
-                            &mut self.mm,
-                            self.scene.as_ref(),
-                            &mut self.stats,
-                        );
+                        self.imgui_renderer
+                            .draw(cmd, dd, self.scene.as_ref(), &mut self.stats);
                     }
                 }
                 acquired.renderpass.end(cmd);
@@ -743,42 +718,33 @@ impl InternalStats {
 pub struct RayTraceRenderer {
     scene: RayTraceScene,
     ccmdm: CommandManager,
-    mm: MemoryManager,
     loader: Arc<AccelerationLoader>,
-    instance: Rc<dyn Instance>,
+    instance: Arc<dyn Instance>,
 }
 
 impl RayTraceRenderer {
     pub fn new(
-        instance: Rc<RayTraceInstance>,
+        instance: Arc<RayTraceInstance>,
         scene: Box<dyn ParsedScene>,
     ) -> Result<RayTraceRenderer, std::io::Error> {
         let device = instance.device();
         let compute = device.compute_queue();
         let mut ccmdm = CommandManager::new(device.logical_clone(), compute.idx, 15);
-        let mut mm = MemoryManager::new(
-            instance.instance(),
-            device.logical_clone(),
-            device.physical().device,
-            true,
-        );
         let loader = Arc::new(AccelerationLoader::new(
             instance.instance(),
             device.logical(),
         ));
-        let scene = RayTraceScene::new(device, loader.clone(), scene, &mut mm, &mut ccmdm)?;
+        let scene = RayTraceScene::new(instance.clone(), loader.clone(), scene, &mut ccmdm)?;
         Ok(RayTraceRenderer {
             scene,
             ccmdm,
-            mm,
             loader,
             instance,
         })
     }
 
     fn from_realtime(
-        instance: Rc<PresentInstance>,
-        mut mm: MemoryManager,
+        instance: Arc<PresentInstance>,
         scene: &mut VulkanScene,
     ) -> Result<RayTraceRenderer, std::io::Error> {
         let device = instance.device();
@@ -788,11 +754,11 @@ impl RayTraceRenderer {
             instance.instance(),
             device.logical(),
         ));
-        let scene = RayTraceScene::from(device, loader.clone(), scene, &mut mm, &mut ccmdm)?;
+        let mm = instance.allocator();
+        let scene = RayTraceScene::from(loader.clone(), scene, mm, &mut ccmdm)?;
         Ok(RayTraceRenderer {
             scene,
             ccmdm,
-            mm,
             loader,
             instance,
         })
@@ -804,7 +770,7 @@ mod tests {
     use super::RayTraceRenderer;
     use crate::{parse, RayTraceInstance};
     use std::path::PathBuf;
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     #[test]
     fn load_raytrace() {
@@ -817,7 +783,7 @@ mod tests {
                 .join("cube.glaze");
 
             let parsed = parse(path).unwrap();
-            let _ = RayTraceRenderer::new(Rc::new(instance), parsed).unwrap();
+            let _ = RayTraceRenderer::new(Arc::new(instance), parsed).unwrap();
         } else {
             // SKIPPED does not exists in carg test...
         }
