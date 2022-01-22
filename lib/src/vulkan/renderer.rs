@@ -8,6 +8,7 @@ use super::renderpass::RenderPass;
 use super::scene::{RayTraceScene, VulkanScene};
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
+use super::AllocatedImage;
 use crate::{include_shader, Camera, Material, ParsedScene, RayTraceInstance};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
@@ -367,12 +368,13 @@ impl RealtimeRenderer {
         }
     }
 
-    pub fn get_raytrace(&mut self) -> Option<RayTraceRenderer> {
+    pub fn get_raytrace(&mut self, width: u32, height: u32) -> Option<RayTraceRenderer> {
         if self.instance.supports_raytrace() {
             if let Some(scene) = &mut self.scene {
                 let instance = self.instance.clone();
                 Some(
-                    RayTraceRenderer::from_realtime(instance, scene).expect("Failed to read scene"),
+                    RayTraceRenderer::from_realtime(instance, scene, width, height)
+                        .expect("Failed to read scene"),
                 )
             } else {
                 None
@@ -660,6 +662,9 @@ impl InternalStats {
 
 pub struct RayTraceRenderer {
     scene: RayTraceScene,
+    out_img: AllocatedImage,
+    descriptor: Descriptor,
+    dm: DescriptorSetManager,
     ccmdm: CommandManager,
     loader: Arc<AccelerationLoader>,
     instance: Arc<dyn Instance>,
@@ -669,6 +674,8 @@ impl RayTraceRenderer {
     pub fn new(
         instance: Arc<RayTraceInstance>,
         scene: Box<dyn ParsedScene>,
+        width: u32,
+        height: u32,
     ) -> Result<RayTraceRenderer, std::io::Error> {
         let device = instance.device();
         let compute = device.compute_queue();
@@ -678,17 +685,15 @@ impl RayTraceRenderer {
             device.logical(),
         ));
         let scene = RayTraceScene::new(instance.clone(), loader.clone(), scene, &mut ccmdm)?;
-        Ok(RayTraceRenderer {
-            scene,
-            ccmdm,
-            loader,
-            instance,
-        })
+        let extent = vk::Extent2D { width, height };
+        Ok(init_rt(instance, loader, ccmdm, scene, extent))
     }
 
     fn from_realtime(
         instance: Arc<PresentInstance>,
         scene: &mut VulkanScene,
+        width: u32,
+        height: u32,
     ) -> Result<RayTraceRenderer, std::io::Error> {
         let device = instance.device();
         let compute = device.compute_queue();
@@ -699,12 +704,79 @@ impl RayTraceRenderer {
         ));
         let mm = instance.allocator();
         let scene = RayTraceScene::from(loader.clone(), scene, mm, &mut ccmdm)?;
-        Ok(RayTraceRenderer {
-            scene,
-            ccmdm,
-            loader,
-            instance,
-        })
+        let extent = vk::Extent2D { width, height };
+        Ok(init_rt(instance, loader, ccmdm, scene, extent))
+    }
+}
+
+fn init_rt(
+    instance: Arc<dyn Instance>,
+    loader: Arc<AccelerationLoader>,
+    ccmdm: CommandManager,
+    scene: RayTraceScene,
+    extent: vk::Extent2D,
+) -> RayTraceRenderer {
+    const AVG_DESC: [(vk::DescriptorType, f32); 3] = [
+        (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
+        (vk::DescriptorType::STORAGE_BUFFER, 1.0),
+        (vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, 1.0),
+    ];
+    let device = instance.device();
+    let mut dm = DescriptorSetManager::new(
+        device.logical_clone(),
+        &AVG_DESC,
+        instance.desc_layout_cache(),
+    );
+    let vbinfo = vk::DescriptorBufferInfo {
+        buffer: scene.vertex_buffer.buffer,
+        offset: 0,
+        range: scene.vertex_buffer.size,
+    };
+    let ibinfo = vk::DescriptorBufferInfo {
+        buffer: scene.index_buffer.buffer,
+        offset: 0,
+        range: scene.index_buffer.size,
+    };
+    let out_img = instance.allocator().create_image_gpu(
+        "RT out image",
+        vk::Format::R32G32B32A32_SFLOAT,
+        extent,
+        vk::ImageUsageFlags::STORAGE,
+        vk::ImageAspectFlags::COLOR,
+        1,
+    );
+    let outimginfo = vk::DescriptorImageInfo {
+        sampler: vk::Sampler::null(),
+        image_view: out_img.image_view,
+        image_layout: vk::ImageLayout::GENERAL,
+    };
+    let descriptor = dm
+        .new_set()
+        .bind_buffer(
+            vbinfo,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::RAYGEN_KHR,
+        )
+        .bind_buffer(
+            ibinfo,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::RAYGEN_KHR,
+        )
+        .bind_acceleration_structure(&scene.acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
+        .bind_image(
+            outimginfo,
+            vk::DescriptorType::STORAGE_IMAGE,
+            vk::ShaderStageFlags::RAYGEN_KHR,
+        )
+        .build();
+    RayTraceRenderer {
+        scene,
+        out_img,
+        descriptor,
+        dm,
+        ccmdm,
+        loader,
+        instance,
     }
 }
 
@@ -726,9 +798,9 @@ mod tests {
                 .join("cube.glaze");
 
             let parsed = parse(path).unwrap();
-            let _ = RayTraceRenderer::new(Arc::new(instance), parsed).unwrap();
+            let _ = RayTraceRenderer::new(Arc::new(instance), parsed, 2, 2).unwrap();
         } else {
-            // SKIPPED does not exists in carg test...
+            // SKIPPED does not exists in cargo test...
         }
     }
 }

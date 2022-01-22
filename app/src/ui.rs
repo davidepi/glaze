@@ -90,10 +90,10 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
         });
         ui.menu("Render", || {
             if MenuItem::new("Start").build(ui) {
-                if let Some(_renderer) = renderer.get_raytrace() {
+                if let Some(_renderer) = renderer.get_raytrace(640, 480) {
                     println!("Successfully created");
                 } else {
-                    println!("Not supported");
+                    println!("Not supported or missing scene");
                 }
             }
         });

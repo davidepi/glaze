@@ -429,6 +429,7 @@ fn load_vertices_to_gpu(
     );
     let raytrace_flags = if with_raytrace {
         vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+            | vk::BufferUsageFlags::STORAGE_BUFFER
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
     } else {
         vk::BufferUsageFlags::empty()
@@ -553,6 +554,7 @@ fn load_indices_to_gpu(
     );
     let raytrace_flags = if with_raytrace {
         vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+            | vk::BufferUsageFlags::STORAGE_BUFFER
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
     } else {
         vk::BufferUsageFlags::empty()
@@ -942,9 +944,9 @@ fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
 
 pub struct RayTraceScene {
     instance: Arc<dyn Instance>,
-    vertex_buffer: Arc<AllocatedBuffer>,
-    index_buffer: Arc<AllocatedBuffer>,
-    acc: SceneAS,
+    pub vertex_buffer: Arc<AllocatedBuffer>,
+    pub index_buffer: Arc<AllocatedBuffer>,
+    pub acc: SceneAS,
 }
 
 impl RayTraceScene {

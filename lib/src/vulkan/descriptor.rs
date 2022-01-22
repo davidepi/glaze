@@ -1,5 +1,6 @@
 use ash::vk;
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 use std::sync::{Arc, Mutex};
@@ -192,6 +193,7 @@ impl Hash for DescriptorSetLayoutBindingWrapper {
 enum BufOrImgInfo {
     Buf(vk::DescriptorBufferInfo),
     Img(vk::DescriptorImageInfo),
+    Acc(vk::WriteDescriptorSetAccelerationStructureKHR),
 }
 
 /// Cache for descriptor set layouts
@@ -338,6 +340,31 @@ impl<'a> DescriptorSetBuilder<'a> {
         self
     }
 
+    #[must_use]
+    pub fn bind_acceleration_structure(
+        mut self,
+        acc: &vk::AccelerationStructureKHR,
+        stage_flags: vk::ShaderStageFlags,
+    ) -> Self {
+        let binding = self.bindings.len() as u32;
+        let layout_binding = vk::DescriptorSetLayoutBinding {
+            binding,
+            descriptor_type: vk::DescriptorType::ACCELERATION_STRUCTURE_KHR,
+            descriptor_count: 1,
+            stage_flags,
+            p_immutable_samplers: ptr::null(),
+        };
+        let layout_extension = vk::WriteDescriptorSetAccelerationStructureKHR {
+            s_type: vk::StructureType::WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR,
+            p_next: ptr::null(),
+            acceleration_structure_count: 1,
+            p_acceleration_structures: acc as *const _,
+        };
+        self.bindings.push(layout_binding);
+        self.info.push(BufOrImgInfo::Acc(layout_extension));
+        self
+    }
+
     /// Builds the descriptor set.
     pub fn build(self) -> Descriptor {
         let layout = self.cache.lock().unwrap().get(&self.bindings);
@@ -363,6 +390,9 @@ impl<'a> DescriptorSetBuilder<'a> {
                 }
                 BufOrImgInfo::Img(img) => {
                     write.p_image_info = img;
+                }
+                BufOrImgInfo::Acc(acc) => {
+                    write.p_next = acc as *const _ as *const c_void;
                 }
             }
             writes.push(write);
