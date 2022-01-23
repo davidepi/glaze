@@ -796,7 +796,6 @@ mod tests {
                 .unwrap()
                 .join("resources")
                 .join("cube.glaze");
-
             let parsed = parse(path).unwrap();
             let _ = RayTraceRenderer::new(Arc::new(instance), parsed, 2, 2).unwrap();
         } else {
