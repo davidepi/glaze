@@ -943,7 +943,7 @@ fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
 }
 
 pub struct RayTraceScene {
-    instance: Arc<dyn Instance>,
+    instance: Arc<dyn Instance + Send + Sync>,
     pub vertex_buffer: Arc<AllocatedBuffer>,
     pub index_buffer: Arc<AllocatedBuffer>,
     pub acc: SceneAS,

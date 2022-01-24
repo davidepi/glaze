@@ -1,16 +1,19 @@
 use glaze::{
-    parse, Camera, OrthographicCam, PerspectiveCam, PresentInstance, RealtimeRenderer, ShaderMat,
-    TextureFormat, VulkanScene,
+    parse, Camera, OrthographicCam, PerspectiveCam, PresentInstance, RayTraceRenderer,
+    RealtimeRenderer, ShaderMat, TextureFormat, TextureLoaded, VulkanScene,
 };
 use imgui::{
     CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
     Selectable, SelectableFlags, Slider, SliderFlags, TextureId, Ui,
 };
 use native_dialog::FileDialog;
-use std::sync::mpsc::TryRecvError;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{mpsc, Arc};
+use std::thread::JoinHandle;
 use std::time::Instant;
 use winit::window::Window;
+
+const RT_RESULT_TEXTURE_ID: u16 = u16::MAX - 7;
 
 pub struct UiState {
     instance: Arc<PresentInstance>,
@@ -33,6 +36,12 @@ pub struct UiState {
     materials_selected: Option<u16>,
     stats_window: bool,
     info_window: bool,
+    render_window: bool,
+    rt_width: i32,
+    rt_height: i32,
+    rtrenderer: Option<(Receiver<String>, JoinHandle<TextureLoaded>)>,
+    rtrenderer_console: String,
+    rtrenderer_has_result: bool,
     loading_scene: Option<SceneLoad>,
 }
 
@@ -59,8 +68,20 @@ impl UiState {
             materials_selected: None,
             stats_window: true,
             info_window: false,
+            render_window: false,
+            rt_width: 1920,
+            rt_height: 1088,
+            rtrenderer: None,
+            rtrenderer_console: String::with_capacity(1024),
+            rtrenderer_has_result: false,
             loading_scene: None,
         }
+    }
+
+    fn clear_rtrenderer(&mut self) {
+        self.rtrenderer = None;
+        self.rtrenderer_console.clear();
+        self.rtrenderer_has_result = false;
     }
 }
 
@@ -88,14 +109,8 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
                 }
             }
         });
-        ui.menu("Render", || {
-            if MenuItem::new("Start").build(ui) {
-                if let Some(_renderer) = renderer.get_raytrace(640, 480) {
-                    println!("Successfully created");
-                } else {
-                    println!("Not supported or missing scene");
-                }
-            }
+        ui.menu("Rendering", || {
+            ui.checkbox("Render", &mut state.render_window);
         });
         ui.menu("Window", || {
             ui.checkbox("Settings", &mut state.settings_window);
@@ -112,6 +127,9 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
     }
     if state.settings_window {
         window_settings(ui, state, window, renderer);
+    }
+    if state.render_window {
+        window_render(ui, window, state, renderer);
     }
     if state.textures_window {
         window_textures(ui, state, renderer);
@@ -139,10 +157,8 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
                     loading.last_message = msg;
                     false
                 }
-                Err(e) => match e {
-                    TryRecvError::Empty => false,
-                    TryRecvError::Disconnected => true,
-                },
+                Err(e @ TryRecvError::Empty) => false,
+                Err(e @ TryRecvError::Disconnected) => true,
             }
         } else {
             true //should never fall here unless some serious bugs exist in the UI
@@ -564,6 +580,83 @@ fn window_info(ui: &Ui, state: &mut UiState) {
     }
 }
 
+fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut RealtimeRenderer) {
+    let closed = &mut state.render_window;
+    let sizew = window.inner_size().width as f32 * 0.9;
+    let sizeh = window.inner_size().height as f32 * 0.9;
+    if let Some(window) = imgui::Window::new("Render")
+        .size([sizew, sizeh], Condition::Appearing)
+        .opened(closed)
+        .begin(ui)
+    {
+        ui.set_next_item_width(sizew / 4.0);
+        imgui::InputInt::new(ui, "Width", &mut state.rt_width).build();
+        ui.same_line();
+        ui.set_next_item_width(sizew / 4.0);
+        imgui::InputInt::new(ui, "Height", &mut state.rt_height).build();
+        if let Some((rchan, _)) = &state.rtrenderer {
+            match rchan.try_recv() {
+                Ok(msg) => {
+                    state.rtrenderer_console.push_str(&msg);
+                    state.rtrenderer_console.push('\n');
+                }
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Disconnected) => {
+                    let (_, handle) = state.rtrenderer.take().unwrap();
+                    if let Ok(res) = handle.join() {
+                        renderer.add_texture(RT_RESULT_TEXTURE_ID, res);
+                        state.rtrenderer_has_result = true;
+                    } else {
+                        state.rtrenderer_console.push_str("Render failed");
+                    }
+                }
+            }
+            if ui.button("Cancel") {
+                state.clear_rtrenderer();
+            }
+            if state.rtrenderer_has_result {
+                Image::new(
+                    TextureId::new(RT_RESULT_TEXTURE_ID as usize),
+                    [128.0, 128.0],
+                )
+                .build(ui);
+            }
+        } else if ui.button("Render") {
+            state.rt_width = set_rt_dimension(state.rt_width) as i32;
+            state.rt_height = set_rt_dimension(state.rt_height) as i32;
+            let r = renderer.get_raytrace(state.rt_width as u32, state.rt_height as u32);
+            // this block handles "missing scene" and "card not supported"
+            match r {
+                Ok(r) => {
+                    state.rtrenderer_console.clear();
+                    state.rtrenderer_console.push_str("Successfully Created\n");
+                    let (wchan, rchan) = mpsc::channel();
+                    let handle = std::thread::spawn(move || r.draw(wchan));
+                    state.rtrenderer = Some((rchan, handle));
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    state.rtrenderer_console.push_str(&format!("{msg}\n"))
+                }
+            }
+        }
+        ui.text("Log");
+        ui.text_wrapped(&state.rtrenderer_console);
+        window.end()
+    }
+}
+
+fn set_rt_dimension(user_input: i32) -> u32 {
+    const SPLIT_SIZE_I32: i32 = RayTraceRenderer::SPLIT_SIZE as i32;
+    if user_input <= SPLIT_SIZE_I32 {
+        RayTraceRenderer::SPLIT_SIZE
+    } else if user_input % SPLIT_SIZE_I32 != 0 {
+        (user_input + SPLIT_SIZE_I32 - user_input % SPLIT_SIZE_I32) as u32
+    } else {
+        user_input as u32
+    }
+}
+
 fn open_scene(state: &mut UiState) {
     let dialog = FileDialog::new().show_open_single_file();
     match dialog {
@@ -581,6 +674,7 @@ fn open_scene(state: &mut UiState) {
                 state.textures_selected = None;
                 state.materials_selected = None;
                 state.open_loading_popup = true;
+                state.clear_rtrenderer();
             }
             Err(err) => log::error!("Failed to parse scene file: {}", err),
         },

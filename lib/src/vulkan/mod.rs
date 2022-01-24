@@ -21,5 +21,5 @@ pub use self::descriptor::Descriptor;
 pub use self::device::DeviceInfo;
 pub use self::instance::{PresentInstance, RayTraceInstance};
 pub use self::memory::AllocatedImage;
-pub use self::renderer::RealtimeRenderer;
+pub use self::renderer::{RayTraceRenderer, RealtimeRenderer};
 pub use self::scene::VulkanScene;

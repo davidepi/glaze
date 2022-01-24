@@ -9,11 +9,16 @@ use super::scene::{RayTraceScene, VulkanScene};
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
 use super::AllocatedImage;
-use crate::{include_shader, Camera, Material, ParsedScene, RayTraceInstance};
+use crate::{
+    include_shader, Camera, Material, ParsedScene, RayTraceInstance, TextureFormat, TextureInfo,
+    TextureLoaded,
+};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
+use std::io::ErrorKind;
 use std::ptr;
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -368,19 +373,41 @@ impl RealtimeRenderer {
         }
     }
 
-    pub fn get_raytrace(&mut self, width: u32, height: u32) -> Option<RayTraceRenderer> {
+    pub fn get_raytrace(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<RayTraceRenderer, std::io::Error> {
         if self.instance.supports_raytrace() {
             if let Some(scene) = &mut self.scene {
                 let instance = self.instance.clone();
-                Some(
-                    RayTraceRenderer::from_realtime(instance, scene, width, height)
-                        .expect("Failed to read scene"),
-                )
+                RayTraceRenderer::from_realtime(instance, scene, width, height)
             } else {
-                None
+                Err(std::io::Error::new(ErrorKind::InvalidData, "Missing scene"))
             }
         } else {
-            None
+            Err(std::io::Error::new(
+                ErrorKind::Unsupported,
+                "The video card does not support raytraced rendering",
+            ))
+        }
+    }
+
+    /// Adds a texture to the scene with the given ID.
+    ///
+    /// It can be used to draw some texture in the UI, as long as the scene remains loaded.
+    ///
+    /// If a texture with the same ID is existing, it is replaced.
+    ///
+    /// If the scene is not loaded, this method does nothing.
+    ///
+    ///
+    /// **Note:** This method adds the texture to the scene, so clearing the scene will invalidate
+    /// also the texture. This is due to the engine and UI design. In particular, the UI uses the
+    /// same ID of the textures in the scene for rendering.
+    pub fn add_texture(&mut self, id: u16, texture: TextureLoaded) {
+        if let Some(scene) = &mut self.scene {
+            scene.textures.insert(id, texture);
         }
     }
 
@@ -662,15 +689,19 @@ impl InternalStats {
 
 pub struct RayTraceRenderer {
     scene: RayTraceScene,
+    extent: vk::Extent2D,
     out_img: AllocatedImage,
     descriptor: Descriptor,
     dm: DescriptorSetManager,
+    tcmdm: CommandManager,
     ccmdm: CommandManager,
     loader: Arc<AccelerationLoader>,
-    instance: Arc<dyn Instance>,
+    instance: Arc<dyn Instance + Send + Sync>,
 }
 
 impl RayTraceRenderer {
+    pub const SPLIT_SIZE: u32 = 64;
+
     pub fn new(
         instance: Arc<RayTraceInstance>,
         scene: Box<dyn ParsedScene>,
@@ -707,10 +738,130 @@ impl RayTraceRenderer {
         let extent = vk::Extent2D { width, height };
         Ok(init_rt(instance, loader, ccmdm, scene, extent))
     }
+
+    pub fn draw(mut self, channel: Sender<String>) -> TextureLoaded {
+        // if the other end disconnected, this thread can die anyway, so unwrap()
+        channel.send("Starting rendering".to_string()).unwrap();
+        channel.send("Rendering finished".to_string()).unwrap();
+        channel.send("Copying result".to_string()).unwrap();
+        let out_info = TextureInfo {
+            name: "RT out image".to_string(),
+            format: TextureFormat::Rgba,
+            width: self.extent.width as u16,
+            height: self.extent.height as u16,
+        };
+        // blit the final image to one with a better layout to be displayed
+        // probably later I want to just COPY the image, perform manual exposure compensation,
+        // and then blit to sRGB or 8bit format.
+        //TODO: probably I want this to be R32G32B32A32_SFLOAT
+        let out_image = self.instance.allocator().create_image_gpu(
+            "RT output",
+            vk::Format::R8G8B8A8_SRGB,
+            self.extent,
+            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+            vk::ImageAspectFlags::COLOR,
+            1,
+        );
+        let blit_subresource = vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        let subresource_range = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        let blit_regions = [vk::ImageBlit {
+            src_subresource: blit_subresource,
+            src_offsets: [
+                vk::Offset3D { x: 0, y: 0, z: 0 },
+                vk::Offset3D {
+                    x: self.extent.width as i32,
+                    y: self.extent.height as i32,
+                    z: 1,
+                },
+            ],
+            dst_subresource: blit_subresource,
+            dst_offsets: [
+                vk::Offset3D { x: 0, y: 0, z: 0 },
+                vk::Offset3D {
+                    x: self.extent.width as i32,
+                    y: self.extent.height as i32,
+                    z: 1,
+                },
+            ],
+        }];
+        let barrier_transfer = vk::ImageMemoryBarrier {
+            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+            p_next: ptr::null(),
+            src_access_mask: vk::AccessFlags::empty(),
+            dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+            old_layout: vk::ImageLayout::UNDEFINED,
+            new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            image: out_image.image,
+            subresource_range,
+        };
+        let barrier_use = vk::ImageMemoryBarrier {
+            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+            p_next: ptr::null(),
+            src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+            dst_access_mask: vk::AccessFlags::SHADER_READ,
+            old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            image: out_image.image,
+            subresource_range,
+        };
+        let device = self.instance.device();
+        let transfer_queue = device.transfer_queue();
+        let cmd = self.tcmdm.get_cmd_buffer();
+        let command = |vkdevice: &ash::Device, cmd: vk::CommandBuffer| unsafe {
+            vkdevice.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_transfer],
+            );
+            vkdevice.cmd_blit_image(
+                cmd,
+                self.out_img.image,
+                vk::ImageLayout::GENERAL,
+                out_image.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &blit_regions,
+                vk::Filter::LINEAR,
+            );
+            vkdevice.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_use],
+            );
+        };
+        let fence = device.immediate_execute(cmd, transfer_queue, command);
+        device.wait_completion(&[fence]);
+        TextureLoaded {
+            info: out_info,
+            image: out_image,
+        }
+    }
 }
 
 fn init_rt(
-    instance: Arc<dyn Instance>,
+    instance: Arc<dyn Instance + Send + Sync>,
     loader: Arc<AccelerationLoader>,
     ccmdm: CommandManager,
     scene: RayTraceScene,
@@ -722,6 +873,8 @@ fn init_rt(
         (vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, 1.0),
     ];
     let device = instance.device();
+    let transfer_queue = device.transfer_queue();
+    let tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
     let mut dm = DescriptorSetManager::new(
         device.logical_clone(),
         &AVG_DESC,
@@ -741,11 +894,11 @@ fn init_rt(
         "RT out image",
         vk::Format::R32G32B32A32_SFLOAT,
         extent,
-        vk::ImageUsageFlags::STORAGE,
+        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
         vk::ImageAspectFlags::COLOR,
         1,
     );
-    let outimginfo = vk::DescriptorImageInfo {
+    let outimg_descinfo = vk::DescriptorImageInfo {
         sampler: vk::Sampler::null(),
         image_view: out_img.image_view,
         image_layout: vk::ImageLayout::GENERAL,
@@ -764,13 +917,15 @@ fn init_rt(
         )
         .bind_acceleration_structure(&scene.acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
         .bind_image(
-            outimginfo,
+            outimg_descinfo,
             vk::DescriptorType::STORAGE_IMAGE,
             vk::ShaderStageFlags::RAYGEN_KHR,
         )
         .build();
     RayTraceRenderer {
         scene,
+        extent,
+        tcmdm,
         out_img,
         descriptor,
         dm,
