@@ -4,17 +4,22 @@ use super::instance::Instance;
 use super::memory::AllocatedBuffer;
 use super::scene::RayTraceScene;
 use super::{AllocatedImage, Descriptor};
+use crate::vulkan::pipeline::build_raytracing_pipeline;
 use crate::{
-    ParsedScene, PresentInstance, RayTraceInstance, TextureFormat, TextureInfo, TextureLoaded,
-    VulkanScene,
+    ParsedScene, Pipeline, PresentInstance, RayTraceInstance, TextureFormat, TextureInfo,
+    TextureLoaded, VulkanScene,
 };
-use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
+use ash::extensions::khr::{
+    AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
+};
 use ash::vk;
 use cgmath::{Point3, Vector3 as Vec3};
 use gpu_allocator::MemoryLocation;
 use std::ptr;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+
+pub const RAYTRACER_MAX_RECURSION: u32 = 6;
 
 #[repr(C)]
 struct FrameDataRT {
@@ -52,7 +57,9 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     _frame_data: AllocatedBuffer,
     tcmdm: CommandManager,
     ccmdm: CommandManager,
-    loader: Arc<AccelerationLoader>,
+    pipeline: Pipeline,
+    asloader: Arc<AccelerationLoader>,
+    rploader: RTPipelineLoader,
     instance: Arc<T>,
 }
 
@@ -293,6 +300,7 @@ fn init_rt<T: Instance + Send + Sync>(
         (vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, 1.0),
     ];
     let device = instance.device();
+    let rploader = RTPipelineLoader::new(instance.instance(), device.logical());
     let transfer_queue = device.transfer_queue();
     let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
     let mut dm = DescriptorSetManager::new(
@@ -354,16 +362,20 @@ fn init_rt<T: Instance + Send + Sync>(
             vk::ShaderStageFlags::RAYGEN_KHR,
         )
         .build();
+    let pipeline =
+        build_raytracing_pipeline(&rploader, device.logical_clone(), &[descriptor.layout]);
     RayTraceRenderer {
         scene,
         extent,
-        tcmdm,
-        _frame_data: frame_data,
         out_img,
         descriptor,
         dm,
+        _frame_data: frame_data,
+        tcmdm,
         ccmdm,
-        loader,
+        pipeline,
+        asloader: loader,
+        rploader,
         instance,
     }
 }

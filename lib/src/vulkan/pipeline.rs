@@ -1,5 +1,8 @@
+use super::raytracer::RAYTRACER_MAX_RECURSION;
 use crate::geometry::Vertex;
-use ash::vk;
+use crate::include_shader;
+use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
+use ash::vk::{self, RayTracingShaderGroupTypeKHR};
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Arc;
@@ -327,8 +330,114 @@ impl Default for PipelineBuilder {
     }
 }
 
+pub fn build_raytracing_pipeline(
+    loader: &RTPipelineLoader,
+    device: Arc<ash::Device>,
+    set_layout: &[vk::DescriptorSetLayout],
+) -> Pipeline {
+    let rgen = include_shader!("test_raytrace.rgen");
+    let miss = include_shader!("test_raytrace.miss");
+    let main_cstr = CString::new("main".as_bytes()).unwrap();
+    let create_ci =
+        |shader: &[u8], stage: vk::ShaderStageFlags| vk::PipelineShaderStageCreateInfo {
+            s_type: vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+            p_next: ptr::null(),
+            flags: vk::PipelineShaderStageCreateFlags::empty(),
+            stage,
+            module: create_shader_module(&device, shader),
+            p_name: main_cstr.as_c_str().as_ptr(),
+            p_specialization_info: ptr::null(),
+        };
+    // raygen is always index 0
+    // miss is always index 1
+    let mut shader_stages = vec![
+        create_ci(rgen, vk::ShaderStageFlags::RAYGEN_KHR),
+        create_ci(miss, vk::ShaderStageFlags::MISS_KHR),
+    ];
+    let mut shader_groups = vec![
+        vk::RayTracingShaderGroupCreateInfoKHR {
+            s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+            p_next: ptr::null(),
+            ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+            general_shader: 0,
+            closest_hit_shader: vk::SHADER_UNUSED_KHR,
+            any_hit_shader: vk::SHADER_UNUSED_KHR,
+            intersection_shader: vk::SHADER_UNUSED_KHR,
+            p_shader_group_capture_replay_handle: ptr::null(),
+        },
+        vk::RayTracingShaderGroupCreateInfoKHR {
+            s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+            p_next: ptr::null(),
+            ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+            general_shader: 1,
+            closest_hit_shader: vk::SHADER_UNUSED_KHR,
+            any_hit_shader: vk::SHADER_UNUSED_KHR,
+            intersection_shader: vk::SHADER_UNUSED_KHR,
+            p_shader_group_capture_replay_handle: ptr::null(),
+        },
+    ];
+    //TODO: handle multiple chit shaders
+    let chit = include_shader!("test_raytrace.chit");
+    shader_stages.push(create_ci(chit, vk::ShaderStageFlags::CLOSEST_HIT_KHR));
+    shader_groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
+        s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+        p_next: ptr::null(),
+        ty: vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP,
+        general_shader: vk::SHADER_UNUSED_KHR,
+        closest_hit_shader: (shader_stages.len() - 1) as u32,
+        any_hit_shader: vk::SHADER_UNUSED_KHR,
+        intersection_shader: vk::SHADER_UNUSED_KHR,
+        p_shader_group_capture_replay_handle: ptr::null(),
+    });
+    // end of TODO
+    let pipeline_layout = vk::PipelineLayoutCreateInfo {
+        s_type: vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
+        p_next: ptr::null(),
+        flags: vk::PipelineLayoutCreateFlags::empty(),
+        set_layout_count: set_layout.len() as u32,
+        p_set_layouts: set_layout.as_ptr(),
+        push_constant_range_count: 0,
+        p_push_constant_ranges: ptr::null(),
+    };
+    let layout = unsafe { device.create_pipeline_layout(&pipeline_layout, None) }
+        .expect("Failed to create Pipeline Layout");
+    let pipeline_ci = vk::RayTracingPipelineCreateInfoKHR {
+        s_type: vk::StructureType::RAY_TRACING_PIPELINE_CREATE_INFO_KHR,
+        p_next: ptr::null(),
+        flags: vk::PipelineCreateFlags::empty(),
+        stage_count: shader_stages.len() as u32,
+        p_stages: shader_stages.as_ptr(),
+        group_count: shader_groups.len() as u32,
+        p_groups: shader_groups.as_ptr(),
+        max_pipeline_ray_recursion_depth: RAYTRACER_MAX_RECURSION,
+        p_library_info: ptr::null(),
+        p_library_interface: ptr::null(),
+        p_dynamic_state: ptr::null(),
+        layout,
+        base_pipeline_handle: vk::Pipeline::null(),
+        base_pipeline_index: 0,
+    };
+    let pipeline = unsafe {
+        loader.create_ray_tracing_pipelines(
+            vk::DeferredOperationKHR::null(),
+            vk::PipelineCache::null(),
+            &[pipeline_ci],
+            None,
+        )
+    }
+    .expect("Failed to create RayTracing pipeline")[0];
+    shader_stages
+        .iter()
+        .for_each(|ci| destroy_shader_module(&device, ci.module));
+    Pipeline {
+        pipeline,
+        layout,
+        device,
+    }
+}
+
 /// Creates a shader module
-fn create_shader_module(device: &ash::Device, shader: &[u8]) -> vk::ShaderModule {
+pub fn create_shader_module(device: &ash::Device, shader: &[u8]) -> vk::ShaderModule {
     let shader_module_create_info = vk::ShaderModuleCreateInfo {
         s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
         p_next: ptr::null(),
@@ -344,7 +453,7 @@ fn create_shader_module(device: &ash::Device, shader: &[u8]) -> vk::ShaderModule
 }
 
 /// Destroys a shader module
-fn destroy_shader_module(device: &ash::Device, shader_module: vk::ShaderModule) {
+pub fn destroy_shader_module(device: &ash::Device, shader_module: vk::ShaderModule) {
     unsafe {
         device.destroy_shader_module(shader_module, None);
     }
