@@ -1,6 +1,7 @@
 use super::cmd::CommandManager;
 use super::descriptor::DescriptorSetManager;
 use super::instance::Instance;
+use super::memory::AllocatedBuffer;
 use super::scene::RayTraceScene;
 use super::{AllocatedImage, Descriptor};
 use crate::{
@@ -9,9 +10,36 @@ use crate::{
 };
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
+use cgmath::{Point3, Vector3 as Vec3};
+use gpu_allocator::MemoryLocation;
 use std::ptr;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+
+#[repr(C)]
+struct FrameDataRT {
+    cam_pos: Point3<f32>,
+    cam_tgt: Point3<f32>,
+    cam_upp: Vec3<f32>,
+    fovx: f32,
+    ar: f32,
+}
+
+impl FrameDataRT {
+    fn new(scene: &RayTraceScene, extent: vk::Extent2D) -> Self {
+        let fovx = match &scene.camera {
+            crate::Camera::Perspective(persp) => persp.fovx,
+            crate::Camera::Orthographic(_) => 0.0,
+        };
+        FrameDataRT {
+            cam_pos: scene.camera.position(),
+            cam_tgt: scene.camera.target(),
+            cam_upp: scene.camera.up(),
+            fovx,
+            ar: extent.width as f32 / extent.height as f32,
+        }
+    }
+}
 
 pub const RAYTRACE_SPLIT_SIZE: u32 = 64;
 
@@ -21,6 +49,7 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     out_img: AllocatedImage,
     descriptor: Descriptor,
     dm: DescriptorSetManager,
+    _frame_data: AllocatedBuffer,
     tcmdm: CommandManager,
     ccmdm: CommandManager,
     loader: Arc<AccelerationLoader>,
@@ -200,6 +229,57 @@ fn copy_storage_to_output<T: Instance>(
     retval
 }
 
+fn setup_frame_data<T: Instance>(
+    instance: &T,
+    tcmd: vk::CommandBuffer,
+    extent: vk::Extent2D,
+    scene: &RayTraceScene,
+) -> AllocatedBuffer {
+    let size = std::mem::size_of::<FrameDataRT>() as u64;
+    let framedata = FrameDataRT::new(scene, extent);
+    let mm = instance.allocator();
+    let cpu_buf = mm.create_buffer(
+        "Raytrace frame data CPU staging",
+        size,
+        vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+        MemoryLocation::CpuToGpu,
+    );
+    let mapped = cpu_buf
+        .allocation()
+        .mapped_ptr()
+        .expect("Failed to map memory")
+        .cast()
+        .as_ptr();
+    unsafe { std::ptr::copy_nonoverlapping(&framedata, mapped, 1) };
+    let gpu_buf = mm.create_buffer(
+        "Raytrace frame data GPU",
+        size,
+        vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+        MemoryLocation::GpuOnly,
+    );
+    let buffer_copy = vk::BufferCopy {
+        src_offset: 0,
+        dst_offset: 0,
+        size: cpu_buf.size,
+    };
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_copy_buffer(cmd, cpu_buf.buffer, gpu_buf.buffer, &[buffer_copy]);
+        }
+    };
+    //TODO: for when the raytracer will be finished:
+    //at the time of writing, this is the only deferred upload I do at setup time.
+    //After the renderer will be finished, if there are more deferred upload (like SSBOs or such)
+    //consider returning the UnfinishedExecutions here instead of waiting on the Fence.
+    //(I can't just return the fence otherwise the CPU buf will be deallocated before the GPU
+    //finishes the actual copy)
+    let device = instance.device();
+    let tqueue = device.transfer_queue();
+    let fence = device.immediate_execute(tcmd, tqueue, command);
+    device.wait_completion(&[fence]);
+    gpu_buf
+}
+
 fn init_rt<T: Instance + Send + Sync>(
     instance: Arc<T>,
     loader: Arc<AccelerationLoader>,
@@ -214,7 +294,7 @@ fn init_rt<T: Instance + Send + Sync>(
     ];
     let device = instance.device();
     let transfer_queue = device.transfer_queue();
-    let tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
+    let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
     let mut dm = DescriptorSetManager::new(
         device.logical_clone(),
         &AVG_DESC,
@@ -243,8 +323,20 @@ fn init_rt<T: Instance + Send + Sync>(
         image_view: out_img.image_view,
         image_layout: vk::ImageLayout::GENERAL,
     };
+    let tcmd = tcmdm.get_cmd_buffer();
+    let frame_data = setup_frame_data(instance.as_ref(), tcmd, extent, &scene);
+    let fdinfo = vk::DescriptorBufferInfo {
+        buffer: frame_data.buffer,
+        offset: 0,
+        range: frame_data.size,
+    };
     let descriptor = dm
         .new_set()
+        .bind_buffer(
+            fdinfo,
+            vk::DescriptorType::UNIFORM_BUFFER,
+            vk::ShaderStageFlags::RAYGEN_KHR,
+        )
         .bind_buffer(
             vbinfo,
             vk::DescriptorType::STORAGE_BUFFER,
@@ -266,6 +358,7 @@ fn init_rt<T: Instance + Send + Sync>(
         scene,
         extent,
         tcmdm,
+        _frame_data: frame_data,
         out_img,
         descriptor,
         dm,

@@ -1,6 +1,6 @@
 use glaze::{
-    parse, Camera, OrthographicCam, PerspectiveCam, PresentInstance, RayTraceRenderer,
-    RealtimeRenderer, ShaderMat, TextureFormat, TextureLoaded, VulkanScene, RAYTRACE_SPLIT_SIZE,
+    parse, Camera, OrthographicCam, PerspectiveCam, PresentInstance, RealtimeRenderer, ShaderMat,
+    TextureFormat, TextureLoaded, VulkanScene, RAYTRACE_SPLIT_SIZE,
 };
 use imgui::{
     CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
