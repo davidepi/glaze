@@ -19,5 +19,5 @@ pub use parser::{converted_file, parse, serialize, ParsedScene, ParserVersion};
 #[cfg(feature = "vulkan")]
 pub use vulkan::{
     DeviceInfo, Pipeline, PipelineBuilder, PresentInstance, RayTraceInstance, RayTraceRenderer,
-    RealtimeRenderer, VulkanScene,
+    RealtimeRenderer, VulkanScene, RAYTRACE_SPLIT_SIZE,
 };

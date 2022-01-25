@@ -943,7 +943,6 @@ fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
 }
 
 pub struct RayTraceScene {
-    instance: Arc<dyn Instance + Send + Sync>,
     pub vertex_buffer: Arc<AllocatedBuffer>,
     pub index_buffer: Arc<AllocatedBuffer>,
     pub acc: SceneAS,
@@ -974,7 +973,6 @@ impl RayTraceScene {
             .with_meshes(&meshes, &instances, &transforms);
         let acc = builder.build();
         Ok(Self {
-            instance,
             vertex_buffer: Arc::new(vertex_buffer),
             index_buffer: Arc::new(index_buffer),
             acc,
@@ -997,7 +995,6 @@ impl RayTraceScene {
             .with_meshes(&scene.meshes, &instances, &transforms);
         let acc = builder.build();
         Ok(Self {
-            instance,
             vertex_buffer,
             index_buffer,
             acc,

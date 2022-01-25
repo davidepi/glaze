@@ -1,6 +1,6 @@
 use glaze::{
     parse, Camera, OrthographicCam, PerspectiveCam, PresentInstance, RayTraceRenderer,
-    RealtimeRenderer, ShaderMat, TextureFormat, TextureLoaded, VulkanScene,
+    RealtimeRenderer, ShaderMat, TextureFormat, TextureLoaded, VulkanScene, RAYTRACE_SPLIT_SIZE,
 };
 use imgui::{
     CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
@@ -157,8 +157,8 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
                     loading.last_message = msg;
                     false
                 }
-                Err(e @ TryRecvError::Empty) => false,
-                Err(e @ TryRecvError::Disconnected) => true,
+                Err(TryRecvError::Empty) => false,
+                Err(TryRecvError::Disconnected) => true,
             }
         } else {
             true //should never fall here unless some serious bugs exist in the UI
@@ -647,9 +647,9 @@ fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut R
 }
 
 fn set_rt_dimension(user_input: i32) -> u32 {
-    const SPLIT_SIZE_I32: i32 = RayTraceRenderer::SPLIT_SIZE as i32;
+    const SPLIT_SIZE_I32: i32 = RAYTRACE_SPLIT_SIZE as i32;
     if user_input <= SPLIT_SIZE_I32 {
-        RayTraceRenderer::SPLIT_SIZE
+        RAYTRACE_SPLIT_SIZE
     } else if user_input % SPLIT_SIZE_I32 != 0 {
         (user_input + SPLIT_SIZE_I32 - user_input % SPLIT_SIZE_I32) as u32
     } else {
