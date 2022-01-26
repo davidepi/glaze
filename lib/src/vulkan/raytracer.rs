@@ -47,9 +47,10 @@ impl FrameDataRT {
 }
 
 struct ShaderBindingTable {
-    raygen_address: u64,
-    miss_address: u64,
-    hit_address: u64,
+    rgen_addr: vk::StridedDeviceAddressRegionKHR,
+    miss_addr: vk::StridedDeviceAddressRegionKHR,
+    hit_addr: vk::StridedDeviceAddressRegionKHR,
+    call_addr: vk::StridedDeviceAddressRegionKHR,
     buffer: AllocatedBuffer,
 }
 
@@ -112,6 +113,37 @@ impl<T: Instance + Send + Sync> RayTraceRenderer<T> {
     pub fn draw(mut self, channel: Sender<String>) -> TextureLoaded {
         // if the other end disconnected, this thread can die anyway, so unwrap()
         channel.send("Starting rendering".to_string()).unwrap();
+        let cmd = self.ccmdm.get_cmd_buffer();
+        let device = self.instance.device();
+        let command = unsafe {
+            |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_bind_pipeline(
+                    cmd,
+                    vk::PipelineBindPoint::RAY_TRACING_KHR,
+                    self.pipeline.pipeline,
+                );
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::RAY_TRACING_KHR,
+                    self.pipeline.layout,
+                    0,
+                    &[self.descriptor.set],
+                    &[],
+                );
+                self.rploader.cmd_trace_rays(
+                    cmd,
+                    &self.sbt.rgen_addr,
+                    &self.sbt.miss_addr,
+                    &self.sbt.hit_addr,
+                    &self.sbt.call_addr,
+                    self.extent.width,
+                    self.extent.height,
+                    1,
+                );
+            }
+        };
+        let fence = device.immediate_execute(cmd, device.compute_queue(), command);
+        device.wait_completion(&[fence]);
         channel.send("Rendering finished".to_string()).unwrap();
         channel.send("Copying result".to_string()).unwrap();
         let out_image = copy_storage_to_output(
@@ -246,7 +278,7 @@ fn copy_storage_to_output<T: Instance>(
 
 fn setup_frame_data<T: Instance>(
     instance: &T,
-    tcmd: vk::CommandBuffer,
+    tcmdm: &mut CommandManager,
     extent: vk::Extent2D,
     scene: &RayTraceScene,
     unf: &mut UnfinishedExecutions,
@@ -283,9 +315,9 @@ fn setup_frame_data<T: Instance>(
             device.cmd_copy_buffer(cmd, cpu_buf.buffer, gpu_buf.buffer, &[buffer_copy]);
         }
     };
+    let cmd = tcmdm.get_cmd_buffer();
     let device = instance.device();
-    let tqueue = device.transfer_queue();
-    let fence = device.immediate_execute(tcmd, tqueue, command);
+    let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
     unf.add(fence, cpu_buf);
     gpu_buf
 }
@@ -322,21 +354,13 @@ fn init_rt<T: Instance + Send + Sync>(
         offset: 0,
         range: scene.index_buffer.size,
     };
-    let out_img = instance.allocator().create_image_gpu(
-        "RT out image",
-        vk::Format::R32G32B32A32_SFLOAT,
-        extent,
-        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
-        vk::ImageAspectFlags::COLOR,
-        1,
-    );
+    let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
     let outimg_descinfo = vk::DescriptorImageInfo {
         sampler: vk::Sampler::null(),
         image_view: out_img.image_view,
         image_layout: vk::ImageLayout::GENERAL,
     };
-    let tcmd = tcmdm.get_cmd_buffer();
-    let frame_data = setup_frame_data(instance.as_ref(), tcmd, extent, &scene, &mut unf);
+    let frame_data = setup_frame_data(instance.as_ref(), &mut tcmdm, extent, &scene, &mut unf);
     let fdinfo = vk::DescriptorBufferInfo {
         buffer: frame_data.buffer,
         offset: 0,
@@ -394,6 +418,64 @@ fn init_rt<T: Instance + Send + Sync>(
     }
 }
 
+fn create_storage_image<T: Instance>(
+    instance: &T,
+    tcmdm: &mut CommandManager,
+    extent: vk::Extent2D,
+    unf: &mut UnfinishedExecutions,
+) -> AllocatedImage {
+    let mm = instance.allocator();
+    let device = instance.device();
+    let out_img = mm.create_image_gpu(
+        "RT out image",
+        vk::Format::R32G32B32A32_SFLOAT,
+        extent,
+        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+        vk::ImageAspectFlags::COLOR,
+        1,
+    );
+    let subresource_range = vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let barrier_use = vk::ImageMemoryBarrier {
+        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+        p_next: ptr::null(),
+        src_access_mask: vk::AccessFlags::empty(),
+        dst_access_mask: vk::AccessFlags::SHADER_READ,
+        old_layout: vk::ImageLayout::UNDEFINED,
+        new_layout: vk::ImageLayout::GENERAL,
+        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        image: out_img.image,
+        subresource_range,
+    };
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_use],
+            );
+        }
+    };
+    let cmd = tcmdm.get_cmd_buffer();
+    let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
+    unf.add_fence(fence);
+    out_img
+}
+
+fn roundup_alignment(size: u64, align_to: u64) -> u64 {
+    (size + (align_to - 1)) & !(align_to - 1)
+}
+
 fn build_sbt<T: Instance>(
     instance: &T,
     rploader: &RTPipelineLoader,
@@ -407,25 +489,37 @@ fn build_sbt<T: Instance>(
         unsafe { RTPipelineLoader::get_properties(instance.instance(), device.physical().device) };
     let align_handle = properties.shader_group_handle_alignment as u64;
     let align_group = properties.shader_group_base_alignment as u64;
-    let size_handle = properties.shader_group_handle_size as usize;
+    let size_handle = properties.shader_group_handle_size as u64;
+    let size_handle_aligned = roundup_alignment(size_handle, align_handle);
     let mut data = Vec::new();
     // load single raygen group
     let rgen_group = unsafe {
-        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 0, 1, size_handle)
+        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 0, 1, size_handle as usize)
     }
     .expect("Failed to retrieve shader handle");
     data.extend_from_slice(&rgen_group);
     let missing_bytes = padding(data.len() as u64, align_group) as usize;
     data.extend_from_slice(&vec![0; missing_bytes]);
+    // in the NVIDIA example it's written that stride and size for rgen must be the same
+    let mut rgen_addr = vk::StridedDeviceAddressRegionKHR {
+        device_address: 0,
+        stride: roundup_alignment(align_handle, align_group),
+        size: roundup_alignment(align_handle, align_group),
+    };
     // load single miss group
     let miss_offset = data.len() as u64;
     let miss_group = unsafe {
-        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 1, 1, size_handle)
+        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 1, 1, size_handle as usize)
     }
     .expect("Failed to retrieve shader handle");
     data.extend_from_slice(&miss_group);
     let missing_bytes = padding(data.len() as u64, align_group) as usize;
     data.extend_from_slice(&vec![0; missing_bytes]);
+    let mut miss_addr = vk::StridedDeviceAddressRegionKHR {
+        device_address: miss_offset,
+        stride: size_handle,
+        size: size_handle_aligned,
+    };
     // load hit groups
     let hit_group_base_index = 2; // 0 is raygen and 1 is miss
     let hit_offset = data.len() as u64;
@@ -435,7 +529,7 @@ fn build_sbt<T: Instance>(
                 pipeline.pipeline,
                 hit_group_base_index + hit_group,
                 1,
-                size_handle,
+                size_handle as usize,
             )
         }
         .expect("Failed to retrieve shader handle");
@@ -445,6 +539,16 @@ fn build_sbt<T: Instance>(
             data.extend_from_slice(&vec![0; missing_bytes]);
         }
     }
+    let mut hit_addr = vk::StridedDeviceAddressRegionKHR {
+        device_address: hit_offset,
+        stride: size_handle,
+        size: (hit_groups as u64 * size_handle_aligned),
+    };
+    let call_addr = vk::StridedDeviceAddressRegionKHR {
+        device_address: 0,
+        stride: 0,
+        size: 0,
+    };
     // now upload everything to a buffer
     let mm = instance.allocator();
     let cpu_buf = mm.create_buffer(
@@ -488,11 +592,15 @@ fn build_sbt<T: Instance>(
         p_next: ptr::null(),
         buffer: gpu_buf.buffer,
     };
-    let rgen_addr = unsafe { device.logical().get_buffer_device_address(&sbt_addr_info) };
+    let base_addr = unsafe { device.logical().get_buffer_device_address(&sbt_addr_info) };
+    rgen_addr.device_address += base_addr;
+    miss_addr.device_address += base_addr;
+    hit_addr.device_address += base_addr;
     ShaderBindingTable {
-        raygen_address: rgen_addr,
-        miss_address: rgen_addr + miss_offset,
-        hit_address: rgen_addr + hit_offset,
+        rgen_addr,
+        miss_addr,
+        hit_addr,
+        call_addr,
         buffer: gpu_buf,
     }
 }

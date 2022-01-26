@@ -13,5 +13,5 @@ layout(set=0, binding=4, rgba32f) uniform image2D result_image;
 
 
 void main() {
-  imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(0.0, 0.0, 0.0, 1.0));
+  imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(1.0, 0.0, 0.0, 1.0));
 }

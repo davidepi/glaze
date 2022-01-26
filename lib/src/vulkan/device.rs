@@ -301,6 +301,11 @@ impl<'device> UnfinishedExecutions<'device> {
         }
     }
 
+    /// Adds a fence only, without any buffer.
+    pub fn add_fence(&mut self, fence: vk::Fence) {
+        self.fences.push(fence);
+    }
+
     /// Add a fence and the corresponding buffer.
     pub fn add(&mut self, fence: vk::Fence, buffer: AllocatedBuffer) {
         self.fences.push(fence);

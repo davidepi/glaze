@@ -614,13 +614,6 @@ fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut R
             if ui.button("Cancel") {
                 state.clear_rtrenderer();
             }
-            if state.rtrenderer_has_result {
-                Image::new(
-                    TextureId::new(RT_RESULT_TEXTURE_ID as usize),
-                    [128.0, 128.0],
-                )
-                .build(ui);
-            }
         } else if ui.button("Render") {
             state.rt_width = set_rt_dimension(state.rt_width) as i32;
             state.rt_height = set_rt_dimension(state.rt_height) as i32;
@@ -639,6 +632,13 @@ fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut R
                     state.rtrenderer_console.push_str(&format!("{msg}\n"))
                 }
             }
+        }
+        if state.rtrenderer_has_result {
+            Image::new(
+                TextureId::new(RT_RESULT_TEXTURE_ID as usize),
+                [128.0, 128.0],
+            )
+            .build(ui);
         }
         ui.text("Log");
         ui.text_wrapped(&state.rtrenderer_console);
