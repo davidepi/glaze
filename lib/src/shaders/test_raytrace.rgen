@@ -7,11 +7,13 @@ layout(set=0, binding=0) uniform fd {
   vec3 camera_position;
   vec3 camera_target;
   vec3 camera_up;
+  float fovx;
+  float ar;
 } FrameData;
 layout(set=0, binding=3) uniform accelerationStructureEXT scene;
 layout(set=0, binding=4, rgba32f) uniform image2D result_image;
 
-
 void main() {
+  const vec2 uv = vec2(gl_LaunchIDEXT.xy) / vec2(gl_LaunchSizeEXT.xy - 1);
   imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(1.0, 0.0, 0.0, 1.0));
 }

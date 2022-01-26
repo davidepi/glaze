@@ -39,6 +39,8 @@ pub struct UiState {
     render_window: bool,
     rt_width: i32,
     rt_height: i32,
+    last_render_w: i32,
+    last_render_h: i32,
     rtrenderer: Option<(Receiver<String>, JoinHandle<TextureLoaded>)>,
     rtrenderer_console: String,
     rtrenderer_has_result: bool,
@@ -71,6 +73,8 @@ impl UiState {
             render_window: false,
             rt_width: 1920,
             rt_height: 1088,
+            last_render_w: 1920,
+            last_render_h: 1088,
             rtrenderer: None,
             rtrenderer_console: String::with_capacity(1024),
             rtrenderer_has_result: false,
@@ -326,7 +330,7 @@ fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
     };
     imgui::Window::new("Textures")
         .opened(closed)
-        .size([300.0, 300.0], Condition::Appearing)
+        .size([600.0, 600.0], Condition::Appearing)
         .save_settings(false)
         .build(ui, || {
             ComboBox::new("Texture name")
@@ -347,8 +351,10 @@ fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
                 let info = &scene.unwrap().single_texture(*selected).unwrap().info;
                 ui.text(format!("Resolution {}x{}", info.width, info.height));
                 ui.text(format!("Format {}", channels_to_string(info.format)));
-                let tex_w = 512.0;
-                let tex_h = 512.0;
+                let window_w = ui.window_size()[0];
+                let ar = info.width as f32 / info.height as f32;
+                let tex_w = f32::min(info.width as f32, window_w);
+                let tex_h = tex_w / ar;
                 let pos = ui.cursor_screen_pos();
                 Image::new(TextureId::new(*selected as usize), [tex_w, tex_h]).build(ui);
                 if ui.is_item_hovered() {
@@ -615,8 +621,11 @@ fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut R
                 state.clear_rtrenderer();
             }
         } else if ui.button("Render") {
+            state.clear_rtrenderer();
             state.rt_width = set_rt_dimension(state.rt_width) as i32;
             state.rt_height = set_rt_dimension(state.rt_height) as i32;
+            state.last_render_w = state.rt_width;
+            state.last_render_h = state.rt_height;
             let r = renderer.get_raytrace(state.rt_width as u32, state.rt_height as u32);
             // this block handles "missing scene" and "card not supported"
             match r {
@@ -634,9 +643,12 @@ fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut R
             }
         }
         if state.rtrenderer_has_result {
+            let ar = state.last_render_w as f32 / state.last_render_h as f32;
+            let imagew = f32::min(state.last_render_w as f32, ui.window_size()[0]);
+            let imageh = imagew / ar;
             Image::new(
                 TextureId::new(RT_RESULT_TEXTURE_ID as usize),
-                [128.0, 128.0],
+                [imagew, imageh],
             )
             .build(ui);
         }

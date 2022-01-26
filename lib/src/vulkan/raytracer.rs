@@ -112,7 +112,7 @@ impl<T: Instance + Send + Sync> RayTraceRenderer<T> {
 
     pub fn draw(mut self, channel: Sender<String>) -> TextureLoaded {
         // if the other end disconnected, this thread can die anyway, so unwrap()
-        channel.send("Starting rendering".to_string()).unwrap();
+        channel.send("Tracing rays".to_string()).unwrap();
         let cmd = self.ccmdm.get_cmd_buffer();
         let device = self.instance.device();
         let command = unsafe {
