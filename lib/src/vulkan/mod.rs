@@ -19,7 +19,7 @@ mod sync;
 pub use self::pipeline::{Pipeline, PipelineBuilder};
 // used in the texture module
 pub use self::descriptor::Descriptor;
-pub use self::device::DeviceInfo;
+pub use self::device::{DeviceInfo, UnfinishedExecutions};
 pub use self::instance::{PresentInstance, RayTraceInstance};
 pub use self::memory::AllocatedImage;
 pub use self::raytracer::{RayTraceRenderer, RAYTRACE_SPLIT_SIZE};

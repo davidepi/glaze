@@ -5,6 +5,7 @@ use super::device::Device;
 use super::instance::Instance;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::Pipeline;
+use super::UnfinishedExecutions;
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{
     Camera, Material, Mesh, MeshInstance, ParsedScene, PresentInstance, RayTraceInstance,
@@ -74,21 +75,6 @@ pub struct VulkanMesh {
     pub material: u16,
 }
 
-/// Contains the fences for commands run at load time. All these fences are waited on at the end
-/// of the scene loading.
-struct UnfinishedExecutions {
-    /// Fences to be waited on.
-    fences: Vec<vk::Fence>,
-    /// Buffers that are to be freed after waiting on the fences.
-    buffers_to_free: Vec<AllocatedBuffer>,
-}
-
-impl UnfinishedExecutions {
-    fn wait_completion(self, device: &Device) {
-        device.wait_completion(&self.fences);
-    }
-}
-
 impl VulkanScene {
     /// Converts a parsed scene into a vulkan scene.
     ///
@@ -101,10 +87,7 @@ impl VulkanScene {
         let device = instance.device();
         let mm = instance.allocator();
         let with_raytrace = instance.supports_raytrace();
-        let mut unf = UnfinishedExecutions {
-            fences: Vec::new(),
-            buffers_to_free: Vec::new(),
-        };
+        let mut unf = UnfinishedExecutions::new(device);
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 5);
         let avg_desc = [
             (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
@@ -167,7 +150,7 @@ impl VulkanScene {
         let parsed_mats = parsed.materials()?;
         let params_buffer =
             load_materials_parameters(device, &parsed_mats, mm, &mut tcmdm, &mut unf);
-        unf.wait_completion(device);
+        unf.wait_completion();
         wchan.send("[4/4] Loading materials...".to_string()).ok();
         let materials = parsed_mats
             .into_iter()
@@ -461,8 +444,7 @@ fn load_vertices_to_gpu(
     let cmd = tcmdm.get_cmd_buffer();
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
-    unfinished.fences.push(fence);
-    unfinished.buffers_to_free.push(cpu_buffer);
+    unfinished.add(fence, cpu_buffer);
     gpu_buffer
 }
 
@@ -516,8 +498,7 @@ fn load_transforms_to_gpu(
         let cmd = tcmdm.get_cmd_buffer();
         let transfer_queue = device.transfer_queue();
         let fence = device.immediate_execute(cmd, transfer_queue, command);
-        unfinished.fences.push(fence);
-        unfinished.buffers_to_free.push(cpu_buffer);
+        unfinished.add(fence, cpu_buffer);
         let buf_info = vk::DescriptorBufferInfo {
             buffer: gpu_buffer.buffer,
             offset: 0,
@@ -603,8 +584,7 @@ fn load_indices_to_gpu(
     let cmd = tcmdm.get_cmd_buffer();
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
-    unfinished.fences.push(fence);
-    unfinished.buffers_to_free.push(cpu_buffer);
+    unfinished.add(fence, cpu_buffer);
     (converted_meshes, gpu_buffer)
 }
 
@@ -749,8 +729,7 @@ fn load_materials_parameters(
     let cmd = tcmdm.get_cmd_buffer();
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
-    unfinished.fences.push(fence);
-    unfinished.buffers_to_free.push(cpu_buffer);
+    unfinished.add(fence, cpu_buffer);
     gpu_buffer
 }
 
@@ -776,7 +755,7 @@ fn load_texture_to_gpu(
         TextureFormat::Gray => vk::Format::R8_UNORM,
         TextureFormat::Rgba => vk::Format::R8G8B8A8_SRGB,
     };
-    let buffer = mm.create_buffer(
+    let cpu_buf = mm.create_buffer(
         "Texture Buffer",
         full_size as u64,
         vk::BufferUsageFlags::TRANSFER_SRC,
@@ -790,7 +769,7 @@ fn load_texture_to_gpu(
         vk::ImageAspectFlags::COLOR,
         mip_levels as u32,
     );
-    let mut mapped = buffer
+    let mut mapped = cpu_buf
         .allocation()
         .mapped_ptr()
         .expect("Failed to map memory")
@@ -872,7 +851,7 @@ fn load_texture_to_gpu(
             );
             device.cmd_copy_buffer_to_image(
                 cmd,
-                buffer.buffer,
+                cpu_buf.buffer,
                 image.image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &regions,
@@ -891,8 +870,7 @@ fn load_texture_to_gpu(
     let cmd = tcmdm.get_cmd_buffer();
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
-    unfinished.fences.push(fence);
-    unfinished.buffers_to_free.push(buffer);
+    unfinished.add(fence, cpu_buf);
     TextureLoaded {
         info: texture.to_info(),
         image,
@@ -938,7 +916,7 @@ impl From<&Material> for MaterialParams {
 }
 
 /// How many bytes are required for `n` to be aligned to `align` boundary
-fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
+pub fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
     ((!n.into()).wrapping_add(1)) & (align.into().wrapping_sub(1))
 }
 
@@ -956,10 +934,7 @@ impl RayTraceScene {
         mut scene: Box<dyn ParsedScene>,
         ccmdm: &mut CommandManager,
     ) -> Result<Self, std::io::Error> {
-        let mut unf = UnfinishedExecutions {
-            fences: Vec::new(),
-            buffers_to_free: Vec::new(),
-        };
+        let mut unf = UnfinishedExecutions::new(instance.device());
         let mm = instance.allocator();
         let device = instance.device();
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
@@ -967,11 +942,11 @@ impl RayTraceScene {
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?, true);
         let (meshes, index_buffer) =
             load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?, true);
-        unf.wait_completion(device);
         let instances = scene.instances()?;
         let transforms = scene.transforms()?;
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
             .with_meshes(&meshes, &instances, &transforms);
+        unf.wait_completion();
         let acc = builder.build();
         let camera = scene.cameras()?[0].clone();
         Ok(Self {

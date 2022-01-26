@@ -1,4 +1,5 @@
 use super::debug::{cchars_to_string, ValidationLayers};
+use super::memory::AllocatedBuffer;
 use super::surface::Surface;
 use ash::vk;
 use fnv::FnvHashMap;
@@ -271,6 +272,50 @@ pub fn create_device(
         })
     } else {
         None
+    }
+}
+
+/// Temporary stores buffers while the GPU is still executing.
+///
+/// Sometimes, especially when copying from CPU to GPU buffers, a buffer can not be deallocated
+/// until the GPU finishes executing. This may be a problem if the buffer goes out of scope as it
+/// prevents assignment of new tasks to the GPU. This struct can be used to temporarily store these
+/// buffers, assign multiple tasks to the GPU and waits for them all at once. The buffers are
+/// dropped when this struct goes out of scope.
+pub struct UnfinishedExecutions<'device> {
+    /// Fences to be waited on.
+    fences: Vec<vk::Fence>,
+    /// Buffers that are to be freed after waiting on the fences.
+    _buffers_to_free: Vec<AllocatedBuffer>,
+    /// device to be waited on.
+    device: &'device Device,
+}
+
+impl<'device> UnfinishedExecutions<'device> {
+    /// Creates a new instance of this struct.
+    pub fn new(device: &'device Device) -> Self {
+        UnfinishedExecutions {
+            fences: Vec::new(),
+            _buffers_to_free: Vec::new(),
+            device,
+        }
+    }
+
+    /// Add a fence and the corresponding buffer.
+    pub fn add(&mut self, fence: vk::Fence, buffer: AllocatedBuffer) {
+        self.fences.push(fence);
+        self._buffers_to_free.push(buffer);
+    }
+
+    /// Waits for the GPU to finish all the jobs (assigned to this struct) and drops the buffers.
+    pub fn wait_completion(self) {
+        // force going out of scope
+    }
+}
+
+impl Drop for UnfinishedExecutions<'_> {
+    fn drop(&mut self) {
+        self.device.wait_completion(&self.fences);
     }
 }
 

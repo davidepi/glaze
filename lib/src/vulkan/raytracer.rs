@@ -2,8 +2,8 @@ use super::cmd::CommandManager;
 use super::descriptor::DescriptorSetManager;
 use super::instance::Instance;
 use super::memory::AllocatedBuffer;
-use super::scene::RayTraceScene;
-use super::{AllocatedImage, Descriptor};
+use super::scene::{padding, RayTraceScene};
+use super::{AllocatedImage, Descriptor, UnfinishedExecutions};
 use crate::vulkan::pipeline::build_raytracing_pipeline;
 use crate::{
     ParsedScene, Pipeline, PresentInstance, RayTraceInstance, TextureFormat, TextureInfo,
@@ -46,6 +46,13 @@ impl FrameDataRT {
     }
 }
 
+struct ShaderBindingTable {
+    raygen_address: u64,
+    miss_address: u64,
+    hit_address: u64,
+    buffer: AllocatedBuffer,
+}
+
 pub const RAYTRACE_SPLIT_SIZE: u32 = 64;
 
 pub struct RayTraceRenderer<T: Instance + Send + Sync> {
@@ -53,11 +60,12 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     extent: vk::Extent2D,
     out_img: AllocatedImage,
     descriptor: Descriptor,
-    dm: DescriptorSetManager,
+    sbt: ShaderBindingTable,
+    pipeline: Pipeline,
     _frame_data: AllocatedBuffer,
+    dm: DescriptorSetManager,
     tcmdm: CommandManager,
     ccmdm: CommandManager,
-    pipeline: Pipeline,
     asloader: Arc<AccelerationLoader>,
     rploader: RTPipelineLoader,
     instance: Arc<T>,
@@ -241,6 +249,7 @@ fn setup_frame_data<T: Instance>(
     tcmd: vk::CommandBuffer,
     extent: vk::Extent2D,
     scene: &RayTraceScene,
+    unf: &mut UnfinishedExecutions,
 ) -> AllocatedBuffer {
     let size = std::mem::size_of::<FrameDataRT>() as u64;
     let framedata = FrameDataRT::new(scene, extent);
@@ -274,16 +283,10 @@ fn setup_frame_data<T: Instance>(
             device.cmd_copy_buffer(cmd, cpu_buf.buffer, gpu_buf.buffer, &[buffer_copy]);
         }
     };
-    //TODO: for when the raytracer will be finished:
-    //at the time of writing, this is the only deferred upload I do at setup time.
-    //After the renderer will be finished, if there are more deferred upload (like SSBOs or such)
-    //consider returning the UnfinishedExecutions here instead of waiting on the Fence.
-    //(I can't just return the fence otherwise the CPU buf will be deallocated before the GPU
-    //finishes the actual copy)
     let device = instance.device();
     let tqueue = device.transfer_queue();
     let fence = device.immediate_execute(tcmd, tqueue, command);
-    device.wait_completion(&[fence]);
+    unf.add(fence, cpu_buf);
     gpu_buf
 }
 
@@ -300,6 +303,7 @@ fn init_rt<T: Instance + Send + Sync>(
         (vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, 1.0),
     ];
     let device = instance.device();
+    let mut unf = UnfinishedExecutions::new(device);
     let rploader = RTPipelineLoader::new(instance.instance(), device.logical());
     let transfer_queue = device.transfer_queue();
     let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
@@ -332,7 +336,7 @@ fn init_rt<T: Instance + Send + Sync>(
         image_layout: vk::ImageLayout::GENERAL,
     };
     let tcmd = tcmdm.get_cmd_buffer();
-    let frame_data = setup_frame_data(instance.as_ref(), tcmd, extent, &scene);
+    let frame_data = setup_frame_data(instance.as_ref(), tcmd, extent, &scene, &mut unf);
     let fdinfo = vk::DescriptorBufferInfo {
         buffer: frame_data.buffer,
         offset: 0,
@@ -364,19 +368,132 @@ fn init_rt<T: Instance + Send + Sync>(
         .build();
     let pipeline =
         build_raytracing_pipeline(&rploader, device.logical_clone(), &[descriptor.layout]);
+    let sbt = build_sbt(
+        instance.as_ref(),
+        &rploader,
+        &mut tcmdm,
+        &pipeline,
+        1,
+        &mut unf,
+    );
+    unf.wait_completion();
     RayTraceRenderer {
         scene,
         extent,
         out_img,
         descriptor,
-        dm,
+        sbt,
+        pipeline,
         _frame_data: frame_data,
+        dm,
         tcmdm,
         ccmdm,
-        pipeline,
         asloader: loader,
         rploader,
         instance,
+    }
+}
+
+fn build_sbt<T: Instance>(
+    instance: &T,
+    rploader: &RTPipelineLoader,
+    tcmdm: &mut CommandManager,
+    pipeline: &Pipeline,
+    hit_groups: u32,
+    unf: &mut UnfinishedExecutions,
+) -> ShaderBindingTable {
+    let device = instance.device();
+    let properties =
+        unsafe { RTPipelineLoader::get_properties(instance.instance(), device.physical().device) };
+    let align_handle = properties.shader_group_handle_alignment as u64;
+    let align_group = properties.shader_group_base_alignment as u64;
+    let size_handle = properties.shader_group_handle_size as usize;
+    let mut data = Vec::new();
+    // load single raygen group
+    let rgen_group = unsafe {
+        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 0, 1, size_handle)
+    }
+    .expect("Failed to retrieve shader handle");
+    data.extend_from_slice(&rgen_group);
+    let missing_bytes = padding(data.len() as u64, align_group) as usize;
+    data.extend_from_slice(&vec![0; missing_bytes]);
+    // load single miss group
+    let miss_offset = data.len() as u64;
+    let miss_group = unsafe {
+        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 1, 1, size_handle)
+    }
+    .expect("Failed to retrieve shader handle");
+    data.extend_from_slice(&miss_group);
+    let missing_bytes = padding(data.len() as u64, align_group) as usize;
+    data.extend_from_slice(&vec![0; missing_bytes]);
+    // load hit groups
+    let hit_group_base_index = 2; // 0 is raygen and 1 is miss
+    let hit_offset = data.len() as u64;
+    for hit_group in 0..hit_groups {
+        let shader_group = unsafe {
+            rploader.get_ray_tracing_shader_group_handles(
+                pipeline.pipeline,
+                hit_group_base_index + hit_group,
+                1,
+                size_handle,
+            )
+        }
+        .expect("Failed to retrieve shader handle");
+        data.extend_from_slice(&shader_group);
+        if align_handle != size_handle as u64 {
+            let missing_bytes = padding(data.len() as u64, align_handle) as usize;
+            data.extend_from_slice(&vec![0; missing_bytes]);
+        }
+    }
+    // now upload everything to a buffer
+    let mm = instance.allocator();
+    let cpu_buf = mm.create_buffer(
+        "SBT CPU",
+        data.len() as u64,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+        MemoryLocation::CpuToGpu,
+    );
+    let mapped = cpu_buf
+        .allocation()
+        .mapped_ptr()
+        .expect("Failed to map memory")
+        .cast()
+        .as_ptr();
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), mapped, data.len()) };
+    let gpu_buf = mm.create_buffer(
+        "SBT GPU",
+        data.len() as u64,
+        vk::BufferUsageFlags::TRANSFER_DST
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS_KHR
+            | vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
+        MemoryLocation::GpuOnly,
+    );
+    let buffer_copy = vk::BufferCopy {
+        src_offset: 0,
+        dst_offset: 0,
+        size: cpu_buf.size,
+    };
+    let transfer_queue = device.transfer_queue();
+    let cmd = tcmdm.get_cmd_buffer();
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_copy_buffer(cmd, cpu_buf.buffer, gpu_buf.buffer, &[buffer_copy]);
+        }
+    };
+    let fence = device.immediate_execute(cmd, transfer_queue, command);
+    unf.add(fence, cpu_buf);
+    // calculates the groups addresses
+    let sbt_addr_info = vk::BufferDeviceAddressInfo {
+        s_type: vk::StructureType::BUFFER_DEVICE_ADDRESS_INFO,
+        p_next: ptr::null(),
+        buffer: gpu_buf.buffer,
+    };
+    let rgen_addr = unsafe { device.logical().get_buffer_device_address(&sbt_addr_info) };
+    ShaderBindingTable {
+        raygen_address: rgen_addr,
+        miss_address: rgen_addr + miss_offset,
+        hit_address: rgen_addr + hit_offset,
+        buffer: gpu_buf,
     }
 }
 
