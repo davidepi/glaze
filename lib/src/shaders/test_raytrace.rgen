@@ -1,19 +1,55 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 
-layout(location=0) rayPayloadEXT vec3 traceres;
+layout(location=0) rayPayloadEXT vec3 payload;
 
 layout(set=0, binding=0) uniform fd {
-  vec3 camera_position;
-  vec3 camera_target;
-  vec3 camera_up;
-  float fovx;
-  float ar;
+  mat4 camera2world;
+  mat4 screen2camera;
 } FrameData;
 layout(set=0, binding=3) uniform accelerationStructureEXT scene;
 layout(set=0, binding=4, rgba32f) uniform image2D result_image;
 
+vec3 ray_origin() {
+  // technically this could be just the camera position...
+  vec4 origin_screen_space = vec4(0.0, 0.0, 0.0, 1.0);
+  vec4 origin = FrameData.camera2world * origin_screen_space;
+  return origin.xyz*(1.0/origin.w);
+}
+
+vec3 ray_dir(vec2 uv) {
+  // take a pixel in screen space (0.0, 1.0) and calculates the ray in world space
+  // by applying the inverse of the transformation matrices usually used in raster rendering
+  vec4 direction_screen_space = vec4(uv, 0.0, 1.0);
+  return normalize(FrameData.camera2world * FrameData.screen2camera * direction_screen_space).xyz;
+}
+
 void main() {
   const vec2 uv = vec2(gl_LaunchIDEXT.xy) / vec2(gl_LaunchSizeEXT.xy - 1);
-  imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(1.0, 0.0, 0.0, 1.0));
+  const vec2 ndc = vec2(-1.0)+2.0*uv;
+  vec3 origin = ray_origin();
+  vec3 direction = ray_dir(uv);
+
+  const uint rayFlags = gl_RayFlagsNoneEXT;
+  const uint cullMask = 0xFF;
+  const uint sbtRecordOffset = 0;
+  const uint sbtRecordStride = 0;
+  const uint missIndex = 0;
+  const float tmin = 0.0f;
+  const float tmax = 10000.0f;
+  const int payloadLocation = 0;
+
+  traceRayEXT(scene,
+             rayFlags,
+             cullMask,
+             sbtRecordOffset,
+             sbtRecordStride,
+             missIndex,
+             origin,
+             tmin,
+             direction,
+             tmax,
+             payloadLocation);
+
+  imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(payload, 1.0));
 }

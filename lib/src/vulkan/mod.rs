@@ -19,9 +19,11 @@ mod sync;
 pub use self::pipeline::{Pipeline, PipelineBuilder};
 // used in the texture module
 pub use self::descriptor::Descriptor;
+// used in the texture module to export a texture (independently of the renderer)
+pub use self::cmd::CommandManager;
 pub use self::device::{DeviceInfo, UnfinishedExecutions};
 pub use self::instance::{Instance, PresentInstance, RayTraceInstance};
-pub use self::memory::AllocatedImage;
+pub use self::memory::{export, AllocatedImage};
 pub use self::raytracer::{RayTraceRenderer, RAYTRACE_SPLIT_SIZE};
 pub use self::renderer::RealtimeRenderer;
 pub use self::scene::VulkanScene;

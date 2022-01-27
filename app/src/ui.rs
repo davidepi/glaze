@@ -643,6 +643,15 @@ fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut R
             }
         }
         if state.rtrenderer_has_result {
+            if ui.button("Save") {
+                let texture = renderer
+                    .scene()
+                    .unwrap()
+                    .single_texture(RT_RESULT_TEXTURE_ID)
+                    .unwrap();
+                let image = texture.export();
+                save_image(image);
+            }
             let ar = state.last_render_w as f32 / state.last_render_h as f32;
             let imagew = f32::min(state.last_render_w as f32, ui.window_size()[0]);
             let imageh = imagew / ar;
@@ -692,5 +701,23 @@ fn open_scene(state: &mut UiState) {
         },
         Ok(None) => (),
         _ => log::error!("Error opening file dialog"),
+    }
+}
+
+fn save_image(img: image::RgbaImage) {
+    let dialog = FileDialog::new()
+        .add_filter("PNG image", &["png"])
+        .show_save_single_file();
+    match dialog {
+        Ok(path) => {
+            if let Some(path) = path {
+                if let Err(e) = img.save(path) {
+                    log::error!("Failed to save image: {e}");
+                }
+            }
+        }
+        Err(err) => {
+            log::error!("Failed to open save path: {err}");
+        }
     }
 }

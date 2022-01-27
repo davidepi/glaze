@@ -7,6 +7,7 @@ use image::{GenericImageView, GrayImage, ImageBuffer, Pixel, RgbaImage};
 use crate::vulkan::AllocatedImage;
 #[cfg(feature = "vulkan")]
 use crate::vulkan::Instance;
+use crate::vulkan::{export, CommandManager};
 
 /// Information about the texture.
 // When loaded on the GPU the image is discarded and so width and height are lost.
@@ -35,6 +36,22 @@ pub struct TextureLoaded {
     pub(crate) image: AllocatedImage,
     /// The TextureLoaded is exposed outside the crate and cannot outlive the instance.
     pub(crate) instance: Arc<dyn Instance + Send + Sync>,
+}
+
+impl TextureLoaded {
+    /// Converts the GPU texture into a suitable format to be processed by the CPU
+    pub fn export(&self) -> image::RgbaImage {
+        let device = self.instance.device();
+        let transfer = device.transfer_queue();
+        let mut tcmdm = CommandManager::new(device.logical_clone(), transfer.idx, 1);
+        export(
+            self.instance.as_ref(),
+            &self.image,
+            &mut tcmdm,
+            self.info.width,
+            self.info.height,
+        )
+    }
 }
 
 /// A RGBA texture stored in memory.

@@ -13,7 +13,7 @@ use ash::extensions::khr::{
     AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
 };
 use ash::vk;
-use cgmath::{Point3, Vector3 as Vec3};
+use cgmath::{Matrix4, SquareMatrix};
 use gpu_allocator::MemoryLocation;
 use std::ptr;
 use std::sync::mpsc::Sender;
@@ -23,25 +23,16 @@ pub const RAYTRACER_MAX_RECURSION: u32 = 6;
 
 #[repr(C)]
 struct FrameDataRT {
-    cam_pos: Point3<f32>,
-    cam_tgt: Point3<f32>,
-    cam_upp: Vec3<f32>,
-    fovx: f32,
-    ar: f32,
+    camera2world: Matrix4<f32>,
+    screen2camera: Matrix4<f32>,
 }
 
 impl FrameDataRT {
     fn new(scene: &RayTraceScene, extent: vk::Extent2D) -> Self {
-        let fovx = match &scene.camera {
-            crate::Camera::Perspective(persp) => persp.fovx,
-            crate::Camera::Orthographic(_) => 0.0,
-        };
+        let ar = extent.width as f32 / extent.height as f32;
         FrameDataRT {
-            cam_pos: scene.camera.position(),
-            cam_tgt: scene.camera.target(),
-            cam_upp: scene.camera.up(),
-            fovx,
-            ar: extent.width as f32 / extent.height as f32,
+            camera2world: scene.camera.look_at_rh().invert().unwrap(),
+            screen2camera: scene.camera.projection(ar).invert().unwrap(),
         }
     }
 }
@@ -181,7 +172,9 @@ fn copy_storage_to_output<T: Instance>(
         "RT output",
         vk::Format::R8G8B8A8_SRGB,
         extent,
-        vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+        vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST
+            | vk::ImageUsageFlags::SAMPLED,
         vk::ImageAspectFlags::COLOR,
         1,
     );
@@ -650,6 +643,26 @@ mod tests {
                     .unwrap();
             let (write, _read) = mpsc::channel();
             let _ = renderer.draw(write);
+        } else {
+            // SKIPPED does not exists in cargo test...
+        }
+    }
+
+    #[test]
+    fn save_to_disk() {
+        init();
+        if let Some(instance) = RayTraceInstance::new() {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("resources")
+                .join("cube.glaze");
+            let parsed = parse(path).unwrap();
+            let renderer =
+                RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
+                    .unwrap();
+            let (write, _read) = mpsc::channel();
+            let image = renderer.draw(write).export();
         } else {
             // SKIPPED does not exists in cargo test...
         }
