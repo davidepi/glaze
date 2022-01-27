@@ -142,11 +142,17 @@ impl VulkanScene {
                     .ok();
                 (
                     id,
-                    load_texture_to_gpu(device, mm, &mut tcmdm, &mut unf, tex),
+                    load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex),
                 )
             })
             .collect();
-        let dflt_tex = load_texture_to_gpu(device, mm, &mut tcmdm, &mut unf, Texture::default());
+        let dflt_tex = load_texture_to_gpu(
+            instance.clone(),
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            Texture::default(),
+        );
         let parsed_mats = parsed.materials()?;
         let params_buffer =
             load_materials_parameters(device, &parsed_mats, mm, &mut tcmdm, &mut unf);
@@ -735,8 +741,8 @@ fn load_materials_parameters(
 
 /// Loads all textures to the GPU with optimal layout.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
-fn load_texture_to_gpu(
-    device: &Device,
+fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
+    instance: Arc<T>,
     mm: &MemoryManager,
     tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
@@ -868,12 +874,14 @@ fn load_texture_to_gpu(
         }
     };
     let cmd = tcmdm.get_cmd_buffer();
+    let device = instance.device();
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.add(fence, cpu_buf);
     TextureLoaded {
         info: texture.to_info(),
         image,
+        instance: instance.clone(),
     }
 }
 

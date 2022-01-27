@@ -72,7 +72,7 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     instance: Arc<T>,
 }
 
-impl<T: Instance + Send + Sync> RayTraceRenderer<T> {
+impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     pub fn new(
         instance: Arc<RayTraceInstance>,
         scene: Box<dyn ParsedScene>,
@@ -146,6 +146,7 @@ impl<T: Instance + Send + Sync> RayTraceRenderer<T> {
         device.wait_completion(&[fence]);
         channel.send("Rendering finished".to_string()).unwrap();
         channel.send("Copying result".to_string()).unwrap();
+
         let out_image = copy_storage_to_output(
             self.instance.as_ref(),
             self.tcmdm.get_cmd_buffer(),
@@ -161,6 +162,7 @@ impl<T: Instance + Send + Sync> RayTraceRenderer<T> {
         TextureLoaded {
             info: out_info,
             image: out_image,
+            instance: self.instance,
         }
     }
 }
@@ -610,11 +612,15 @@ mod tests {
     use super::RayTraceRenderer;
     use crate::{parse, RayTraceInstance};
     use std::path::PathBuf;
-    use std::sync::Arc;
+    use std::sync::{mpsc, Arc};
+
+    fn init() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
 
     #[test]
     fn load_raytrace() {
-        env_logger::init();
+        init();
         if let Some(instance) = RayTraceInstance::new() {
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
@@ -624,6 +630,26 @@ mod tests {
             let parsed = parse(path).unwrap();
             let _ = RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
                 .unwrap();
+        } else {
+            // SKIPPED does not exists in cargo test...
+        }
+    }
+
+    #[test]
+    fn draw_outlive() {
+        init();
+        if let Some(instance) = RayTraceInstance::new() {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("resources")
+                .join("cube.glaze");
+            let parsed = parse(path).unwrap();
+            let renderer =
+                RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
+                    .unwrap();
+            let (write, _read) = mpsc::channel();
+            let _ = renderer.draw(write);
         } else {
             // SKIPPED does not exists in cargo test...
         }

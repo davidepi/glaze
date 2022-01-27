@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use image::imageops::{resize, FilterType};
 use image::{GenericImageView, GrayImage, ImageBuffer, Pixel, RgbaImage};
 
 #[cfg(feature = "vulkan")]
 use crate::vulkan::AllocatedImage;
+#[cfg(feature = "vulkan")]
+use crate::vulkan::Instance;
 
 /// Information about the texture.
 // When loaded on the GPU the image is discarded and so width and height are lost.
@@ -24,12 +28,13 @@ pub struct TextureInfo {
 
 /// A texture that has been loaded on the GPU.
 #[cfg(feature = "vulkan")]
-#[derive(Debug)]
 pub struct TextureLoaded {
     /// Information about the texture.
     pub info: TextureInfo,
     /// The allocated buffer in the GPU.
     pub(crate) image: AllocatedImage,
+    /// The TextureLoaded is exposed outside the crate and cannot outlive the instance.
+    pub(crate) instance: Arc<dyn Instance + Send + Sync>,
 }
 
 /// A RGBA texture stored in memory.
