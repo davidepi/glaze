@@ -1,13 +1,9 @@
-use std::sync::Arc;
-
+#[cfg(feature = "vulkan")]
+use crate::vulkan::{export, AllocatedImage, CommandManager, Instance};
 use image::imageops::{resize, FilterType};
 use image::{GenericImageView, GrayImage, ImageBuffer, Pixel, RgbaImage};
-
 #[cfg(feature = "vulkan")]
-use crate::vulkan::AllocatedImage;
-#[cfg(feature = "vulkan")]
-use crate::vulkan::Instance;
-use crate::vulkan::{export, CommandManager};
+use std::sync::Arc;
 
 /// Information about the texture.
 // When loaded on the GPU the image is discarded and so width and height are lost.
@@ -38,6 +34,7 @@ pub struct TextureLoaded {
     pub(crate) instance: Arc<dyn Instance + Send + Sync>,
 }
 
+#[cfg(feature = "vulkan")]
 impl TextureLoaded {
     /// Converts the GPU texture into a suitable format to be processed by the CPU
     pub fn export(&self) -> image::RgbaImage {

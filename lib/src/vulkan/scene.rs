@@ -1,28 +1,36 @@
 use super::acceleration::{SceneAS, SceneASBuilder};
 use super::cmd::CommandManager;
+#[cfg(feature = "vulkan-interactive")]
 use super::descriptor::{Descriptor, DescriptorSetManager};
 use super::device::Device;
 use super::instance::Instance;
 use super::memory::{AllocatedBuffer, MemoryManager};
+#[cfg(feature = "vulkan-interactive")]
 use super::pipeline::Pipeline;
 use super::UnfinishedExecutions;
+#[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
-use crate::{
-    Camera, Material, Mesh, MeshInstance, ParsedScene, PresentInstance, RayTraceInstance,
-    ShaderMat, Texture, Transform, Vertex,
-};
+use crate::{Camera, Material, Mesh, MeshInstance, ParsedScene, RayTraceInstance, Vertex};
+#[cfg(feature = "vulkan-interactive")]
+use crate::{PresentInstance, ShaderMat, Texture, Transform};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use cgmath::Vector3 as Vec3;
+#[cfg(feature = "vulkan-interactive")]
 use fnv::{FnvBuildHasher, FnvHashMap};
 use gpu_allocator::MemoryLocation;
+#[cfg(feature = "vulkan-interactive")]
 use std::collections::hash_map::Entry;
+#[cfg(feature = "vulkan-interactive")]
 use std::ffi::c_void;
+#[cfg(feature = "vulkan-interactive")]
 use std::ptr;
+#[cfg(feature = "vulkan-interactive")]
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 /// A scene optimized to be rendered using this crates vulkan implementation.
+#[cfg(feature = "vulkan-interactive")]
 pub struct VulkanScene {
     /// The scene on disk.
     file: Box<dyn ParsedScene + Send>,
@@ -75,6 +83,7 @@ pub struct VulkanMesh {
     pub material: u16,
 }
 
+#[cfg(feature = "vulkan-interactive")]
 impl VulkanScene {
     /// Converts a parsed scene into a vulkan scene.
     ///
@@ -355,6 +364,7 @@ impl VulkanScene {
     }
 }
 
+#[cfg(feature = "vulkan-interactive")]
 impl Drop for VulkanScene {
     fn drop(&mut self) {
         self.deinit_pipelines();
@@ -369,6 +379,7 @@ impl Drop for VulkanScene {
 
 /// Creates the default sampler for this scene.
 /// Uses anisotropic filtering with the max anisotropy supported by the GPU.
+#[cfg(feature = "vulkan-interactive")]
 fn create_sampler(device: &Device) -> vk::Sampler {
     let max_anisotropy = device.physical().properties.limits.max_sampler_anisotropy;
     let ci = vk::SamplerCreateInfo {
@@ -457,6 +468,7 @@ fn load_vertices_to_gpu(
 /// Loads all transforms to GPU.
 /// Likely this will become a per-object binding.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
+#[cfg(feature = "vulkan-interactive")]
 fn load_transforms_to_gpu(
     device: &Device,
     mm: &MemoryManager,
@@ -596,6 +608,7 @@ fn load_indices_to_gpu(
 
 /// Converts a slice of MeshInstances into a map.
 /// The slice is expected to contain One-to-Many relationships.
+#[cfg(feature = "vulkan-interactive")]
 fn instances_to_map(instances: &[MeshInstance]) -> FnvHashMap<u16, Vec<u16>> {
     // first iteration, record the amount of tranformations for each mesh
     let mut map = FnvHashMap::with_capacity_and_hasher(instances.len(), FnvBuildHasher::default());
@@ -619,6 +632,7 @@ fn instances_to_map(instances: &[MeshInstance]) -> FnvHashMap<u16, Vec<u16>> {
 }
 
 /// Builds a single material descriptor set.
+#[cfg(feature = "vulkan-interactive")]
 fn build_mat_desc_set(
     device: &Device,
     (textures, dflt_tex): (&FnvHashMap<u16, TextureLoaded>, &TextureLoaded),
@@ -682,6 +696,7 @@ fn build_mat_desc_set(
 
 /// Loads all materials parameters to GPU.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
+#[cfg(feature = "vulkan-interactive")]
 fn load_materials_parameters(
     device: &Device,
     materials: &[(u16, Material)],
@@ -741,6 +756,7 @@ fn load_materials_parameters(
 
 /// Loads all textures to the GPU with optimal layout.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
+#[cfg(feature = "vulkan-interactive")]
 fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
     instance: Arc<T>,
     mm: &MemoryManager,
@@ -886,6 +902,7 @@ fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
 }
 
 // sort mehses by shader id (first) and then material id (second) to minimize binding changes
+#[cfg(feature = "vulkan-interactive")]
 fn sort_meshes(
     meshes: &mut Vec<VulkanMesh>,
     mats: &FnvHashMap<u16, (Material, ShaderMat, Descriptor)>,
@@ -909,6 +926,7 @@ struct MaterialParams {
 }
 
 /// Size of the material parameters struct.
+#[cfg(feature = "vulkan-interactive")]
 const PARAMS_SIZE: u64 = std::mem::size_of::<MaterialParams>() as u64;
 
 impl From<&Material> for MaterialParams {
@@ -982,6 +1000,7 @@ impl RayTraceScene {
         })
     }
 
+    #[cfg(feature = "vulkan-interactive")]
     pub fn from(
         loader: Arc<AccelerationLoader>,
         scene: &mut VulkanScene,

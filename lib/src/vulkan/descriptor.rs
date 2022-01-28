@@ -270,6 +270,7 @@ impl DescriptorSetManager {
     }
 
     /// Returns the descriptor set layout cache used by this descriptor set manager
+    #[cfg(feature = "vulkan-interactive")]
     pub fn cache(&self) -> Arc<Mutex<DescriptorSetLayoutCache>> {
         self.cache.clone()
     }

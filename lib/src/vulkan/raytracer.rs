@@ -5,10 +5,11 @@ use super::memory::AllocatedBuffer;
 use super::scene::{padding, RayTraceScene};
 use super::{AllocatedImage, Descriptor, UnfinishedExecutions};
 use crate::vulkan::pipeline::build_raytracing_pipeline;
-use crate::{
-    ParsedScene, Pipeline, PresentInstance, RayTraceInstance, TextureFormat, TextureInfo,
-    TextureLoaded, VulkanScene,
-};
+#[cfg(feature = "vulkan-interactive")]
+use crate::PresentInstance;
+#[cfg(feature = "vulkan-interactive")]
+use crate::VulkanScene;
+use crate::{ParsedScene, Pipeline, RayTraceInstance, TextureFormat, TextureInfo, TextureLoaded};
 use ash::extensions::khr::{
     AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
 };
@@ -81,6 +82,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         Ok(init_rt(instance, loader, ccmdm, scene, extent))
     }
 
+    #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn from_realtime(
         instance: Arc<PresentInstance>,
         scene: &mut VulkanScene,

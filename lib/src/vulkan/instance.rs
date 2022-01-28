@@ -4,13 +4,18 @@ use super::memory::MemoryManager;
 use crate::vulkan::debug::logger::VkDebugLogger;
 use crate::vulkan::debug::ValidationLayers;
 use crate::vulkan::descriptor::DescriptorSetLayoutCache;
-use crate::vulkan::device::{Device, SurfaceSupport};
+use crate::vulkan::device::Device;
+#[cfg(feature = "vulkan-interactive")]
+use crate::vulkan::device::SurfaceSupport;
+#[cfg(feature = "vulkan-interactive")]
 use crate::vulkan::surface::Surface;
+#[cfg(feature = "vulkan-interactive")]
 use crate::DeviceInfo;
 use ash::vk;
 use std::ffi::{c_void, CStr, CString};
 use std::ptr;
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "vulkan-interactive")]
 use winit::window::Window;
 
 /// Raytrace features require a verbose setup and I need to do it twice
@@ -73,6 +78,7 @@ pub trait Instance {
 ///
 /// Supports raytracing if there is at least one GPU in the system supporting presentation and
 /// raytracing combined.
+#[cfg(feature = "vulkan-interactive")]
 pub struct PresentInstance {
     #[cfg(debug_assertions)]
     _logger: VkDebugLogger,
@@ -86,6 +92,7 @@ pub struct PresentInstance {
     instance: BasicInstance,
 }
 
+#[cfg(feature = "vulkan-interactive")]
 impl PresentInstance {
     /// Creates a new instance using the given window as presentation surface.
     ///
@@ -127,7 +134,11 @@ impl PresentInstance {
     /// let instance = glaze::PresentInstance::new(&window);
     /// ```
     pub fn new(window: &Window) -> Option<Self> {
-        let instance_extensions = required_extensions();
+        let mut instance_extensions = vec![
+            #[cfg(debug_assertions)]
+            ash::extensions::ext::DebugUtils::name(),
+            ash::extensions::khr::Surface::name(),
+        ];
         let device_extensions = vec![
             ash::extensions::khr::Swapchain::name(),
             ash::extensions::khr::BufferDeviceAddress::name(),
@@ -135,6 +146,7 @@ impl PresentInstance {
             ash::extensions::khr::AccelerationStructure::name(),
             ash::extensions::khr::RayTracingPipeline::name(),
         ];
+        instance_extensions.extend(platform_dependent_extensions());
         let device_features = vk::PhysicalDeviceFeatures {
             sampler_anisotropy: vk::TRUE,
             ..Default::default()
@@ -159,8 +171,9 @@ impl PresentInstance {
             let cache = Arc::new(Mutex::new(DescriptorSetLayoutCache::new(
                 device.logical_clone(),
             )));
-            let enabled_extensions = device_extensions
+            let enabled_extensions = instance_extensions
                 .into_iter()
+                .chain(device_extensions)
                 .map(CStr::to_bytes)
                 .flat_map(std::str::from_utf8)
                 .map(String::from)
@@ -195,8 +208,9 @@ impl PresentInstance {
                     device.physical().device,
                     false,
                 );
-                let enabled_extensions = device_extensions
+                let enabled_extensions = instance_extensions
                     .into_iter()
+                    .chain(device_extensions)
                     .map(CStr::to_bytes)
                     .flat_map(std::str::from_utf8)
                     .map(String::from)
@@ -246,6 +260,7 @@ impl PresentInstance {
     }
 }
 
+#[cfg(feature = "vulkan-interactive")]
 impl Instance for PresentInstance {
     fn instance(&self) -> &ash::Instance {
         &self.instance.instance
@@ -266,6 +281,26 @@ impl Instance for PresentInstance {
     fn desc_layout_cache(&self) -> DLayoutCache {
         Arc::clone(&self.cache)
     }
+}
+
+/// Returns the required vulkan extension names to present on a surface.
+/// Note that each OS returns a different set of extensions.
+#[cfg(feature = "vulkan-interactive")]
+fn platform_dependent_extensions() -> Vec<&'static CStr> {
+    let retval;
+    #[cfg(target_os = "macos")]
+    {
+        retval = vec![ash::extensions::mvk::MacOSSurface::name()]
+    }
+    #[cfg(target_os = "windows")]
+    {
+        retval = vec![ash::extensions::khr::Win32Surface::name()]
+    }
+    #[cfg(target_os = "linux")]
+    {
+        retval = vec![ash::extensions::khr::XlibSurface::name()]
+    }
+    retval
 }
 
 /// Vulkan instance for a device supporting raytracing.
@@ -382,40 +417,6 @@ impl Instance for RayTraceInstance {
     fn desc_layout_cache(&self) -> DLayoutCache {
         Arc::clone(&self.cache)
     }
-}
-
-/// Returns the required vulkan extension names to present on a surface.
-/// Note that each OS returns a different set of extensions.
-fn required_extensions() -> Vec<&'static CStr> {
-    let retval;
-    #[cfg(target_os = "macos")]
-    {
-        retval = vec![
-            ash::extensions::khr::Surface::name(),
-            ash::extensions::mvk::MacOSSurface::name(),
-            #[cfg(debug_assertions)]
-            ash::extensions::ext::DebugUtils::name(),
-        ]
-    }
-    #[cfg(target_os = "windows")]
-    {
-        retval = vec![
-            ash::extensions::khr::Surface::name(),
-            ash::extensions::khr::Win32Surface::name(),
-            #[cfg(debug_assertions)]
-            ash::extensions::ext::DebugUtils::name(),
-        ]
-    }
-    #[cfg(target_os = "linux")]
-    {
-        retval = vec![
-            ash::extensions::khr::Surface::name(),
-            ash::extensions::khr::XlibSurface::name(),
-            #[cfg(debug_assertions)]
-            ash::extensions::ext::DebugUtils::name(),
-        ]
-    }
-    retval
 }
 
 /// Basic vulkan instance. Wrapper for ash::Entry and ash::Instance (to avoid Entry being dropped)

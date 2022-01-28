@@ -1,5 +1,7 @@
 use ash::vk;
+#[cfg(feature = "vulkan-interactive")]
 use std::ptr;
+#[cfg(feature = "vulkan-interactive")]
 use winit::window::Window;
 
 /// A surface used to draw to.
@@ -10,6 +12,7 @@ pub struct Surface {
 
 impl Surface {
     /// Creates a Surface from a Window.
+    #[cfg(feature = "vulkan-interactive")]
     pub fn new(entry: &ash::Entry, instance: &ash::Instance, window: &Window) -> Self {
         let surface =
             unsafe { create_surface(entry, instance, window) }.expect("Failed to create surface");
@@ -30,6 +33,7 @@ impl Drop for Surface {
 }
 
 /// Creates a surface from a Window (Windows/macOS/Linux(X11)).
+#[cfg(feature = "vulkan-interactive")]
 unsafe fn create_surface(
     entry: &ash::Entry,
     instance: &ash::Instance,

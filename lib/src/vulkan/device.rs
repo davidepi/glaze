@@ -44,6 +44,7 @@ impl Device {
     /// - the graphics queue suports presentation to the input [Surface]
     ///
     /// Returns None if no devices are found.
+    #[cfg(feature = "vulkan-interactive")]
     pub fn new_present(
         instance: &ash::Instance,
         ext: &[&'static CStr],
