@@ -24,24 +24,24 @@ vec3 ray_dir(vec2 ndc) {
   // note the 1.0 in the Z component. In my other renderer I used 0.0 and that was handled by the
   // raster2screen transformation matrix. Here I don't use such matrix so I need to put the
   // direction in screen space slightly in front of the ray origin (which is on 0.0)
-  vec4 target = normalize(FrameData.screen2camera*vec4(ndc, 1.0, 1.0));
-  vec4 direction = normalize(FrameData.camera2world * target);
+  vec3 target = (FrameData.screen2camera*vec4(ndc, 1.0, 1.0)).xyz;
+  vec4 direction = normalize(FrameData.camera2world * vec4(normalize(target), 0.0));
  return direction.xyz;
 }
 
 void main() {
-  const vec2 uv = vec2(gl_LaunchIDEXT.xy) / vec2(gl_LaunchSizeEXT.xy - 1);
+  const vec2 pixel = gl_LaunchIDEXT.xy + vec2(0.5);
+  const vec2 uv = pixel / gl_LaunchSizeEXT.xy;
   const vec2 ndc = vec2(-1.0)+2.0*uv;
-  const vec2 ndc_jittered = ndc + vec2(0.5);
   vec3 origin = ray_origin();
-  vec3 direction = ray_dir(ndc_jittered);
+  vec3 direction = ray_dir(ndc);
 
-  const uint rayFlags = gl_RayFlagsNoneEXT;
+  const uint rayFlags = gl_RayFlagsOpaqueEXT;
   const uint cullMask = 0xFF;
   const uint sbtRecordOffset = 0;
   const uint sbtRecordStride = 0;
   const uint missIndex = 0;
-  const float tmin = 0.0f;
+  const float tmin = 0.001f;
   const float tmax = 10000.0f;
   const int payloadLocation = 0;
 

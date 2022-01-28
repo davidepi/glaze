@@ -28,9 +28,11 @@ struct FrameDataRT {
 impl FrameDataRT {
     fn new(scene: &RayTraceScene, extent: vk::Extent2D) -> Self {
         let ar = extent.width as f32 / extent.height as f32;
+        let mut proj = scene.camera.projection(ar);
+        proj[1][1] *= -1.0;
         FrameDataRT {
             camera2world: scene.camera.look_at_rh().invert().unwrap(),
-            screen2camera: scene.camera.projection(ar).invert().unwrap(),
+            screen2camera: proj.invert().unwrap(),
         }
     }
 }
