@@ -1,0 +1,17 @@
+[package]
+name = "glaze-cli"
+version = "0.3.0"
+authors = ["Davide Pizzolotto <davide.pizzolotto@gmail.com>"]
+edition = "2018"
+publish = false
+license = "MIT"
+
+[dependencies]
+glaze = {path="../lib", features=["vulkan"]}
+env_logger = "0.9"
+log = "0.4"
+image = "0.23"
+cgmath = "0.18"
+clap = "3"
+faccess = "0.2"
+console = "0.15"

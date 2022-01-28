@@ -3,6 +3,7 @@
 members = [
     "lib",
     "app",
+    "cli",
     "converter",
 ]
 resolver = "2"
