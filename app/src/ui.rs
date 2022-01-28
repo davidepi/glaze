@@ -1,6 +1,6 @@
 use glaze::{
     parse, Camera, OrthographicCam, PerspectiveCam, PresentInstance, RealtimeRenderer, ShaderMat,
-    TextureFormat, TextureLoaded, VulkanScene, RAYTRACE_SPLIT_SIZE,
+    TextureFormat, TextureLoaded, VulkanScene,
 };
 use imgui::{
     CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
@@ -72,9 +72,9 @@ impl UiState {
             info_window: false,
             render_window: false,
             rt_width: 1920,
-            rt_height: 1088,
+            rt_height: 1080,
             last_render_w: 1920,
-            last_render_h: 1088,
+            last_render_h: 1080,
             rtrenderer: None,
             rtrenderer_console: String::with_capacity(1024),
             rtrenderer_has_result: false,
@@ -622,8 +622,6 @@ fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut R
             }
         } else if ui.button("Render") {
             state.clear_rtrenderer();
-            state.rt_width = set_rt_dimension(state.rt_width) as i32;
-            state.rt_height = set_rt_dimension(state.rt_height) as i32;
             state.last_render_w = state.rt_width;
             state.last_render_h = state.rt_height;
             let r = renderer.get_raytrace(state.rt_width as u32, state.rt_height as u32);
@@ -664,17 +662,6 @@ fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut R
         ui.text("Log");
         ui.text_wrapped(&state.rtrenderer_console);
         window.end()
-    }
-}
-
-fn set_rt_dimension(user_input: i32) -> u32 {
-    const SPLIT_SIZE_I32: i32 = RAYTRACE_SPLIT_SIZE as i32;
-    if user_input <= SPLIT_SIZE_I32 {
-        RAYTRACE_SPLIT_SIZE
-    } else if user_input % SPLIT_SIZE_I32 != 0 {
-        (user_input + SPLIT_SIZE_I32 - user_input % SPLIT_SIZE_I32) as u32
-    } else {
-        user_input as u32
     }
 }
 

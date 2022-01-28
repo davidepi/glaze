@@ -19,8 +19,6 @@ use std::ptr;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
-pub const RAYTRACER_MAX_RECURSION: u32 = 6;
-
 #[repr(C)]
 struct FrameDataRT {
     camera2world: Matrix4<f32>,
@@ -45,8 +43,6 @@ struct ShaderBindingTable {
     buffer: AllocatedBuffer,
 }
 
-pub const RAYTRACE_SPLIT_SIZE: u32 = 64;
-
 pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     scene: RayTraceScene,
     extent: vk::Extent2D,
@@ -56,6 +52,7 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     pipeline: Pipeline,
     _frame_data: AllocatedBuffer,
     dm: DescriptorSetManager,
+    gcmdm: CommandManager,
     tcmdm: CommandManager,
     ccmdm: CommandManager,
     asloader: Arc<AccelerationLoader>,
@@ -140,7 +137,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
 
         let out_image = copy_storage_to_output(
             self.instance.as_ref(),
-            self.tcmdm.get_cmd_buffer(),
+            &mut self.gcmdm,
             &self.out_img,
             self.extent,
         );
@@ -160,7 +157,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
 
 fn copy_storage_to_output<T: Instance>(
     instance: &T,
-    tcmd: vk::CommandBuffer,
+    gcmdm: &mut CommandManager,
     img: &AllocatedImage,
     extent: vk::Extent2D,
 ) -> AllocatedImage {
@@ -211,7 +208,19 @@ fn copy_storage_to_output<T: Instance>(
             },
         ],
     }];
-    let barrier_transfer = vk::ImageMemoryBarrier {
+    let barrier_src_general_to_transfer = vk::ImageMemoryBarrier {
+        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+        p_next: ptr::null(),
+        src_access_mask: vk::AccessFlags::SHADER_WRITE,
+        dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+        old_layout: vk::ImageLayout::GENERAL,
+        new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        image: img.image,
+        subresource_range,
+    };
+    let barrier_dst_undefined_to_transfer = vk::ImageMemoryBarrier {
         s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
         p_next: ptr::null(),
         src_access_mask: vk::AccessFlags::empty(),
@@ -223,7 +232,19 @@ fn copy_storage_to_output<T: Instance>(
         image: retval.image,
         subresource_range,
     };
-    let barrier_use = vk::ImageMemoryBarrier {
+    let barrier_src_transfer_to_general = vk::ImageMemoryBarrier {
+        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+        p_next: ptr::null(),
+        src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+        dst_access_mask: vk::AccessFlags::SHADER_WRITE,
+        old_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        new_layout: vk::ImageLayout::GENERAL,
+        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        image: img.image,
+        subresource_range,
+    };
+    let barrier_dst_transfer_to_shader = vk::ImageMemoryBarrier {
         s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
         p_next: ptr::null(),
         src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
@@ -236,17 +257,20 @@ fn copy_storage_to_output<T: Instance>(
         subresource_range,
     };
     let device = instance.device();
-    let transfer_queue = device.transfer_queue();
     let command = |vkdevice: &ash::Device, cmd: vk::CommandBuffer| unsafe {
         vkdevice.cmd_pipeline_barrier(
             cmd,
-            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::TRANSFER,
             vk::PipelineStageFlags::TRANSFER,
             vk::DependencyFlags::empty(),
             &[],
             &[],
-            &[barrier_transfer],
+            &[
+                barrier_src_general_to_transfer,
+                barrier_dst_undefined_to_transfer,
+            ],
         );
+        // blit works only on a graphic queue
         vkdevice.cmd_blit_image(
             cmd,
             img.image,
@@ -259,14 +283,19 @@ fn copy_storage_to_output<T: Instance>(
         vkdevice.cmd_pipeline_barrier(
             cmd,
             vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::FRAGMENT_SHADER,
+            vk::PipelineStageFlags::TRANSFER,
             vk::DependencyFlags::empty(),
             &[],
             &[],
-            &[barrier_use],
+            &[
+                barrier_src_transfer_to_general,
+                barrier_dst_transfer_to_shader,
+            ],
         );
     };
-    let fence = device.immediate_execute(tcmd, transfer_queue, command);
+    let cmd = gcmdm.get_cmd_buffer();
+    let graphic_queue = device.graphic_queue();
+    let fence = device.immediate_execute(cmd, graphic_queue, command);
     device.wait_completion(&[fence]);
     retval
 }
@@ -332,7 +361,9 @@ fn init_rt<T: Instance + Send + Sync>(
     let device = instance.device();
     let mut unf = UnfinishedExecutions::new(device);
     let rploader = RTPipelineLoader::new(instance.instance(), device.logical());
+    let graphic_queue = device.graphic_queue();
     let transfer_queue = device.transfer_queue();
+    let mut gcmdm = CommandManager::new(device.logical_clone(), graphic_queue.idx, 1);
     let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
     let mut dm = DescriptorSetManager::new(
         device.logical_clone(),
@@ -405,6 +436,7 @@ fn init_rt<T: Instance + Send + Sync>(
         pipeline,
         _frame_data: frame_data,
         dm,
+        gcmdm,
         tcmdm,
         ccmdm,
         asloader: loader,
@@ -662,7 +694,7 @@ mod tests {
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 800, 600)
                     .unwrap();
             let (write, _read) = mpsc::channel();
-            let image = renderer.draw(write).export();
+            let _image = renderer.draw(write).export();
         } else {
             // SKIPPED does not exists in cargo test...
         }

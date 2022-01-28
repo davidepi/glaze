@@ -24,6 +24,6 @@ pub use self::cmd::CommandManager;
 pub use self::device::{DeviceInfo, UnfinishedExecutions};
 pub use self::instance::{Instance, PresentInstance, RayTraceInstance};
 pub use self::memory::{export, AllocatedImage};
-pub use self::raytracer::{RayTraceRenderer, RAYTRACE_SPLIT_SIZE};
+pub use self::raytracer::RayTraceRenderer;
 pub use self::renderer::RealtimeRenderer;
 pub use self::scene::VulkanScene;

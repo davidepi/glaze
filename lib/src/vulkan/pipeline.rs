@@ -1,8 +1,7 @@
-use super::raytracer::RAYTRACER_MAX_RECURSION;
 use crate::geometry::Vertex;
 use crate::include_shader;
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
-use ash::vk::{self, RayTracingShaderGroupTypeKHR};
+use ash::vk;
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Arc;
@@ -409,7 +408,7 @@ pub fn build_raytracing_pipeline(
         p_stages: shader_stages.as_ptr(),
         group_count: shader_groups.len() as u32,
         p_groups: shader_groups.as_ptr(),
-        max_pipeline_ray_recursion_depth: RAYTRACER_MAX_RECURSION,
+        max_pipeline_ray_recursion_depth: 1,
         p_library_info: ptr::null(),
         p_library_interface: ptr::null(),
         p_dynamic_state: ptr::null(),

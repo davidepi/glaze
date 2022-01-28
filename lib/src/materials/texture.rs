@@ -42,12 +42,12 @@ impl TextureLoaded {
     /// Converts the GPU texture into a suitable format to be processed by the CPU
     pub fn export(&self) -> image::RgbaImage {
         let device = self.instance.device();
-        let transfer = device.transfer_queue();
-        let mut tcmdm = CommandManager::new(device.logical_clone(), transfer.idx, 1);
+        let graphic = device.graphic_queue();
+        let mut gcmdm = CommandManager::new(device.logical_clone(), graphic.idx, 1);
         export(
             self.instance.as_ref(),
             &self.image,
-            &mut tcmdm,
+            &mut gcmdm,
             self.info.width,
             self.info.height,
         )

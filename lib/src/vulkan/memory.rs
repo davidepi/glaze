@@ -461,7 +461,7 @@ impl MemoryManager {
 pub fn export<T: Instance + ?Sized>(
     instance: &T,
     src_image: &AllocatedImage,
-    tcmdm: &mut CommandManager,
+    gcmdm: &mut CommandManager,
     width: u16,
     height: u16,
 ) -> image::RgbaImage {
@@ -608,7 +608,7 @@ pub fn export<T: Instance + ?Sized>(
         subresource_range,
     };
     // run the commands
-    let cmd = tcmdm.get_cmd_buffer();
+
     let command = unsafe {
         |device: &ash::Device, cmd: vk::CommandBuffer| {
             device.cmd_pipeline_barrier(
@@ -657,7 +657,8 @@ pub fn export<T: Instance + ?Sized>(
             );
         }
     };
-    let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
+    let cmd = gcmdm.get_cmd_buffer();
+    let fence = device.immediate_execute(cmd, device.graphic_queue(), command);
     device.wait_completion(&[fence]);
     // now extract the bytes from the figure
     let size = width as usize * height as usize * 4;
