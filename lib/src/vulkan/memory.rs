@@ -508,9 +508,8 @@ pub fn export<T: Instance + ?Sized>(
         location: MemoryLocation::GpuToCpu,
         linear: true,
     };
-    let allocation = instance
-        .allocator()
-        .allocator
+    let allocator = &instance.allocator().allocator;
+    let allocation = allocator
         .lock()
         .unwrap()
         .allocate(&alloc_desc)
@@ -668,5 +667,9 @@ pub fn export<T: Instance + ?Sized>(
         .expect("Failed to map image")
         .as_ptr() as *const u8;
     unsafe { std::ptr::copy_nonoverlapping(mapped, raw.as_mut_ptr(), size) };
+    unsafe { vkdevice.destroy_image(dst_image, None) };
+    if allocator.lock().unwrap().free(allocation).is_err() {
+        log::warn!("Failed to free memory");
+    }
     image::RgbaImage::from_raw(width as u32, height as u32, raw).expect("Image conversion failed")
 }

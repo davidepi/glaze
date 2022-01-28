@@ -659,7 +659,7 @@ mod tests {
                 .join("cube.glaze");
             let parsed = parse(path).unwrap();
             let renderer =
-                RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
+                RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 800, 600)
                     .unwrap();
             let (write, _read) = mpsc::channel();
             let image = renderer.draw(write).export();
