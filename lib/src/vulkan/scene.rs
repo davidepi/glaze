@@ -928,10 +928,23 @@ pub fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
     ((!n.into()).wrapping_add(1)) & (align.into().wrapping_sub(1))
 }
 
+/// This is the struct passed to the GPU that represents a mesh instance.
+/// Used to retrieve the mesh attributes in a raytracing context.
+/// Unlike MeshInstance and VulkanMesh it MUST be indexed by its position in the array.
+/// The index must correspond to the MeshInstance index passed to the acceleration structure.
+#[repr(C)]
+struct RTInstance {
+    index_offset: u32,
+    index_count: u32,
+    material_id: u32, /* in the khronos opengl wiki u16 is not listed as scalar type...
+                       * anyway the leftover would be padded anyway so not a big deal */
+}
+
 pub struct RayTraceScene {
     pub camera: Camera,
     pub vertex_buffer: Arc<AllocatedBuffer>,
     pub index_buffer: Arc<AllocatedBuffer>,
+    pub instance_buffer: AllocatedBuffer,
     pub acc: SceneAS,
 }
 
@@ -942,25 +955,29 @@ impl RayTraceScene {
         mut scene: Box<dyn ParsedScene>,
         ccmdm: &mut CommandManager,
     ) -> Result<Self, std::io::Error> {
-        let mut unf = UnfinishedExecutions::new(instance.device());
         let mm = instance.allocator();
         let device = instance.device();
+        let mut unf = UnfinishedExecutions::new(instance.device());
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
+
+        let instances = scene.instances()?;
+        let transforms = scene.transforms()?;
         let vertex_buffer =
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?, true);
         let (meshes, index_buffer) =
             load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?, true);
-        let instances = scene.instances()?;
-        let transforms = scene.transforms()?;
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
             .with_meshes(&meshes, &instances, &transforms);
-        unf.wait_completion();
         let acc = builder.build();
         let camera = scene.cameras()?[0].clone();
+        let instance_buffer =
+            load_raytrace_instances_to_gpu(device, mm, &mut tcmdm, &mut unf, &meshes, &instances);
+        unf.wait_completion();
         Ok(Self {
             camera,
             vertex_buffer: Arc::new(vertex_buffer),
             index_buffer: Arc::new(index_buffer),
+            instance_buffer,
             acc,
         })
     }
@@ -968,23 +985,90 @@ impl RayTraceScene {
     pub fn from(
         loader: Arc<AccelerationLoader>,
         scene: &mut VulkanScene,
-        mm: &MemoryManager,
         ccmdm: &mut CommandManager,
     ) -> Result<Self, std::io::Error> {
         let instance = Arc::clone(&scene.instance);
+        let mm = instance.allocator();
         let device = instance.device();
-        let vertex_buffer = scene.vertex_buffer.clone();
-        let index_buffer = scene.index_buffer.clone();
+        let mut unf = UnfinishedExecutions::new(instance.device());
+        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
+
         let instances = scene.file.instances()?;
         let transforms = scene.file.transforms()?;
+        let vertex_buffer = scene.vertex_buffer.clone();
+        let index_buffer = scene.index_buffer.clone();
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
             .with_meshes(&scene.meshes, &instances, &transforms);
         let acc = builder.build();
+        let instance_buffer = load_raytrace_instances_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            &scene.meshes,
+            &instances,
+        );
+        unf.wait_completion();
         Ok(Self {
             camera: scene.current_cam.clone(),
             vertex_buffer,
             index_buffer,
+            instance_buffer,
             acc,
         })
     }
+}
+
+fn load_raytrace_instances_to_gpu(
+    device: &Device,
+    mm: &MemoryManager,
+    tcmdm: &mut CommandManager,
+    unf: &mut UnfinishedExecutions,
+    meshes: &[VulkanMesh],
+    instances: &[MeshInstance],
+) -> AllocatedBuffer {
+    let mut rt_instances = Vec::with_capacity(instances.len());
+    for instance in instances {
+        let original_mesh = meshes[instance.mesh_id as usize];
+        rt_instances.push(RTInstance {
+            index_offset: original_mesh.index_offset,
+            index_count: original_mesh.index_count,
+            material_id: original_mesh.material as u32,
+        });
+    }
+    let size = (std::mem::size_of::<RTInstance>() * rt_instances.len()) as u64;
+    let cpu_buffer = mm.create_buffer(
+        "rtinstances_local",
+        size,
+        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+        MemoryLocation::CpuToGpu,
+    );
+    let gpu_buffer = mm.create_buffer(
+        "rtinstances_dedicated",
+        size,
+        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+        MemoryLocation::GpuOnly,
+    );
+    let mapped = cpu_buffer
+        .allocation()
+        .mapped_ptr()
+        .expect("Failed to map memory")
+        .cast()
+        .as_ptr();
+    unsafe { std::ptr::copy_nonoverlapping(rt_instances.as_ptr(), mapped, rt_instances.len()) };
+    let copy_region = vk::BufferCopy {
+        // these are not the allocation offset, but the buffer offset!
+        src_offset: 0,
+        dst_offset: 0,
+        size: cpu_buffer.size,
+    };
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+        }
+    };
+    let cmd = tcmdm.get_cmd_buffer();
+    let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
+    unf.add(fence, cpu_buffer);
+    gpu_buffer
 }

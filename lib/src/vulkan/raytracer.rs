@@ -92,8 +92,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             instance.instance(),
             device.logical(),
         ));
-        let mm = instance.allocator();
-        let scene = RayTraceScene::from(loader.clone(), scene, mm, &mut ccmdm)?;
+        let scene = RayTraceScene::from(loader.clone(), scene, &mut ccmdm)?;
         let extent = vk::Extent2D { width, height };
         Ok(init_rt(instance, loader, ccmdm, scene, extent))
     }
@@ -363,22 +362,27 @@ fn init_rt<T: Instance + Send + Sync>(
     let rploader = RTPipelineLoader::new(instance.instance(), device.logical());
     let graphic_queue = device.graphic_queue();
     let transfer_queue = device.transfer_queue();
-    let mut gcmdm = CommandManager::new(device.logical_clone(), graphic_queue.idx, 1);
+    let gcmdm = CommandManager::new(device.logical_clone(), graphic_queue.idx, 1);
     let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
     let mut dm = DescriptorSetManager::new(
         device.logical_clone(),
         &AVG_DESC,
         instance.desc_layout_cache(),
     );
-    let vbinfo = vk::DescriptorBufferInfo {
+    let vertex_buffer_info = vk::DescriptorBufferInfo {
         buffer: scene.vertex_buffer.buffer,
         offset: 0,
         range: scene.vertex_buffer.size,
     };
-    let ibinfo = vk::DescriptorBufferInfo {
+    let index_buffer_info = vk::DescriptorBufferInfo {
         buffer: scene.index_buffer.buffer,
         offset: 0,
         range: scene.index_buffer.size,
+    };
+    let instance_buffer_info = vk::DescriptorBufferInfo {
+        buffer: scene.instance_buffer.buffer,
+        offset: 0,
+        range: scene.instance_buffer.size,
     };
     let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
     let outimg_descinfo = vk::DescriptorImageInfo {
@@ -394,26 +398,31 @@ fn init_rt<T: Instance + Send + Sync>(
     };
     let descriptor = dm
         .new_set()
+        .bind_acceleration_structure(&scene.acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
         .bind_buffer(
             fdinfo,
             vk::DescriptorType::UNIFORM_BUFFER,
             vk::ShaderStageFlags::RAYGEN_KHR,
         )
-        .bind_buffer(
-            vbinfo,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::RAYGEN_KHR,
-        )
-        .bind_buffer(
-            ibinfo,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::RAYGEN_KHR,
-        )
-        .bind_acceleration_structure(&scene.acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
         .bind_image(
             outimg_descinfo,
             vk::DescriptorType::STORAGE_IMAGE,
             vk::ShaderStageFlags::RAYGEN_KHR,
+        )
+        .bind_buffer(
+            vertex_buffer_info,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
+        .bind_buffer(
+            index_buffer_info,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
+        .bind_buffer(
+            instance_buffer_info,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
         .build();
     let pipeline =

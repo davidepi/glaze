@@ -3,32 +3,38 @@
 
 layout(location=0) rayPayloadEXT vec3 payload;
 
-layout(set=0, binding=0) uniform fd {
+layout(set=0, binding=0) uniform accelerationStructureEXT scene;
+layout(set=0, binding=1) uniform fd {
   mat4 camera2world;
   mat4 screen2camera;
 } FrameData;
-layout(set=0, binding=3) uniform accelerationStructureEXT scene;
-layout(set=0, binding=4, rgba32f) uniform image2D result_image;
+layout(set=0, binding=2, rgba32f) uniform image2D result_image;
 
 vec3 ray_origin() {
   // technically this could be just the camera position...
   vec4 origin_screen_space = vec4(0.0, 0.0, 0.0, 1.0);
   vec4 origin = FrameData.camera2world * origin_screen_space;
-  return origin.xyz*(1.0/origin.w);
+  return origin.xyz;
 }
 
-vec3 ray_dir(vec2 uv) {
-  // take a pixel in screen space (0.0, 1.0) and calculates the ray in world space
+vec3 ray_dir(vec2 ndc) {
+  // take a pixel in screen space (-1.0, 1.0) and calculates the ray in world space
   // by applying the inverse of the transformation matrices usually used in raster rendering
-  vec4 direction_screen_space = vec4(uv, 0.0, 1.0);
-  return normalize(FrameData.camera2world * FrameData.screen2camera * direction_screen_space).xyz;
+
+  // note the 1.0 in the Z component. In my other renderer I used 0.0 and that was handled by the
+  // raster2screen transformation matrix. Here I don't use such matrix so I need to put the
+  // direction in screen space slightly in front of the ray origin (which is on 0.0)
+  vec4 target = normalize(FrameData.screen2camera*vec4(ndc, 1.0, 1.0));
+  vec4 direction = normalize(FrameData.camera2world * target);
+ return direction.xyz;
 }
 
 void main() {
   const vec2 uv = vec2(gl_LaunchIDEXT.xy) / vec2(gl_LaunchSizeEXT.xy - 1);
   const vec2 ndc = vec2(-1.0)+2.0*uv;
+  const vec2 ndc_jittered = ndc + vec2(0.5);
   vec3 origin = ray_origin();
-  vec3 direction = ray_dir(uv);
+  vec3 direction = ray_dir(ndc_jittered);
 
   const uint rayFlags = gl_RayFlagsNoneEXT;
   const uint cullMask = 0xFF;
