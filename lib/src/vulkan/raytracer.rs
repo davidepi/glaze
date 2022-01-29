@@ -53,7 +53,7 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     descriptor: Descriptor,
     sbt: ShaderBindingTable,
     pipeline: Pipeline,
-    _frame_data: AllocatedBuffer,
+    frame_data: AllocatedBuffer,
     dm: DescriptorSetManager,
     gcmdm: CommandManager,
     tcmdm: CommandManager,
@@ -99,6 +99,21 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         let scene = RayTraceScene::from(loader.clone(), scene, &mut ccmdm)?;
         let extent = vk::Extent2D { width, height };
         Ok(init_rt(instance, loader, ccmdm, scene, extent))
+    }
+
+    pub fn change_resolution(&mut self, width: u32, height: u32) {
+        self.extent = vk::Extent2D { width, height };
+        let mut unf = UnfinishedExecutions::new(self.instance.device());
+        let new_out_img = create_storage_image(
+            self.instance.as_ref(),
+            &mut self.tcmdm,
+            self.extent,
+            &mut unf,
+        );
+        let new_desc = build_descriptor(&mut self.dm, &self.scene, &self.frame_data, &new_out_img);
+        unf.wait_completion();
+        self.out_img = new_out_img;
+        self.descriptor = new_desc
     }
 
     pub fn draw(mut self, channel: Sender<String>) -> TextureLoaded {
@@ -373,6 +388,55 @@ fn init_rt<T: Instance + Send + Sync>(
         &AVG_DESC,
         instance.desc_layout_cache(),
     );
+    let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
+    let frame_data = setup_frame_data(instance.as_ref(), &mut tcmdm, extent, &scene, &mut unf);
+    let descriptor = build_descriptor(&mut dm, &scene, &frame_data, &out_img);
+    let pipeline =
+        build_raytracing_pipeline(&rploader, device.logical_clone(), &[descriptor.layout]);
+    let sbt = build_sbt(
+        instance.as_ref(),
+        &rploader,
+        &mut tcmdm,
+        &pipeline,
+        1,
+        &mut unf,
+    );
+    unf.wait_completion();
+    RayTraceRenderer {
+        scene,
+        extent,
+        out_img,
+        descriptor,
+        sbt,
+        pipeline,
+        frame_data,
+        dm,
+        gcmdm,
+        tcmdm,
+        ccmdm,
+        asloader: loader,
+        rploader,
+        instance,
+    }
+}
+
+fn build_descriptor(
+    dm: &mut DescriptorSetManager,
+    scene: &RayTraceScene,
+    frame_data: &AllocatedBuffer,
+    out_img: &AllocatedImage,
+) -> Descriptor {
+    let fdinfo = vk::DescriptorBufferInfo {
+        buffer: frame_data.buffer,
+        offset: 0,
+        range: frame_data.size,
+    };
+    let outimg_descinfo = vk::DescriptorImageInfo {
+        sampler: vk::Sampler::null(),
+        image_view: out_img.image_view,
+        image_layout: vk::ImageLayout::GENERAL,
+    };
+
     let vertex_buffer_info = vk::DescriptorBufferInfo {
         buffer: scene.vertex_buffer.buffer,
         offset: 0,
@@ -388,20 +452,7 @@ fn init_rt<T: Instance + Send + Sync>(
         offset: 0,
         range: scene.instance_buffer.size,
     };
-    let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
-    let outimg_descinfo = vk::DescriptorImageInfo {
-        sampler: vk::Sampler::null(),
-        image_view: out_img.image_view,
-        image_layout: vk::ImageLayout::GENERAL,
-    };
-    let frame_data = setup_frame_data(instance.as_ref(), &mut tcmdm, extent, &scene, &mut unf);
-    let fdinfo = vk::DescriptorBufferInfo {
-        buffer: frame_data.buffer,
-        offset: 0,
-        range: frame_data.size,
-    };
-    let descriptor = dm
-        .new_set()
+    dm.new_set()
         .bind_acceleration_structure(&scene.acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
         .bind_buffer(
             fdinfo,
@@ -428,34 +479,7 @@ fn init_rt<T: Instance + Send + Sync>(
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
-        .build();
-    let pipeline =
-        build_raytracing_pipeline(&rploader, device.logical_clone(), &[descriptor.layout]);
-    let sbt = build_sbt(
-        instance.as_ref(),
-        &rploader,
-        &mut tcmdm,
-        &pipeline,
-        1,
-        &mut unf,
-    );
-    unf.wait_completion();
-    RayTraceRenderer {
-        scene,
-        extent,
-        out_img,
-        descriptor,
-        sbt,
-        pipeline,
-        _frame_data: frame_data,
-        dm,
-        gcmdm,
-        tcmdm,
-        ccmdm,
-        asloader: loader,
-        rploader,
-        instance,
-    }
+        .build()
 }
 
 fn create_storage_image<T: Instance>(
@@ -648,24 +672,25 @@ fn build_sbt<T: Instance>(
 #[cfg(test)]
 mod tests {
     use super::RayTraceRenderer;
-    use crate::{parse, RayTraceInstance};
+    use crate::{parse, ParsedScene, RayTraceInstance};
     use std::path::PathBuf;
     use std::sync::{mpsc, Arc};
+    use tempfile::tempdir;
 
-    fn init() {
+    fn init() -> Box<dyn ParsedScene + Send> {
         let _ = env_logger::builder().is_test(true).try_init();
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("resources")
+            .join("cube.glaze");
+        parse(path).unwrap()
     }
 
     #[test]
     fn load_raytrace() {
-        init();
         if let Some(instance) = RayTraceInstance::new() {
-            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join("resources")
-                .join("cube.glaze");
-            let parsed = parse(path).unwrap();
+            let parsed = init();
             let _ = RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
                 .unwrap();
         } else {
@@ -675,14 +700,8 @@ mod tests {
 
     #[test]
     fn draw_outlive() {
-        init();
         if let Some(instance) = RayTraceInstance::new() {
-            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join("resources")
-                .join("cube.glaze");
-            let parsed = parse(path).unwrap();
+            let parsed = init();
             let renderer =
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
                     .unwrap();
@@ -694,22 +713,39 @@ mod tests {
     }
 
     #[test]
-    fn save_to_disk() {
-        init();
+    fn save_to_disk() -> Result<(), std::io::Error> {
         if let Some(instance) = RayTraceInstance::new() {
-            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .join("resources")
-                .join("cube.glaze");
-            let parsed = parse(path).unwrap();
+            let parsed = init();
+            let dir = tempdir()?;
+            let file = dir.path().join("save.png");
             let renderer =
-                RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 800, 600)
+                RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
                     .unwrap();
             let (write, _read) = mpsc::channel();
-            let _image = renderer.draw(write).export();
+            let image = renderer.draw(write).export();
+            image.save(file.clone()).unwrap();
+            assert!(file.exists());
         } else {
             // SKIPPED does not exists in cargo test...
         }
+        Ok(())
+    }
+
+    #[test]
+    fn change_resolution() -> Result<(), std::io::Error> {
+        if let Some(instance) = RayTraceInstance::new() {
+            let parsed = init();
+            let mut renderer =
+                RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
+                    .unwrap();
+            renderer.change_resolution(4, 4);
+            let (write, _read) = mpsc::channel();
+            let image = renderer.draw(write).export();
+            assert_eq!(image.width(), 4);
+            assert_eq!(image.height(), 4);
+        } else {
+            // SKIPPED does not exists in cargo test...
+        }
+        Ok(())
     }
 }
