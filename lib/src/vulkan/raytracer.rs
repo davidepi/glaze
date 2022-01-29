@@ -9,7 +9,9 @@ use crate::vulkan::pipeline::build_raytracing_pipeline;
 use crate::PresentInstance;
 #[cfg(feature = "vulkan-interactive")]
 use crate::VulkanScene;
-use crate::{ParsedScene, Pipeline, RayTraceInstance, TextureFormat, TextureInfo, TextureLoaded};
+use crate::{
+    Camera, ParsedScene, Pipeline, RayTraceInstance, TextureFormat, TextureInfo, TextureLoaded,
+};
 use ash::extensions::khr::{
     AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
 };
@@ -19,24 +21,6 @@ use gpu_allocator::MemoryLocation;
 use std::ptr;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
-
-#[repr(C)]
-struct FrameDataRT {
-    camera2world: Matrix4<f32>,
-    screen2camera: Matrix4<f32>,
-}
-
-impl FrameDataRT {
-    fn new(scene: &RayTraceScene, extent: vk::Extent2D) -> Self {
-        let ar = extent.width as f32 / extent.height as f32;
-        let mut proj = scene.camera.projection(ar);
-        proj[1][1] *= -1.0;
-        FrameDataRT {
-            camera2world: scene.camera.look_at_rh().invert().unwrap(),
-            screen2camera: proj.invert().unwrap(),
-        }
-    }
-}
 
 struct ShaderBindingTable {
     rgen_addr: vk::StridedDeviceAddressRegionKHR,
@@ -48,12 +32,13 @@ struct ShaderBindingTable {
 
 pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     scene: RayTraceScene,
+    camera: Camera,
+    push_constants: [u8; 128],
     extent: vk::Extent2D,
     out_img: AllocatedImage,
     descriptor: Descriptor,
     sbt: ShaderBindingTable,
     pipeline: Pipeline,
-    frame_data: AllocatedBuffer,
     dm: DescriptorSetManager,
     gcmdm: CommandManager,
     tcmdm: CommandManager,
@@ -110,10 +95,15 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             self.extent,
             &mut unf,
         );
-        let new_desc = build_descriptor(&mut self.dm, &self.scene, &self.frame_data, &new_out_img);
+        let new_desc = build_descriptor(&mut self.dm, &self.scene, &new_out_img);
         unf.wait_completion();
+        self.update_camera(&self.camera.clone());
         self.out_img = new_out_img;
         self.descriptor = new_desc
+    }
+
+    pub fn update_camera(&mut self, camera: &Camera) {
+        self.push_constants = build_push_constants(&camera, self.extent);
     }
 
     pub fn draw(mut self, channel: Sender<String>) -> TextureLoaded {
@@ -123,6 +113,13 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         let device = self.instance.device();
         let command = unsafe {
             |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_push_constants(
+                    cmd,
+                    self.pipeline.layout,
+                    vk::ShaderStageFlags::RAYGEN_KHR,
+                    0,
+                    &self.push_constants,
+                );
                 device.cmd_bind_pipeline(
                     cmd,
                     vk::PipelineBindPoint::RAY_TRACING_KHR,
@@ -318,52 +315,6 @@ fn copy_storage_to_output<T: Instance>(
     retval
 }
 
-fn setup_frame_data<T: Instance>(
-    instance: &T,
-    tcmdm: &mut CommandManager,
-    extent: vk::Extent2D,
-    scene: &RayTraceScene,
-    unf: &mut UnfinishedExecutions,
-) -> AllocatedBuffer {
-    let size = std::mem::size_of::<FrameDataRT>() as u64;
-    let framedata = FrameDataRT::new(scene, extent);
-    let mm = instance.allocator();
-    let cpu_buf = mm.create_buffer(
-        "Raytrace frame data CPU staging",
-        size,
-        vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
-        MemoryLocation::CpuToGpu,
-    );
-    let mapped = cpu_buf
-        .allocation()
-        .mapped_ptr()
-        .expect("Failed to map memory")
-        .cast()
-        .as_ptr();
-    unsafe { std::ptr::copy_nonoverlapping(&framedata, mapped, 1) };
-    let gpu_buf = mm.create_buffer(
-        "Raytrace frame data GPU",
-        size,
-        vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-        MemoryLocation::GpuOnly,
-    );
-    let buffer_copy = vk::BufferCopy {
-        src_offset: 0,
-        dst_offset: 0,
-        size: cpu_buf.size,
-    };
-    let command = unsafe {
-        |device: &ash::Device, cmd: vk::CommandBuffer| {
-            device.cmd_copy_buffer(cmd, cpu_buf.buffer, gpu_buf.buffer, &[buffer_copy]);
-        }
-    };
-    let cmd = tcmdm.get_cmd_buffer();
-    let device = instance.device();
-    let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
-    unf.add(fence, cpu_buf);
-    gpu_buf
-}
-
 fn init_rt<T: Instance + Send + Sync>(
     instance: Arc<T>,
     loader: Arc<AccelerationLoader>,
@@ -389,8 +340,9 @@ fn init_rt<T: Instance + Send + Sync>(
         instance.desc_layout_cache(),
     );
     let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
-    let frame_data = setup_frame_data(instance.as_ref(), &mut tcmdm, extent, &scene, &mut unf);
-    let descriptor = build_descriptor(&mut dm, &scene, &frame_data, &out_img);
+    let descriptor = build_descriptor(&mut dm, &scene, &out_img);
+    let camera = scene.camera.clone();
+    let push_constants = build_push_constants(&camera, extent);
     let pipeline =
         build_raytracing_pipeline(&rploader, device.logical_clone(), &[descriptor.layout]);
     let sbt = build_sbt(
@@ -404,12 +356,13 @@ fn init_rt<T: Instance + Send + Sync>(
     unf.wait_completion();
     RayTraceRenderer {
         scene,
+        camera,
+        push_constants,
         extent,
         out_img,
         descriptor,
         sbt,
         pipeline,
-        frame_data,
         dm,
         gcmdm,
         tcmdm,
@@ -423,14 +376,8 @@ fn init_rt<T: Instance + Send + Sync>(
 fn build_descriptor(
     dm: &mut DescriptorSetManager,
     scene: &RayTraceScene,
-    frame_data: &AllocatedBuffer,
     out_img: &AllocatedImage,
 ) -> Descriptor {
-    let fdinfo = vk::DescriptorBufferInfo {
-        buffer: frame_data.buffer,
-        offset: 0,
-        range: frame_data.size,
-    };
     let outimg_descinfo = vk::DescriptorImageInfo {
         sampler: vk::Sampler::null(),
         image_view: out_img.image_view,
@@ -454,11 +401,6 @@ fn build_descriptor(
     };
     dm.new_set()
         .bind_acceleration_structure(&scene.acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
-        .bind_buffer(
-            fdinfo,
-            vk::DescriptorType::UNIFORM_BUFFER,
-            vk::ShaderStageFlags::RAYGEN_KHR,
-        )
         .bind_image(
             outimg_descinfo,
             vk::DescriptorType::STORAGE_IMAGE,
@@ -667,6 +609,31 @@ fn build_sbt<T: Instance>(
         call_addr,
         buffer: gpu_buf,
     }
+}
+
+fn build_push_constants(camera: &Camera, extent: vk::Extent2D) -> [u8; 128] {
+    // build matrices
+    let ar = extent.width as f32 / extent.height as f32;
+    let view_inv = camera.look_at_rh().invert().unwrap();
+    let mut proj = camera.projection(ar);
+    proj[1][1] *= -1.0; // cgmath is made for openGL and vulkan projection is slightly different
+    let proj_inv = proj.invert().unwrap();
+    // save matrices to byte array
+    let mut retval = [0; 128];
+    let mut index = 0;
+    let matrices = [view_inv, proj_inv];
+    for matrix in matrices {
+        let vals: &[f32; 16] = matrix.as_ref();
+        for val in vals {
+            let bytes = f32::to_le_bytes(*val);
+            retval[index] = bytes[0];
+            retval[index + 1] = bytes[1];
+            retval[index + 2] = bytes[2];
+            retval[index + 3] = bytes[3];
+            index += 4;
+        }
+    }
+    retval
 }
 
 #[cfg(test)]

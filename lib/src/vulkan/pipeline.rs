@@ -2,6 +2,7 @@ use crate::geometry::Vertex;
 use crate::include_shader;
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
+use cgmath::Matrix4;
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Arc;
@@ -389,14 +390,19 @@ pub fn build_raytracing_pipeline(
         p_shader_group_capture_replay_handle: ptr::null(),
     });
     // end of TODO
+    let push_constants = [vk::PushConstantRange {
+        stage_flags: vk::ShaderStageFlags::RAYGEN_KHR,
+        offset: 0,
+        size: (std::mem::size_of::<Matrix4<f32>>() * 2) as u32,
+    }];
     let pipeline_layout = vk::PipelineLayoutCreateInfo {
         s_type: vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
         p_next: ptr::null(),
         flags: vk::PipelineLayoutCreateFlags::empty(),
         set_layout_count: set_layout.len() as u32,
         p_set_layouts: set_layout.as_ptr(),
-        push_constant_range_count: 0,
-        p_push_constant_ranges: ptr::null(),
+        push_constant_range_count: push_constants.len() as u32,
+        p_push_constant_ranges: push_constants.as_ptr(),
     };
     let layout = unsafe { device.create_pipeline_layout(&pipeline_layout, None) }
         .expect("Failed to create Pipeline Layout");
