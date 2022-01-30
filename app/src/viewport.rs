@@ -134,26 +134,30 @@ fn handle_keyboard(input: KeyboardInput, view: &mut InteractiveView) {
 }
 
 fn camera_pos_strafe(view: &mut InteractiveView, direction: f32) {
-    if let Some(cam) = view.renderer.camera_mut() {
+    if let Some(cam) = view.renderer.camera() {
         let magnitude = view.state.mov_speed;
         let multiplier = if view.alt_speed_down {
             view.state.mov_speed_mul
         } else {
             1.0
         };
-        cam.strafe(direction * magnitude * multiplier);
+        let mut camera = cam.clone();
+        camera.strafe(direction * magnitude * multiplier);
+        view.renderer.set_camera(camera);
     }
 }
 
 fn camera_pos_advance(view: &mut InteractiveView, direction: f32) {
-    if let Some(cam) = view.renderer.camera_mut() {
+    if let Some(cam) = view.renderer.camera() {
         let magnitude = view.state.mov_speed;
         let multiplier = if view.alt_speed_down {
             view.state.mov_speed_mul
         } else {
             1.0
         };
-        cam.advance(direction * magnitude * multiplier);
+        let mut camera = cam.clone();
+        camera.advance(direction * magnitude * multiplier);
+        view.renderer.set_camera(camera);
     }
 }
 
@@ -164,7 +168,7 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
     view.mouse_pos = (x, y);
     // if lmb pressed, move camera
     if view.rmb_down {
-        if let Some(cam) = view.renderer.camera_mut() {
+        if let Some(cam) = view.renderer.camera() {
             let magnitude = view.state.mouse_sensitivity;
             let x_dir = if view.state.inverted_mouse_h {
                 1.0
@@ -176,21 +180,25 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
             } else {
                 -1.0
             };
-            cam.look_around(
+            let mut camera = cam.clone();
+            camera.look_around(
                 f32::to_radians(magnitude * x_dir * delta.0),
                 f32::to_radians(magnitude * y_dir * delta.1),
             );
+            view.renderer.set_camera(camera);
         }
     }
     if view.mmb_down {
-        if let Some(cam) = view.renderer.camera_mut() {
+        if let Some(cam) = view.renderer.camera() {
             let magnitude = view.state.vert_speed;
             let direction = if view.state.inverted_vert_mov {
                 1.0
             } else {
                 -1.0
             };
-            cam.elevate(direction * magnitude * delta.1);
+            let mut camera = cam.clone();
+            camera.elevate(direction * magnitude * delta.1);
+            view.renderer.set_camera(camera);
         }
     }
 }

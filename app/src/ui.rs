@@ -115,6 +115,9 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
         });
         ui.menu("Rendering", || {
             ui.checkbox("Render", &mut state.render_window);
+            if renderer.instance().supports_raytrace() {
+                ui.checkbox("Realtime raytracing", &mut renderer.use_raytracer);
+            }
         });
         ui.menu("Window", || {
             ui.checkbox("Settings", &mut state.settings_window);
@@ -196,6 +199,7 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
 
 fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut RealtimeRenderer) {
     let mut closed = state.settings_window;
+
     imgui::Window::new("Settings")
         .size([400.0, 400.0], Condition::Appearing)
         .opened(&mut closed)
@@ -230,7 +234,7 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                 }
                 ui.separator();
                 let (camera_name, disabled) = {
-                    let camera = renderer.camera_mut();
+                    let camera = renderer.camera();
                     let name = match camera {
                         Some(Camera::Perspective(_)) => "Perspective",
                         Some(Camera::Orthographic(_)) => "Orthographic",
@@ -248,56 +252,74 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                     .preview_value(camera_name)
                     .build(ui, || {
                         if Selectable::new("Perspective").flags(disabled).build(ui) {
-                            let camera = renderer.camera_mut().unwrap();
+                            let camera = renderer.camera().unwrap().clone();
                             if let Camera::Perspective(_) = camera {
                             } else {
-                                *camera = Camera::Perspective(PerspectiveCam {
+                                renderer.set_camera(Camera::Perspective(PerspectiveCam {
                                     position: camera.position(),
                                     target: camera.target(),
                                     up: camera.up(),
                                     fovx: 90.0_f32.to_radians(),
                                     near: 0.1,
                                     far: 250.0,
-                                });
+                                }));
                             }
                         }
                         if Selectable::new("Orthographic").flags(disabled).build(ui) {
-                            let camera = renderer.camera_mut().unwrap();
+                            let camera = renderer.camera().unwrap().clone();
                             if let Camera::Orthographic(_) = camera {
                             } else {
-                                *camera = Camera::Orthographic(OrthographicCam {
+                                renderer.set_camera(Camera::Orthographic(OrthographicCam {
                                     position: camera.position(),
                                     target: camera.target(),
                                     up: camera.up(),
                                     scale: 5.0,
                                     near: 0.1,
                                     far: 250.0,
-                                });
+                                }));
                             }
                         }
                     });
-                match renderer.camera_mut() {
+                let original_cam = renderer.camera().cloned();
+                let new_cam = match &original_cam {
                     Some(Camera::Perspective(cam)) => {
+                        let mut near = cam.near;
+                        let mut far = cam.far;
+                        let mut fovx = cam.fovx.to_degrees();
                         Slider::new("Near clipping plane", 0.01, 1.0)
                             .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut cam.near);
+                            .build(ui, &mut near);
                         Slider::new("Far clipping plane", 100.0, 10000.0)
                             .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut cam.far);
-                        let mut fovx = cam.fovx.to_degrees();
+                            .build(ui, &mut far);
                         Slider::new("Field of View", 1.0, 150.0).build(ui, &mut fovx);
-                        cam.fovx = fovx.to_radians();
+                        let mut new_cam = cam.clone();
+                        new_cam.near = near;
+                        new_cam.far = far;
+                        new_cam.fovx = fovx.to_radians();
+                        Some(Camera::Perspective(new_cam))
                     }
                     Some(Camera::Orthographic(cam)) => {
+                        let mut near = cam.near;
+                        let mut far = cam.far;
+                        let mut scale = cam.scale;
                         Slider::new("Near clipping plane", 0.01, 1.0)
                             .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut cam.near);
+                            .build(ui, &mut near);
                         Slider::new("Far clipping plane", 100.0, 10000.0)
                             .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut cam.far);
-                        Slider::new("Scale", 1.0, 10.0).build(ui, &mut cam.scale);
+                            .build(ui, &mut far);
+                        Slider::new("Scale", 1.0, 10.0).build(ui, &mut scale);
+                        let mut new_cam = cam.clone();
+                        new_cam.near = near;
+                        new_cam.far = far;
+                        new_cam.scale = scale;
+                        Some(Camera::Orthographic(new_cam))
                     }
-                    _ => {}
+                    None => None,
+                };
+                if original_cam != new_cam {
+                    renderer.set_camera(new_cam.unwrap());
                 }
             }
             if CollapsingHeader::new("Controls").build(ui) {

@@ -9,7 +9,9 @@ pub struct PresentFrameSync {
     pub acquire: vk::Fence,
     /// Semaphore used to signal when the image is ready to be acquired.
     pub image_available: vk::Semaphore,
-    /// Semaphore used to signal when the image is ready to be presented.
+    /// Semaphore used to signal when the compute queue, before the render pass, has finished.
+    pub compute_finished: vk::Semaphore,
+    /// Semaphore used to signal when the rendering has finished and image is ready to be presented.
     pub render_finished: vk::Semaphore,
     device: Arc<ash::Device>,
 }
@@ -20,6 +22,7 @@ impl PresentFrameSync {
         PresentFrameSync {
             acquire: create_fence(&device, true),
             image_available: create_semaphore(&device),
+            compute_finished: create_semaphore(&device),
             render_finished: create_semaphore(&device),
             device,
         }
@@ -42,6 +45,7 @@ impl Drop for PresentFrameSync {
         unsafe {
             self.device.destroy_fence(self.acquire, None);
             self.device.destroy_semaphore(self.image_available, None);
+            self.device.destroy_semaphore(self.compute_finished, None);
             self.device.destroy_semaphore(self.render_finished, None);
         }
     }
@@ -52,6 +56,7 @@ impl std::fmt::Debug for PresentFrameSync {
         f.debug_struct("PresentFrameSync")
             .field("acquire", &self.acquire)
             .field("image_available", &self.image_available)
+            .field("compute_finished", &self.compute_finished)
             .field("render_finished", &self.render_finished)
             .finish()
     }

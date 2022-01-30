@@ -19,7 +19,7 @@ pub struct RenderPass {
     /// Clear color of this render pass.
     pub clear_color: Vec<vk::ClearValue>,
     /// Color attachment of this render pass.
-    _color: AllocatedImage,
+    pub color: AllocatedImage,
     /// Depth attachment of this render pass.
     _depth: Option<AllocatedImage>,
     /// Vulkan device handle.
@@ -166,7 +166,7 @@ impl RenderPass {
             extent,
             copy_descriptor,
             clear_color,
-            _color: color_img,
+            color: color_img,
             _depth: Some(depth_img),
             device,
         }
@@ -219,6 +219,8 @@ pub struct FinalRenderPass {
     pub framebuffer: vk::Framebuffer,
     /// The extent of the render pass
     pub extent: vk::Extent2D,
+    /// Image of the framebuffer,
+    pub image: vk::Image,
     /// Image view of the framebuffer
     pub view: vk::ImageView,
     device: Arc<ash::Device>,
@@ -231,6 +233,7 @@ impl FinalRenderPass {
     pub fn new(
         device: Arc<ash::Device>,
         format: vk::Format,
+        image: vk::Image,
         view: vk::ImageView,
         extent: vk::Extent2D,
     ) -> FinalRenderPass {
@@ -301,6 +304,7 @@ impl FinalRenderPass {
             renderpass,
             framebuffer,
             extent,
+            image,
             view,
             device,
         }
@@ -338,6 +342,7 @@ impl FinalRenderPass {
 impl Drop for FinalRenderPass {
     fn drop(&mut self) {
         unsafe {
+            self.device.destroy_image_view(self.view, None);
             self.device.destroy_framebuffer(self.framebuffer, None);
             self.device.destroy_render_pass(self.renderpass, None);
         }

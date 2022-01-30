@@ -18,7 +18,6 @@ pub struct Swapchain {
     swapchain: vk::SwapchainKHR,
     loader: ash::extensions::khr::Swapchain,
     extent: vk::Extent2D,
-    image_views: Vec<vk::ImageView>,
     render_passes: Vec<FinalRenderPass>,
     instance: Arc<PresentInstance>,
 }
@@ -91,9 +90,6 @@ impl Swapchain {
 /// handle as parameter for the ash::vk::SwapchainCreateInfoKHR).
 fn destroy(sc: &mut Swapchain, partial: bool) {
     unsafe {
-        sc.image_views
-            .drain(..)
-            .for_each(|iw| sc.instance.device().logical().destroy_image_view(iw, None));
         if !partial {
             sc.loader.destroy_swapchain(sc.swapchain, None);
         }
@@ -181,18 +177,18 @@ fn swapchain_init(
         unsafe { loader.create_swapchain(&ci, None) }.expect("Failed to create swapchain");
     let images = unsafe { loader.get_swapchain_images(swapchain) }.expect("Failed to get images");
     let image_views = images
-        .into_iter()
-        .map(|i| create_image_views(device.logical(), i, format.format))
-        .collect::<Vec<_>>();
-    let render_passes = image_views
         .iter()
-        .map(|iw| FinalRenderPass::new(device.logical_clone(), format.format, *iw, extent))
+        .map(|i| create_image_views(device.logical(), *i, format.format))
+        .collect::<Vec<_>>();
+    let render_passes = images
+        .into_iter()
+        .zip(image_views)
+        .map(|(i, iw)| FinalRenderPass::new(device.logical_clone(), format.format, i, iw, extent))
         .collect();
     Swapchain {
         swapchain,
         loader,
         extent: ci.image_extent,
-        image_views,
         render_passes,
         instance,
     }

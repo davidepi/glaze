@@ -16,7 +16,7 @@ use ash::extensions::khr::{
     AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
 };
 use ash::vk;
-use cgmath::{Matrix4, SquareMatrix};
+use cgmath::SquareMatrix;
 use gpu_allocator::MemoryLocation;
 use std::ptr;
 use std::sync::mpsc::Sender;
@@ -103,7 +103,197 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     }
 
     pub fn update_camera(&mut self, camera: &Camera) {
-        self.push_constants = build_push_constants(&camera, self.extent);
+        self.push_constants = build_push_constants(camera, self.extent);
+    }
+
+    #[cfg(feature = "vulkan-interactive")]
+    pub(crate) fn draw_frame(
+        &mut self,
+        wait: vk::Semaphore,
+        signal: vk::Semaphore,
+        out_img: &AllocatedImage,
+    ) {
+        let device = self.instance.device();
+        let vkdevice = device.logical();
+        let cmd_begin = vk::CommandBufferBeginInfo {
+            s_type: vk::StructureType::COMMAND_BUFFER_BEGIN_INFO,
+            p_next: ptr::null(),
+            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            p_inheritance_info: ptr::null(),
+        };
+        let cmds = [self.ccmdm.get_cmd_buffer()];
+        let cmd = cmds[0];
+        let wait = [wait];
+        let signal = [signal];
+        let submit_ci = vk::SubmitInfo {
+            s_type: vk::StructureType::SUBMIT_INFO,
+            p_next: ptr::null(),
+            wait_semaphore_count: wait.len() as u32,
+            p_wait_semaphores: wait.as_ptr(),
+            p_wait_dst_stage_mask: &vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            command_buffer_count: cmds.len() as u32,
+            p_command_buffers: cmds.as_ptr(),
+            signal_semaphore_count: signal.len() as u32,
+            p_signal_semaphores: signal.as_ptr(),
+        };
+        let blit_subresource = vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        let subresource_range = vk::ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            base_mip_level: 0,
+            level_count: 1,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        let blit_regions = [vk::ImageBlit {
+            src_subresource: blit_subresource,
+            src_offsets: [
+                vk::Offset3D { x: 0, y: 0, z: 0 },
+                vk::Offset3D {
+                    x: self.extent.width as i32,
+                    y: self.extent.height as i32,
+                    z: 1,
+                },
+            ],
+            dst_subresource: blit_subresource,
+            dst_offsets: [
+                vk::Offset3D { x: 0, y: 0, z: 0 },
+                vk::Offset3D {
+                    x: self.extent.width as i32,
+                    y: self.extent.height as i32,
+                    z: 1,
+                },
+            ],
+        }];
+        let barrier_src_general_to_transfer = vk::ImageMemoryBarrier {
+            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+            p_next: ptr::null(),
+            src_access_mask: vk::AccessFlags::MEMORY_WRITE,
+            dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+            old_layout: vk::ImageLayout::GENERAL,
+            new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            image: self.out_img.image,
+            subresource_range,
+        };
+        let barrier_dst_undefined_to_transfer = vk::ImageMemoryBarrier {
+            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+            p_next: ptr::null(),
+            src_access_mask: vk::AccessFlags::MEMORY_READ,
+            dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+            old_layout: vk::ImageLayout::UNDEFINED,
+            new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            image: out_img.image,
+            subresource_range,
+        };
+        let barrier_src_transfer_to_general = vk::ImageMemoryBarrier {
+            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+            p_next: ptr::null(),
+            src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+            dst_access_mask: vk::AccessFlags::MEMORY_WRITE,
+            old_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            new_layout: vk::ImageLayout::GENERAL,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            image: self.out_img.image,
+            subresource_range,
+        };
+        let barrier_dst_transfer_to_shader = vk::ImageMemoryBarrier {
+            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+            p_next: ptr::null(),
+            src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+            dst_access_mask: vk::AccessFlags::MEMORY_READ,
+            old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+            image: out_img.image,
+            subresource_range,
+        };
+        let queue = device.compute_queue();
+        unsafe {
+            vkdevice
+                .begin_command_buffer(cmd, &cmd_begin)
+                .expect("Failed to begin command");
+            vkdevice.cmd_push_constants(
+                cmd,
+                self.pipeline.layout,
+                vk::ShaderStageFlags::RAYGEN_KHR,
+                0,
+                &self.push_constants,
+            );
+            vkdevice.cmd_bind_pipeline(
+                cmd,
+                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                self.pipeline.pipeline,
+            );
+            vkdevice.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                self.pipeline.layout,
+                0,
+                &[self.descriptor.set],
+                &[],
+            );
+            self.rploader.cmd_trace_rays(
+                cmd,
+                &self.sbt.rgen_addr,
+                &self.sbt.miss_addr,
+                &self.sbt.hit_addr,
+                &self.sbt.call_addr,
+                self.extent.width,
+                self.extent.height,
+                1,
+            );
+            vkdevice.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[
+                    barrier_src_general_to_transfer,
+                    barrier_dst_undefined_to_transfer,
+                ],
+            );
+            // blit works only on a graphic queue
+            vkdevice.cmd_blit_image(
+                cmd,
+                self.out_img.image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                out_img.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &blit_regions,
+                vk::Filter::NEAREST,
+            );
+            vkdevice.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[
+                    barrier_src_transfer_to_general,
+                    barrier_dst_transfer_to_shader,
+                ],
+            );
+
+            vkdevice
+                .end_command_buffer(cmd)
+                .expect("Failed to end command buffer");
+            vkdevice
+                .queue_submit(queue.queue, &[submit_ci], vk::Fence::null())
+                .expect("Failed to submit to queue");
+        }
     }
 
     pub fn draw(mut self, channel: Sender<String>) -> TextureLoaded {
@@ -293,7 +483,7 @@ fn copy_storage_to_output<T: Instance>(
             retval.image,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             &blit_regions,
-            vk::Filter::LINEAR,
+            vk::Filter::NEAREST,
         );
         vkdevice.cmd_pipeline_barrier(
             cmd,
