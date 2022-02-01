@@ -4,7 +4,8 @@ use clap::{App, Arg};
 use console::style;
 use glaze::{
     converted_file, parse, serialize, Camera, Material, Mesh, MeshInstance, ParserVersion,
-    PerspectiveCam, Texture, TextureFormat, TextureInfo, Transform, Vertex,
+    PerspectiveCam, Texture, TextureFormat, TextureInfo, Transform, Vertex, DEFAULT_MATERIAL_ID,
+    DEFAULT_TEXTURE_ID,
 };
 use image::io::Reader as ImageReader;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -286,7 +287,7 @@ fn convert_meshes(
         let mesh = Mesh {
             id: id as u16,
             indices,
-            material: mesh.material_index as u16,
+            material: mesh.material_index as u16 + 1, // +1 because 0 is the default material
         };
         retval_meshes.push(mesh);
     }
@@ -336,6 +337,9 @@ fn convert_materials(
     let mut used_textures = HashMap::new();
     let mut retval_textures = Vec::new();
     let mut retval_materials = Vec::new();
+    // add default texture
+    retval_textures.push((DEFAULT_TEXTURE_ID, Texture::default()));
+    retval_materials.push((DEFAULT_MATERIAL_ID, Material::default()));
     for material in materials {
         for (texture_type, textures) in &material.textures {
             let texture = textures.first().unwrap(); // support single textures only
@@ -414,6 +418,7 @@ fn convert_texture(
                     Texture::new_rgba(info, img_raw)
                 }
             };
+            // this works as long as the default ID is 0
             let id = ret.len() as u16;
             ret.push((id, texture));
             used.insert(used_name, id);
@@ -443,10 +448,14 @@ fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, 
                     _ => TextureFormat::Rgba,
                 };
                 let tex_name = used_name(&prop_name, format);
-                let texture = used_textures.get(&tex_name);
+                let texture = if let Some(texture_id) = used_textures.get(&tex_name) {
+                    *texture_id
+                } else {
+                    DEFAULT_TEXTURE_ID
+                };
                 match property.semantic {
-                    russimp::texture::TextureType::Diffuse => retval.diffuse = texture.copied(),
-                    russimp::texture::TextureType::Opacity => retval.opacity = texture.copied(),
+                    russimp::texture::TextureType::Diffuse => retval.diffuse = texture,
+                    russimp::texture::TextureType::Opacity => retval.opacity = texture,
                     _ => {}
                 }
             }
@@ -466,11 +475,12 @@ fn used_name(name: &str, format: TextureFormat) -> String {
     format!("{}{}", name, format_str)
 }
 
-fn fcol_to_ucol(col: [f32; 3]) -> [u8; 3] {
+fn fcol_to_ucol(col: [f32; 3]) -> [u8; 4] {
     [
         (col[0] * 255.0) as u8,
         (col[1] * 255.0) as u8,
         (col[2] * 255.0) as u8,
+        255,
     ]
 }
 

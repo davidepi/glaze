@@ -831,24 +831,16 @@ fn material_to_bytes((index, material): &(u16, Material)) -> Vec<u8> {
         + str_len //actual string
         + std::mem::size_of::<u8>() // shader id
         + std::mem::size_of::<u16>() // diffuse texture id
-        + 3 * std::mem::size_of::<u8>() // diffuse multiplier
+        + 4 * std::mem::size_of::<u8>() // diffuse multiplier
         + std::mem::size_of::<u16>(); // opacity texture id
     let mut retval = Vec::with_capacity(total_len);
     retval.extend(index.to_le_bytes());
     retval.push(str_len as u8);
     retval.extend(material.name.bytes());
     retval.push(material.shader.into());
-    if let Some(diffuse) = material.diffuse {
-        retval.extend(diffuse.to_le_bytes());
-    } else {
-        retval.extend(u16::MAX.to_le_bytes());
-    }
-    retval.extend(&material.diffuse_mul[0..3]);
-    if let Some(opacity) = material.opacity {
-        retval.extend(opacity.to_le_bytes());
-    } else {
-        retval.extend(u16::MAX.to_le_bytes());
-    }
+    retval.extend(material.diffuse.to_le_bytes());
+    retval.extend(&material.diffuse_mul[0..4]);
+    retval.extend(material.opacity.to_le_bytes());
     retval
 }
 
@@ -861,21 +853,16 @@ fn bytes_to_material(data: &[u8]) -> (u16, Material) {
     index += str_len;
     let shader_id = data[index];
     index += 1;
-    let diffuse_id = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+    let diffuse = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
     index += 2;
-    let diffuse = if diffuse_id != u16::MAX {
-        Some(diffuse_id)
-    } else {
-        None
-    };
-    let diffuse_mul = [data[index], data[index + 1], data[index + 2]];
-    index += 3;
-    let opacity_id = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
-    let opacity = if opacity_id != u16::MAX {
-        Some(opacity_id)
-    } else {
-        None
-    };
+    let diffuse_mul = [
+        data[index],
+        data[index + 1],
+        data[index + 2],
+        data[index + 3],
+    ];
+    index += 4;
+    let opacity = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
     let material = Material {
         name,
         shader: shader_id.into(),
@@ -1063,10 +1050,10 @@ mod tests {
         for i in 0..count {
             let shaders = ShaderMat::all_values();
             let shader = shaders[rng.gen_range(0..shaders.len())];
-            let diffuse = if rng.gen_bool(0.1) {
-                Some(rng.gen_range(0..u16::MAX - 1))
+            let diffuse = if rng.gen_bool(0.5) {
+                rng.gen_range(0..u16::MAX - 1)
             } else {
-                None
+                0
             };
             let name = Xoshiro128StarStar::seed_from_u64(rng.gen())
                 .sample_iter(&Alphanumeric)
@@ -1077,11 +1064,12 @@ mod tests {
                 rng.gen_range(0..255),
                 rng.gen_range(0..255),
                 rng.gen_range(0..255),
+                rng.gen_range(0..255),
             ];
-            let opacity = if rng.gen_bool(0.01) {
-                Some(rng.gen_range(0..u16::MAX - 1))
+            let opacity = if rng.gen_bool(0.1) {
+                rng.gen_range(0..u16::MAX - 1)
             } else {
-                None
+                0
             };
             let material = Material {
                 name,

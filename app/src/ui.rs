@@ -471,13 +471,14 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                 new_diffuse = Some(diff);
             }
             if diff_clicked {
-                state.textures_selected = diff;
+                state.textures_selected = Some(diff);
                 state.textures_window = true;
             }
             let mut color = [
                 current.diffuse_mul[0] as f32 / 255.0,
                 current.diffuse_mul[1] as f32 / 255.0,
                 current.diffuse_mul[2] as f32 / 255.0,
+                current.diffuse_mul[3] as f32 / 255.0,
             ];
             if ColorEdit::new("Diffuse multiplier", &mut color)
                 .inputs(false)
@@ -488,6 +489,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                     (color[0] * 255.0) as u8,
                     (color[1] * 255.0) as u8,
                     (color[2] * 255.0) as u8,
+                    (color[3] * 255.0) as u8,
                 ]);
             }
             let (opac, opac_clicked) = texture_selector(ui, "Opacity", current.opacity, scene);
@@ -496,7 +498,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                 new_opacity = Some(opac);
             }
             if opac_clicked {
-                state.textures_selected = opac;
+                state.textures_selected = Some(opac);
                 state.textures_window = true;
             }
             if changed {
@@ -517,25 +519,13 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
     }
 }
 
-fn texture_selector(
-    ui: &Ui,
-    text: &str,
-    mut selected: Option<u16>,
-    scene: &VulkanScene,
-) -> (Option<u16>, bool) {
+fn texture_selector(ui: &Ui, text: &str, mut selected: u16, scene: &VulkanScene) -> (u16, bool) {
     let mut clicked_on_preview = false;
-    let name = if let Some(id) = selected {
-        &scene.single_texture(id).unwrap().info.name
-    } else {
-        ""
-    };
+    let name = &scene.single_texture(selected).unwrap().info.name;
     if let Some(cb) = ComboBox::new(text).preview_value(name).begin(ui) {
-        if Selectable::new("").build(ui) {
-            selected = None;
-        }
         for (id, texture) in scene.textures().into_iter() {
             if Selectable::new(&texture.info.name).build(ui) {
-                selected = Some(id);
+                selected = id;
             }
             if ui.is_item_hovered() {
                 ui.tooltip(|| {
@@ -545,20 +535,18 @@ fn texture_selector(
         }
         cb.end();
     }
-    if let Some(selected) = selected {
-        ui.same_line();
-        if ImageButton::new(TextureId::new(selected as usize), [16.0, 16.0])
-            .frame_padding(0)
-            .build(ui)
-        {
-            clicked_on_preview = true;
-        }
-        if ui.is_item_hovered() {
-            ui.tooltip(|| {
-                ui.text(name);
-                Image::new(TextureId::new(selected as usize), [256.0, 256.0]).build(ui);
-            });
-        }
+    ui.same_line();
+    if ImageButton::new(TextureId::new(selected as usize), [16.0, 16.0])
+        .frame_padding(0)
+        .build(ui)
+    {
+        clicked_on_preview = true;
+    }
+    if ui.is_item_hovered() {
+        ui.tooltip(|| {
+            ui.text(name);
+            Image::new(TextureId::new(selected as usize), [256.0, 256.0]).build(ui);
+        });
     }
     (selected, clicked_on_preview)
 }

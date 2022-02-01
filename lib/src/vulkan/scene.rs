@@ -48,8 +48,6 @@ pub struct VulkanScene {
     pub(super) meshes: Vec<VulkanMesh>,
     /// Generic sampler used for all textures
     sampler: vk::Sampler,
-    /// Default texture used when a texture is required but missing. This is a 1x1 white texture.
-    dflt_tex: TextureLoaded,
     /// Manages descriptors in the current scene.
     dm: DescriptorSetManager,
     /// Map of all materials in the scene.
@@ -155,13 +153,6 @@ impl VulkanScene {
                 )
             })
             .collect();
-        let dflt_tex = load_texture_to_gpu(
-            instance.clone(),
-            mm,
-            &mut tcmdm,
-            &mut unf,
-            Texture::default(),
-        );
         let parsed_mats = parsed.materials()?;
         let params_buffer =
             load_materials_parameters(device, &parsed_mats, mm, &mut tcmdm, &mut unf);
@@ -172,7 +163,7 @@ impl VulkanScene {
             .map(|(id, mat)| {
                 let (shader, desc) = build_mat_desc_set(
                     device,
-                    (&textures, &dflt_tex),
+                    &textures,
                     &params_buffer,
                     sampler,
                     id,
@@ -200,7 +191,6 @@ impl VulkanScene {
             params_buffer,
             meshes,
             sampler,
-            dflt_tex,
             dm,
             materials,
             pipelines,
@@ -262,7 +252,7 @@ impl VulkanScene {
         device.wait_completion(&[fence]);
         let (new_shader, new_desc) = build_mat_desc_set(
             device,
-            (&self.textures, &self.dflt_tex),
+            &self.textures,
             &self.params_buffer,
             self.sampler,
             mat_id,
@@ -635,19 +625,18 @@ fn instances_to_map(instances: &[MeshInstance]) -> FnvHashMap<u16, Vec<u16>> {
 #[cfg(feature = "vulkan-interactive")]
 fn build_mat_desc_set(
     device: &Device,
-    (textures, dflt_tex): (&FnvHashMap<u16, TextureLoaded>, &TextureLoaded),
+    textures: &FnvHashMap<u16, TextureLoaded>,
     params: &AllocatedBuffer,
     sampler: vk::Sampler,
     id: u16,
     material: &Material,
     dm: &mut DescriptorSetManager,
 ) -> (ShaderMat, Descriptor) {
+    use crate::materials::DEFAULT_TEXTURE_ID;
+
     let mut shader = material.shader;
-    let diffuse = if let Some(diff_id) = material.diffuse {
-        textures.get(&diff_id).unwrap_or(dflt_tex)
-    } else {
-        dflt_tex
-    };
+    let dflt_tex = textures.get(&DEFAULT_TEXTURE_ID).unwrap();
+    let diffuse = textures.get(&material.diffuse).unwrap_or(dflt_tex);
     let diffuse_image_info = vk::DescriptorImageInfo {
         sampler,
         image_view: diffuse.image.image_view,
@@ -677,9 +666,9 @@ fn build_mat_desc_set(
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             vk::ShaderStageFlags::FRAGMENT,
         );
-    if let Some(op_id) = material.opacity {
+    if material.opacity != 0 {
         shader = material.shader.two_sided(); // use a two-sided shader
-        let opacity = textures.get(&op_id).unwrap_or(dflt_tex);
+        let opacity = textures.get(&material.opacity).unwrap_or(dflt_tex);
         let opacity_image_info = vk::DescriptorImageInfo {
             sampler,
             image_view: opacity.image.image_view,
