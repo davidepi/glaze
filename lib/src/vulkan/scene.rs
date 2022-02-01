@@ -205,14 +205,15 @@ impl VulkanScene {
     /// Updates (changes) a single material in the scene.
     pub(super) fn update_material(
         &mut self,
-        device: &Device,
         mat_id: u16,
         new: Material,
-        gcmdm: &mut CommandManager,
+        tcmdm: &mut CommandManager, /* graphic because the realtime renderer does not have a tranfer */
+        unf: &mut UnfinishedExecutions,
         rpass: vk::RenderPass,
         frame_desc_layout: vk::DescriptorSetLayout,
         render_size: vk::Extent2D,
     ) {
+        let device = self.instance.device();
         // setup the new descriptor
         let params = MaterialParams::from(&new);
         let mapped = self
@@ -246,10 +247,10 @@ impl VulkanScene {
                 );
             }
         };
-        let cmd = gcmdm.get_cmd_buffer();
-        let queue = device.graphic_queue();
+        let cmd = tcmdm.get_cmd_buffer();
+        let queue = device.transfer_queue();
         let fence = device.immediate_execute(cmd, queue, command);
-        device.wait_completion(&[fence]);
+        unf.add_fence(fence); // the buffer is always stored in self
         let (new_shader, new_desc) = build_mat_desc_set(
             device,
             &self.textures,
@@ -406,53 +407,19 @@ fn load_vertices_to_gpu(
     device: &Device,
     mm: &MemoryManager,
     tcmdm: &mut CommandManager,
-    unfinished: &mut UnfinishedExecutions,
+    unf: &mut UnfinishedExecutions,
     vertices: &[Vertex],
     with_raytrace: bool,
 ) -> AllocatedBuffer {
-    let size = (std::mem::size_of::<Vertex>() * vertices.len()) as u64;
-    let cpu_buffer = mm.create_buffer(
-        "vertices_local",
-        size,
-        vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
-        MemoryLocation::CpuToGpu,
-    );
-    let raytrace_flags = if with_raytrace {
-        vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+    let flags = if with_raytrace {
+        vk::BufferUsageFlags::VERTEX_BUFFER
+            | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
             | vk::BufferUsageFlags::STORAGE_BUFFER
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR
     } else {
-        vk::BufferUsageFlags::empty()
+        vk::BufferUsageFlags::VERTEX_BUFFER
     };
-    let gpu_buffer = mm.create_buffer(
-        "vertices_dedicated",
-        size,
-        vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | raytrace_flags,
-        MemoryLocation::GpuOnly,
-    );
-    let mapped = cpu_buffer
-        .allocation()
-        .mapped_ptr()
-        .expect("Failed to map memory")
-        .cast()
-        .as_ptr();
-    unsafe { std::ptr::copy_nonoverlapping(vertices.as_ptr(), mapped, vertices.len()) };
-    let copy_region = vk::BufferCopy {
-        // these are not the allocation offset, but the buffer offset!
-        src_offset: 0,
-        dst_offset: 0,
-        size: cpu_buffer.size,
-    };
-    let command = unsafe {
-        |device: &ash::Device, cmd: vk::CommandBuffer| {
-            device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
-        }
-    };
-    let cmd = tcmdm.get_cmd_buffer();
-    let transfer_queue = device.transfer_queue();
-    let fence = device.immediate_execute(cmd, transfer_queue, command);
-    unfinished.add(fence, cpu_buffer);
-    gpu_buffer
+    upload_buffer(device, mm, tcmdm, flags, unf, vertices)
 }
 
 /// Loads all transforms to GPU.
@@ -464,7 +431,7 @@ fn load_transforms_to_gpu(
     mm: &MemoryManager,
     tcmdm: &mut CommandManager,
     dm: &mut DescriptorSetManager,
-    unfinished: &mut UnfinishedExecutions,
+    unf: &mut UnfinishedExecutions,
     transforms: &[(u16, Transform)],
 ) -> FnvHashMap<u16, (AllocatedBuffer, Descriptor)> {
     let mut map = FnvHashMap::with_capacity_and_hasher(transforms.len(), FnvBuildHasher::default());
@@ -472,41 +439,14 @@ fn load_transforms_to_gpu(
         //TODO: maybe a single buffer would be better, considering that I will probably never edit
         // transforms. I should also consider removing the FnvHashMap and use a Vec given that I am
         // the one assigning indices to the transforms so I know for sure they are contiguous.
-        let size = std::mem::size_of::<Transform>() as u64;
-        let cpu_buffer = mm.create_buffer(
-            "transform_local",
-            size,
-            vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
-            MemoryLocation::CpuToGpu,
+        let gpu_buffer = upload_buffer(
+            device,
+            mm,
+            tcmdm,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            unf,
+            &[transform.clone()],
         );
-        let gpu_buffer = mm.create_buffer(
-            "transform_dedicated",
-            size,
-            vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-            MemoryLocation::GpuOnly,
-        );
-        let mapped = cpu_buffer
-            .allocation()
-            .mapped_ptr()
-            .expect("Failed to map memory")
-            .cast()
-            .as_ptr();
-        unsafe { std::ptr::copy_nonoverlapping(transform, mapped, 1) };
-        let copy_region = vk::BufferCopy {
-            // these are not the allocation offset, but the buffer offset!
-            src_offset: 0,
-            dst_offset: 0,
-            size: cpu_buffer.size,
-        };
-        let command = unsafe {
-            |device: &ash::Device, cmd: vk::CommandBuffer| {
-                device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
-            }
-        };
-        let cmd = tcmdm.get_cmd_buffer();
-        let transfer_queue = device.transfer_queue();
-        let fence = device.immediate_execute(cmd, transfer_queue, command);
-        unfinished.add(fence, cpu_buffer);
         let buf_info = vk::DescriptorBufferInfo {
             buffer: gpu_buffer.buffer,
             offset: 0,
@@ -946,21 +886,39 @@ struct RTInstance {
     material_id: u32, // due to how std430 works
 }
 
-pub struct RayTraceScene {
-    pub camera: Camera,
-    pub vertex_buffer: Arc<AllocatedBuffer>,
-    pub index_buffer: Arc<AllocatedBuffer>,
-    pub instance_buffer: AllocatedBuffer,
-    pub acc: SceneAS,
+#[repr(C, align(16))]
+#[derive(Debug, Copy, Clone)]
+struct RTMaterial {
+    diffuse_mul: [f32; 4],
+    diffuse: u32,
+    opacity: u32,
 }
 
-impl RayTraceScene {
+pub struct RayTraceScene<T: Instance + Send + Sync> {
+    pub camera: Camera,
+    pub descriptor: Descriptor,
+    materials: Vec<(u16, Material)>,
+    vertex_buffer: Arc<AllocatedBuffer>,
+    index_buffer: Arc<AllocatedBuffer>,
+    instance_buffer: AllocatedBuffer,
+    material_buffer: AllocatedBuffer,
+    acc: SceneAS,
+    dm: DescriptorSetManager,
+    instance: Arc<T>,
+}
+
+impl<T: Instance + Send + Sync> RayTraceScene<T> {
+    const AVG_DESC: [(vk::DescriptorType, f32); 2] = [
+        (vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, 1.0),
+        (vk::DescriptorType::STORAGE_BUFFER, 4.0),
+    ];
+
     pub fn new(
         instance: Arc<RayTraceInstance>,
         loader: Arc<AccelerationLoader>,
         mut scene: Box<dyn ParsedScene>,
         ccmdm: &mut CommandManager,
-    ) -> Result<Self, std::io::Error> {
+    ) -> Result<RayTraceScene<RayTraceInstance>, std::io::Error> {
         let mm = instance.allocator();
         let device = instance.device();
         let mut unf = UnfinishedExecutions::new(instance.device());
@@ -968,6 +926,7 @@ impl RayTraceScene {
 
         let instances = scene.instances()?;
         let transforms = scene.transforms()?;
+        let materials = scene.materials()?;
         let vertex_buffer =
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?, true);
         let (meshes, index_buffer) =
@@ -978,13 +937,33 @@ impl RayTraceScene {
         let camera = scene.cameras()?[0].clone();
         let instance_buffer =
             load_raytrace_instances_to_gpu(device, mm, &mut tcmdm, &mut unf, &meshes, &instances);
+        let material_buffer =
+            load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
+        let mut dm = DescriptorSetManager::new(
+            instance.device().logical_clone(),
+            &Self::AVG_DESC,
+            instance.desc_layout_cache(),
+        );
+        let descriptor = build_raytrace_descriptor(
+            &mut dm,
+            &acc,
+            &vertex_buffer,
+            &index_buffer,
+            &instance_buffer,
+            &material_buffer,
+        );
         unf.wait_completion();
-        Ok(Self {
+        Ok(RayTraceScene {
             camera,
+            materials,
             vertex_buffer: Arc::new(vertex_buffer),
             index_buffer: Arc::new(index_buffer),
             instance_buffer,
+            material_buffer,
             acc,
+            dm,
+            descriptor,
+            instance,
         })
     }
 
@@ -993,7 +972,7 @@ impl RayTraceScene {
         loader: Arc<AccelerationLoader>,
         scene: &mut VulkanScene,
         ccmdm: &mut CommandManager,
-    ) -> Result<Self, std::io::Error> {
+    ) -> Result<RayTraceScene<PresentInstance>, std::io::Error> {
         let instance = Arc::clone(&scene.instance);
         let mm = instance.allocator();
         let device = instance.device();
@@ -1002,6 +981,13 @@ impl RayTraceScene {
 
         let instances = scene.file.instances()?;
         let transforms = scene.file.transforms()?;
+        let mut materials = scene
+            .materials
+            .iter()
+            .map(|(id, (mat, _, _))| (*id, mat.clone()))
+            .collect::<Vec<_>>();
+        //TODO: remove when the materials are indexed by their position
+        materials.sort_unstable_by_key(|a| a.0);
         let vertex_buffer = scene.vertex_buffer.clone();
         let index_buffer = scene.index_buffer.clone();
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
@@ -1015,14 +1001,60 @@ impl RayTraceScene {
             &scene.meshes,
             &instances,
         );
+        let material_buffer =
+            load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
+        let mut dm = DescriptorSetManager::new(
+            instance.device().logical_clone(),
+            &Self::AVG_DESC,
+            instance.desc_layout_cache(),
+        );
+        let descriptor = build_raytrace_descriptor(
+            &mut dm,
+            &acc,
+            &vertex_buffer,
+            &index_buffer,
+            &instance_buffer,
+            &material_buffer,
+        );
         unf.wait_completion();
-        Ok(Self {
+        Ok(RayTraceScene {
+            materials,
             camera: scene.current_cam.clone(),
             vertex_buffer,
             index_buffer,
             instance_buffer,
+            material_buffer,
             acc,
+            dm,
+            descriptor,
+            instance,
         })
+    }
+
+    #[cfg(feature = "vulkan-interactive")]
+    pub(super) fn update_material(
+        &mut self,
+        id: u16,
+        material: Material,
+        tcmdm: &mut CommandManager,
+        unf: &mut UnfinishedExecutions,
+    ) {
+        debug_assert_eq!(self.materials[id as usize].0, id);
+        self.materials[id as usize] = (id, material);
+        let mm = self.instance.allocator();
+        let mut new_buffer =
+            load_raytrace_materials_to_gpu(self.instance.device(), mm, tcmdm, unf, &self.materials);
+        // cannot drop yet, the loading is not finished yet
+        std::mem::swap(&mut self.material_buffer, &mut new_buffer);
+        unf.add_buffer(new_buffer);
+        self.descriptor = build_raytrace_descriptor(
+            &mut self.dm,
+            &self.acc,
+            &self.vertex_buffer,
+            &self.index_buffer,
+            &self.instance_buffer,
+            &self.material_buffer,
+        );
     }
 }
 
@@ -1053,17 +1085,83 @@ fn load_raytrace_instances_to_gpu(
             );
         }
     }
-    let size = (std::mem::size_of::<RTInstance>() * rt_instances.len()) as u64;
+    upload_buffer(
+        device,
+        mm,
+        tcmdm,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        unf,
+        &rt_instances,
+    )
+}
+
+fn load_raytrace_materials_to_gpu(
+    device: &Device,
+    mm: &MemoryManager,
+    tcmdm: &mut CommandManager,
+    unf: &mut UnfinishedExecutions,
+    materials: &[(u16, Material)],
+) -> AllocatedBuffer {
+    let max = materials
+        .iter()
+        .map(|(idx, _)| idx)
+        .max()
+        .copied()
+        .unwrap_or(0);
+    let mut data = vec![
+        RTMaterial {
+            diffuse: 0,
+            opacity: 0,
+            diffuse_mul: [0.0; 4]
+        };
+        max as usize + 1
+    ];
+    for (id, material) in materials {
+        data[*id as usize] = RTMaterial {
+            diffuse: material.diffuse as u32,
+            opacity: material.opacity as u32,
+            diffuse_mul: col_int_to_f32(material.diffuse_mul),
+        };
+    }
+    upload_buffer(
+        device,
+        mm,
+        tcmdm,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        unf,
+        &data,
+    )
+}
+
+fn col_int_to_f32(col: [u8; 4]) -> [f32; 4] {
+    [
+        col[0] as f32 / 255.0,
+        col[1] as f32 / 255.0,
+        col[2] as f32 / 255.0,
+        col[3] as f32 / 255.0,
+    ]
+}
+
+// 'static in T avoids references that would fuck up the size_of value
+fn upload_buffer<T: Sized + 'static>(
+    device: &Device,
+    mm: &MemoryManager,
+    tcmdm: &mut CommandManager,
+    flags: vk::BufferUsageFlags,
+    unf: &mut UnfinishedExecutions,
+    data: &[T],
+) -> AllocatedBuffer {
+    let size = (std::mem::size_of::<T>() * data.len()) as u64;
     let cpu_buffer = mm.create_buffer(
-        "rtinstances_local",
+        "scene_buffer_local",
         size,
-        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+        vk::BufferUsageFlags::TRANSFER_SRC,
         MemoryLocation::CpuToGpu,
     );
     let gpu_buffer = mm.create_buffer(
-        "rtinstances_dedicated",
+        "scene_buffer_dedicated",
         size,
-        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+        flags | vk::BufferUsageFlags::TRANSFER_DST,
         MemoryLocation::GpuOnly,
     );
     let mapped = cpu_buffer
@@ -1072,7 +1170,7 @@ fn load_raytrace_instances_to_gpu(
         .expect("Failed to map memory")
         .cast()
         .as_ptr();
-    unsafe { std::ptr::copy_nonoverlapping(rt_instances.as_ptr(), mapped, rt_instances.len()) };
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), mapped, data.len()) };
     let copy_region = vk::BufferCopy {
         // these are not the allocation offset, but the buffer offset!
         src_offset: 0,
@@ -1088,4 +1186,57 @@ fn load_raytrace_instances_to_gpu(
     let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
     unf.add(fence, cpu_buffer);
     gpu_buffer
+}
+
+fn build_raytrace_descriptor(
+    dm: &mut DescriptorSetManager,
+    acc: &SceneAS,
+    vertex_buffer: &AllocatedBuffer,
+    index_buffer: &AllocatedBuffer,
+    instance_buffer: &AllocatedBuffer,
+    material_buffer: &AllocatedBuffer,
+) -> Descriptor {
+    let vertex_buffer_info = vk::DescriptorBufferInfo {
+        buffer: vertex_buffer.buffer,
+        offset: 0,
+        range: vertex_buffer.size,
+    };
+    let index_buffer_info = vk::DescriptorBufferInfo {
+        buffer: index_buffer.buffer,
+        offset: 0,
+        range: index_buffer.size,
+    };
+    let instance_buffer_info = vk::DescriptorBufferInfo {
+        buffer: instance_buffer.buffer,
+        offset: 0,
+        range: instance_buffer.size,
+    };
+    let material_buffer_info = vk::DescriptorBufferInfo {
+        buffer: material_buffer.buffer,
+        offset: 0,
+        range: material_buffer.size,
+    };
+    dm.new_set()
+        .bind_acceleration_structure(&acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
+        .bind_buffer(
+            vertex_buffer_info,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
+        .bind_buffer(
+            index_buffer_info,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
+        .bind_buffer(
+            instance_buffer_info,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
+        .bind_buffer(
+            material_buffer_info,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
+        .build()
 }

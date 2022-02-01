@@ -31,7 +31,7 @@ struct ShaderBindingTable {
 }
 
 pub struct RayTraceRenderer<T: Instance + Send + Sync> {
-    scene: RayTraceScene,
+    pub(super) scene: RayTraceScene<T>,
     camera: Camera,
     push_constants: [u8; 128],
     extent: vk::Extent2D,
@@ -62,7 +62,12 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             instance.instance(),
             device.logical(),
         ));
-        let scene = RayTraceScene::new(instance.clone(), loader.clone(), scene, &mut ccmdm)?;
+        let scene = RayTraceScene::<RayTraceInstance>::new(
+            instance.clone(),
+            loader.clone(),
+            scene,
+            &mut ccmdm,
+        )?;
         let extent = vk::Extent2D { width, height };
         Ok(init_rt(instance, loader, ccmdm, scene, extent))
     }
@@ -81,7 +86,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             instance.instance(),
             device.logical(),
         ));
-        let scene = RayTraceScene::from(loader.clone(), scene, &mut ccmdm)?;
+        let scene = RayTraceScene::<PresentInstance>::from(loader.clone(), scene, &mut ccmdm)?;
         let extent = vk::Extent2D { width, height };
         Ok(init_rt(instance, loader, ccmdm, scene, extent))
     }
@@ -95,7 +100,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             self.extent,
             &mut unf,
         );
-        let new_desc = build_descriptor(&mut self.dm, &self.scene, &new_out_img);
+        let new_desc = build_descriptor(&mut self.dm, &new_out_img);
         unf.wait_completion();
         self.update_camera(&self.camera.clone());
         self.out_img = new_out_img;
@@ -239,7 +244,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
                 self.pipeline.layout,
                 0,
-                &[self.descriptor.set],
+                &[self.descriptor.set, self.scene.descriptor.set],
                 &[],
             );
             self.rploader.cmd_trace_rays(
@@ -320,7 +325,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                     vk::PipelineBindPoint::RAY_TRACING_KHR,
                     self.pipeline.layout,
                     0,
-                    &[self.descriptor.set],
+                    &[self.descriptor.set, self.scene.descriptor.set],
                     &[],
                 );
                 self.rploader.cmd_trace_rays(
@@ -509,14 +514,10 @@ fn init_rt<T: Instance + Send + Sync>(
     instance: Arc<T>,
     loader: Arc<AccelerationLoader>,
     ccmdm: CommandManager,
-    scene: RayTraceScene,
+    scene: RayTraceScene<T>,
     extent: vk::Extent2D,
 ) -> RayTraceRenderer<T> {
-    const AVG_DESC: [(vk::DescriptorType, f32); 3] = [
-        (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
-        (vk::DescriptorType::STORAGE_BUFFER, 1.0),
-        (vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, 1.0),
-    ];
+    const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::STORAGE_IMAGE, 1.0)];
     let device = instance.device();
     let mut unf = UnfinishedExecutions::new(device);
     let rploader = RTPipelineLoader::new(instance.instance(), device.logical());
@@ -530,11 +531,14 @@ fn init_rt<T: Instance + Send + Sync>(
         instance.desc_layout_cache(),
     );
     let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
-    let descriptor = build_descriptor(&mut dm, &scene, &out_img);
+    let descriptor = build_descriptor(&mut dm, &out_img);
     let camera = scene.camera.clone();
     let push_constants = build_push_constants(&camera, extent);
-    let pipeline =
-        build_raytracing_pipeline(&rploader, device.logical_clone(), &[descriptor.layout]);
+    let pipeline = build_raytracing_pipeline(
+        &rploader,
+        device.logical_clone(),
+        &[descriptor.layout, scene.descriptor.layout],
+    );
     let sbt = build_sbt(
         instance.as_ref(),
         &rploader,
@@ -563,53 +567,17 @@ fn init_rt<T: Instance + Send + Sync>(
     }
 }
 
-fn build_descriptor(
-    dm: &mut DescriptorSetManager,
-    scene: &RayTraceScene,
-    out_img: &AllocatedImage,
-) -> Descriptor {
+fn build_descriptor(dm: &mut DescriptorSetManager, out_img: &AllocatedImage) -> Descriptor {
     let outimg_descinfo = vk::DescriptorImageInfo {
         sampler: vk::Sampler::null(),
         image_view: out_img.image_view,
         image_layout: vk::ImageLayout::GENERAL,
     };
-
-    let vertex_buffer_info = vk::DescriptorBufferInfo {
-        buffer: scene.vertex_buffer.buffer,
-        offset: 0,
-        range: scene.vertex_buffer.size,
-    };
-    let index_buffer_info = vk::DescriptorBufferInfo {
-        buffer: scene.index_buffer.buffer,
-        offset: 0,
-        range: scene.index_buffer.size,
-    };
-    let instance_buffer_info = vk::DescriptorBufferInfo {
-        buffer: scene.instance_buffer.buffer,
-        offset: 0,
-        range: scene.instance_buffer.size,
-    };
     dm.new_set()
-        .bind_acceleration_structure(&scene.acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
         .bind_image(
             outimg_descinfo,
             vk::DescriptorType::STORAGE_IMAGE,
             vk::ShaderStageFlags::RAYGEN_KHR,
-        )
-        .bind_buffer(
-            vertex_buffer_info,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-        )
-        .bind_buffer(
-            index_buffer_info,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-        )
-        .bind_buffer(
-            instance_buffer_info,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
         .build()
 }

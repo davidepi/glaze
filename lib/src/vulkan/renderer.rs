@@ -8,7 +8,7 @@ use super::renderpass::RenderPass;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
-use super::AllocatedImage;
+use super::{AllocatedImage, UnfinishedExecutions};
 use crate::{include_shader, Camera, Material, RayTraceRenderer, TextureLoaded};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
@@ -78,6 +78,8 @@ pub struct RealtimeRenderer {
     dm: DescriptorSetManager,
     /// Graphic Command Manager. Manager for the command pools and buffers of a graphic queue.
     gcmdm: CommandManager,
+    /// Transfer Commmand Manager. Used solely to update materials.
+    tcmdm: CommandManager,
     /// Synchronization structures for each frame.
     sync: PresentSync<FRAMES_IN_FLIGHT>,
     /// Per-frame data, for each frame.
@@ -136,6 +138,11 @@ impl RealtimeRenderer {
             instance.device().logical_clone(),
             instance.device().graphic_queue().idx,
             15,
+        );
+        let tcmdm = CommandManager::new(
+            instance.device().logical_clone(),
+            instance.device().transfer_queue().idx,
+            1,
         );
         let swapchain = Swapchain::create(instance.clone(), window_width, window_height);
         let render_size = vk::Extent2D {
@@ -206,6 +213,7 @@ impl RealtimeRenderer {
             imgui_renderer,
             dm,
             gcmdm,
+            tcmdm,
             sync,
             frame_data: frame_data.try_into().unwrap(),
             clear_color,
@@ -398,20 +406,28 @@ impl RealtimeRenderer {
     ///
     /// `old` is the index of the old material.
     pub fn change_material(&mut self, old: u16, new: Material) {
+        self.wait_idle();
         if let Some(scene) = &mut self.scene {
             let render_size = vk::Extent2D {
                 width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
                 height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
             };
+            let mut unf = UnfinishedExecutions::new(self.instance.device());
+            if let Some(raytracer) = &mut self.raytracer {
+                raytracer
+                    .scene
+                    .update_material(old, new.clone(), &mut self.tcmdm, &mut unf);
+            }
             scene.update_material(
-                self.instance.device(),
                 old,
                 new,
-                &mut self.gcmdm,
+                &mut self.tcmdm,
+                &mut unf,
                 self.forward_pass.renderpass,
                 self.frame_data[0].descriptor.layout,
                 render_size,
             );
+            unf.wait_completion();
         }
     }
 

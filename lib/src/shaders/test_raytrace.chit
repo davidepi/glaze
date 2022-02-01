@@ -24,21 +24,31 @@ struct Index {
   uint z;
 };
 
+struct RTMaterial {
+  vec4 diffuse_mul;
+  uint diffuse;
+  uint opacity;
+};
+
 hitAttributeEXT vec2 attrib;
 
 layout(location = 0)  rayPayloadInEXT vec3 payload;
 
-layout(std430, set=0, binding=2) readonly buffer vertexBuffer {
+layout(std430, set=1, binding=1) readonly buffer vertexBuffer {
   VertexPacked vertices[];
 } VertexBuffer;
 
-layout(std430, set=0, binding=3) readonly buffer indexBuffer {
+layout(std430, set=1, binding=2) readonly buffer indexBuffer {
   Index indices[];
 } IndexBuffer;
 
-layout(std430, set=0, binding=4) readonly buffer instanceBuffer {
+layout(std430, set=1, binding=3) readonly buffer instanceBuffer {
   RTInstance instances[];
 } InstanceBuffer;
+
+layout(std430, set=1, binding=4) readonly buffer materialBuffer {
+  RTMaterial materials[];
+} MaterialBuffer;
 
 Vertex from_packed(VertexPacked vp) {
   vec3 normal = vec3(vp.pxyznx.w, vp.nyztxy.xy);
@@ -49,12 +59,13 @@ void main()
 {
   const vec3 barycentric = vec3(1.0 - attrib.x - attrib.y, attrib.x, attrib.y);
   RTInstance instance = InstanceBuffer.instances[gl_InstanceCustomIndexEXT];
-  Index idx = IndexBuffer.indices[instance.index_offset/3+gl_PrimitiveID];
-  Vertex v0 = from_packed(VertexBuffer.vertices[idx.x]);
-  Vertex v1 = from_packed(VertexBuffer.vertices[idx.y]);
-  Vertex v2 = from_packed(VertexBuffer.vertices[idx.z]);
+  RTMaterial material = MaterialBuffer.materials[instance.mat_id];
+  //Index idx = IndexBuffer.indices[instance.index_offset/3+gl_PrimitiveID];
+  //Vertex v0 = from_packed(VertexBuffer.vertices[idx.x]);
+  //Vertex v1 = from_packed(VertexBuffer.vertices[idx.y]);
+  //Vertex v2 = from_packed(VertexBuffer.vertices[idx.z]);
 
-  vec2 hit_tcoord = v0.tcoord * barycentric.x + v1.tcoord * barycentric.y + v2.tcoord * barycentric.z;
+  //vec2 hit_tcoord = v0.tcoord * barycentric.x + v1.tcoord * barycentric.y + v2.tcoord * barycentric.z;
 
-  payload = vec3(hit_tcoord.xy, 0.0);
+  payload = material.diffuse_mul.xyz;
 }

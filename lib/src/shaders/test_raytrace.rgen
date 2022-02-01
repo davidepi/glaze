@@ -6,8 +6,8 @@ layout(push_constant) uniform pc {
   mat4 camera2world;
   mat4 screen2camera;
 } Camera;
-layout(set=0, binding=0) uniform accelerationStructureEXT scene;
-layout(set=0, binding=1, rgba32f) uniform image2D result_image;
+layout(set=0, binding=0, rgba32f) uniform image2D result_image;
+layout(set=1, binding=0) uniform accelerationStructureEXT scene;
 
 vec3 ray_origin() {
   // technically this could be just the camera position...

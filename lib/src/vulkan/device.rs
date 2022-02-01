@@ -287,7 +287,7 @@ pub struct UnfinishedExecutions<'device> {
     /// Fences to be waited on.
     fences: Vec<vk::Fence>,
     /// Buffers that are to be freed after waiting on the fences.
-    _buffers_to_free: Vec<AllocatedBuffer>,
+    buffers_to_free: Vec<AllocatedBuffer>,
     /// device to be waited on.
     device: &'device Device,
 }
@@ -297,7 +297,7 @@ impl<'device> UnfinishedExecutions<'device> {
     pub fn new(device: &'device Device) -> Self {
         UnfinishedExecutions {
             fences: Vec::new(),
-            _buffers_to_free: Vec::new(),
+            buffers_to_free: Vec::new(),
             device,
         }
     }
@@ -307,10 +307,15 @@ impl<'device> UnfinishedExecutions<'device> {
         self.fences.push(fence);
     }
 
+    /// Adds a buffer only, without any fence.
+    pub fn add_buffer(&mut self, buffer: AllocatedBuffer) {
+        self.buffers_to_free.push(buffer);
+    }
+
     /// Add a fence and the corresponding buffer.
     pub fn add(&mut self, fence: vk::Fence, buffer: AllocatedBuffer) {
         self.fences.push(fence);
-        self._buffers_to_free.push(buffer);
+        self.buffers_to_free.push(buffer);
     }
 
     /// Waits for the GPU to finish all the jobs (assigned to this struct) and drops the buffers.
