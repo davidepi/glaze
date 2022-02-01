@@ -954,8 +954,7 @@ pub fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
 struct RTInstance {
     index_offset: u32,
     index_count: u32,
-    material_id: u32, /* in the khronos opengl wiki u16 is not listed as scalar type...
-                       * anyway the leftover would be padded anyway so not a big deal */
+    material_id: u32, // due to how std430 works
 }
 
 pub struct RayTraceScene {

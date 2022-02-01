@@ -3,8 +3,13 @@
 
 struct RTInstance {
   uint index_offset;
-  uint index_cout;
+  uint index_count;
   uint mat_id;
+};
+
+struct VertexPacked {
+  vec4 pxyznx; //position xyz + normal x
+  vec4 nyztxy; //normal yz + tcoord xy
 };
 
 struct Vertex {
@@ -13,23 +18,43 @@ struct Vertex {
   vec2 tcoord;
 };
 
+struct Index {
+  uint x;
+  uint y;
+  uint z;
+};
+
 hitAttributeEXT vec2 attrib;
 
 layout(location = 0)  rayPayloadInEXT vec3 payload;
 
-layout(std430, binding=0, set=2) readonly buffer vertexBuffer {
-  Vertex vertices[];
+layout(std430, set=0, binding=2) readonly buffer vertexBuffer {
+  VertexPacked vertices[];
 } VertexBuffer;
 
-layout(std430, binding=0, set=3) readonly buffer indexBuffer {
-  uint indices[];
+layout(std430, set=0, binding=3) readonly buffer indexBuffer {
+  Index indices[];
 } IndexBuffer;
 
-layout(std430, binding=0, set=4) readonly buffer instanceBuffer {
+layout(std430, set=0, binding=4) readonly buffer instanceBuffer {
   RTInstance instances[];
 } InstanceBuffer;
 
-void main() {
+Vertex from_packed(VertexPacked vp) {
+  vec3 normal = vec3(vp.pxyznx.w, vp.nyztxy.xy);
+  return Vertex(vp.pxyznx.xyz, normal, vp.nyztxy.zw);
+}
+
+void main()
+{
   const vec3 barycentric = vec3(1.0 - attrib.x - attrib.y, attrib.x, attrib.y);
-  payload = vec3(barycentric);
+  RTInstance instance = InstanceBuffer.instances[gl_InstanceCustomIndexEXT];
+  Index idx = IndexBuffer.indices[instance.index_offset/3+gl_PrimitiveID];
+  Vertex v0 = from_packed(VertexBuffer.vertices[idx.x]);
+  Vertex v1 = from_packed(VertexBuffer.vertices[idx.y]);
+  Vertex v2 = from_packed(VertexBuffer.vertices[idx.z]);
+
+  vec2 hit_tcoord = v0.tcoord * barycentric.x + v1.tcoord * barycentric.y + v2.tcoord * barycentric.z;
+
+  payload = vec3(hit_tcoord.xy, 0.0);
 }
