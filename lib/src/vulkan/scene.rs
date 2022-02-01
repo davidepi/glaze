@@ -1046,13 +1046,23 @@ fn load_raytrace_instances_to_gpu(
     instances: &[MeshInstance],
 ) -> AllocatedBuffer {
     let mut rt_instances = Vec::with_capacity(instances.len());
+    let meshes_indexed = meshes
+        .iter()
+        .map(|m| (m.mesh_id, m))
+        .collect::<FnvHashMap<_, _>>();
     for instance in instances {
-        let original_mesh = meshes[instance.mesh_id as usize];
-        rt_instances.push(RTInstance {
-            index_offset: original_mesh.index_offset,
-            index_count: original_mesh.index_count,
-            material_id: original_mesh.material as u32,
-        });
+        if let Some(original_mesh) = meshes_indexed.get(&instance.mesh_id) {
+            rt_instances.push(RTInstance {
+                index_offset: original_mesh.index_offset,
+                index_count: original_mesh.index_count,
+                material_id: original_mesh.material as u32,
+            });
+        } else {
+            log::warn!(
+                "Found an instance reference that points to no mesh (MeshID: {})",
+                instance.mesh_id
+            );
+        }
     }
     let size = (std::mem::size_of::<RTInstance>() * rt_instances.len()) as u64;
     let cpu_buffer = mm.create_buffer(
