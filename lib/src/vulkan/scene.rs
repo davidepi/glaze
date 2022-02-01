@@ -51,13 +51,13 @@ pub struct VulkanScene {
     /// Manages descriptors in the current scene.
     dm: DescriptorSetManager,
     /// Map of all materials in the scene.
-    pub(super) materials: FnvHashMap<u16, (Material, ShaderMat, Descriptor)>,
+    pub(super) materials: Vec<(Material, ShaderMat, Descriptor)>,
     /// Map of all shaders in the scene with their pipeline.
     pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
     /// Map of all textures in the scene.
-    pub(super) textures: FnvHashMap<u16, TextureLoaded>,
+    pub(super) textures: Vec<TextureLoaded>,
     /// All the transform in the scene.
-    pub(super) transforms: FnvHashMap<u16, (AllocatedBuffer, Descriptor)>,
+    pub(super) transforms: Vec<(AllocatedBuffer, Descriptor)>,
     /// All the instances in the scene in form (Mesh ID, Vec<Transform ID>)
     pub(super) instances: FnvHashMap<u16, Vec<u16>>,
     /// If the materials changed after loading the scene
@@ -135,24 +135,10 @@ impl VulkanScene {
         wchan.send("[3/4] Loading textures...".to_string()).ok();
         let sampler = create_sampler(device);
         let scene_textures = parsed.textures()?;
-        let textures_no = scene_textures.len();
         let textures = scene_textures
             .into_iter()
-            .enumerate()
-            .map(|(idx, (id, tex))| {
-                wchan
-                    .send(format!(
-                        "[3/4] Loading textures... ({}/{})",
-                        idx + 1,
-                        textures_no
-                    ))
-                    .ok();
-                (
-                    id,
-                    load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex),
-                )
-            })
-            .collect();
+            .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
+            .collect::<Vec<_>>();
         let parsed_mats = parsed.materials()?;
         let params_buffer =
             load_materials_parameters(device, &parsed_mats, mm, &mut tcmdm, &mut unf);
@@ -160,19 +146,20 @@ impl VulkanScene {
         wchan.send("[4/4] Loading materials...".to_string()).ok();
         let materials = parsed_mats
             .into_iter()
+            .enumerate()
             .map(|(id, mat)| {
                 let (shader, desc) = build_mat_desc_set(
                     device,
                     &textures,
                     &params_buffer,
                     sampler,
-                    id,
+                    id as u16,
                     &mat,
                     &mut dm,
                 );
-                (id, (mat, shader, desc))
+                (mat, shader, desc)
             })
-            .collect();
+            .collect::<Vec<_>>();
         let current_cam = parsed.cameras()?[0].clone(); // parser automatically adds a default cam
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
@@ -269,8 +256,8 @@ impl VulkanScene {
                 &[frame_desc_layout, new_desc.layout],
             )
         });
-        // insert the new material
-        self.materials.insert(mat_id, (new, new_shader, new_desc));
+        // replace the old material
+        self.materials[mat_id as usize] = (new, new_shader, new_desc);
         // sort the meshes to minimize bindings
         sort_meshes(&mut self.meshes, &self.materials);
         self.mat_changed = true;
@@ -285,7 +272,7 @@ impl VulkanScene {
         frame_desc_layout: vk::DescriptorSetLayout,
     ) {
         self.pipelines = FnvHashMap::default();
-        for (_, shader, desc) in self.materials.values() {
+        for (_, shader, desc) in &self.materials {
             let device = device.clone();
             self.pipelines.entry(*shader).or_insert_with(|| {
                 shader.build_pipeline().build(
@@ -295,11 +282,7 @@ impl VulkanScene {
                     &[
                         frame_desc_layout,
                         desc.layout,
-                        self.transforms
-                            .get(&0)
-                            .expect("Missing per-object descriptors")
-                            .1
-                            .layout,
+                        self.transforms[0].1.layout, // pick the first per-object transform
                     ],
                 )
             });
@@ -314,30 +297,31 @@ impl VulkanScene {
     /// Returns a material in the scene, given its ID.
     /// Returns None if the material does not exist.
     pub fn single_material(&self, id: u16) -> Option<&Material> {
-        self.materials.get(&id).map(|(mat, _, _)| mat)
+        if let Some((mat, _, _)) = self.materials.get(id as usize) {
+            Some(mat)
+        } else {
+            None
+        }
     }
 
     /// Returns all the materials in the scene.
     /// Each returned material is a tuple containing the material ID and the material itself.
     /// The order of the materials is not guaranteed.
-    pub fn materials(&self) -> Vec<(u16, &Material)> {
-        self.materials
-            .iter()
-            .map(|(id, (mat, _, _))| (*id, mat))
-            .collect()
+    pub fn materials(&self) -> Vec<&Material> {
+        self.materials.iter().map(|(mat, _, _)| mat).collect()
     }
 
     //// Returns a texture in the scene, given its ID.
     /// Returns None if the texture does not exists.
     pub fn single_texture(&self, id: u16) -> Option<&TextureLoaded> {
-        self.textures.get(&id)
+        self.textures.get(id as usize)
     }
 
     /// Returns all the textures in the scene.
     /// Each returned texture is a tuple containing the texture ID and the texture itself.
     /// The order of the textures is not guaranteed.
-    pub fn textures(&self) -> Vec<(u16, &TextureLoaded)> {
-        self.textures.iter().map(|(id, tex)| (*id, tex)).collect()
+    pub fn textures(&self) -> Vec<&TextureLoaded> {
+        self.textures.iter().collect()
     }
 
     pub fn save(&mut self) -> Result<(), std::io::Error> {
@@ -346,7 +330,7 @@ impl VulkanScene {
             let materials = self
                 .materials
                 .iter()
-                .map(|(id, (mat, _, _))| (*id, mat.clone()))
+                .map(|(mat, _, _)| mat.clone())
                 .collect::<Vec<_>>();
             self.file.update(Some(&cameras), Some(&materials))
         } else {
@@ -432,34 +416,35 @@ fn load_transforms_to_gpu(
     tcmdm: &mut CommandManager,
     dm: &mut DescriptorSetManager,
     unf: &mut UnfinishedExecutions,
-    transforms: &[(u16, Transform)],
-) -> FnvHashMap<u16, (AllocatedBuffer, Descriptor)> {
-    let mut map = FnvHashMap::with_capacity_and_hasher(transforms.len(), FnvBuildHasher::default());
-    for (tid, transform) in transforms {
-        //TODO: maybe a single buffer would be better, considering that I will probably never edit
-        // transforms. I should also consider removing the FnvHashMap and use a Vec given that I am
-        // the one assigning indices to the transforms so I know for sure they are contiguous.
-        let gpu_buffer = upload_buffer(
-            device,
-            mm,
-            tcmdm,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            unf,
-            &[transform.clone()],
-        );
-        let buf_info = vk::DescriptorBufferInfo {
-            buffer: gpu_buffer.buffer,
-            offset: 0,
-            range: std::mem::size_of::<Transform>() as u64,
-        };
-        let desc = dm.new_set().bind_buffer(
-            buf_info,
-            vk::DescriptorType::UNIFORM_BUFFER,
-            vk::ShaderStageFlags::VERTEX,
-        );
-        map.insert(*tid, (gpu_buffer, desc.build()));
-    }
-    map
+    transforms: &[Transform],
+) -> Vec<(AllocatedBuffer, Descriptor)> {
+    transforms
+        .iter()
+        .map(|transform| {
+            //TODO: maybe a single buffer would be better, considering that I will probably never edit
+            // transforms. I should also consider removing the FnvHashMap and use a Vec given that I am
+            // the one assigning indices to the transforms so I know for sure they are contiguous.
+            let gpu_buffer = upload_buffer(
+                device,
+                mm,
+                tcmdm,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                unf,
+                &[transform.clone()],
+            );
+            let buf_info = vk::DescriptorBufferInfo {
+                buffer: gpu_buffer.buffer,
+                offset: 0,
+                range: std::mem::size_of::<Transform>() as u64,
+            };
+            let desc = dm.new_set().bind_buffer(
+                buf_info,
+                vk::DescriptorType::UNIFORM_BUFFER,
+                vk::ShaderStageFlags::VERTEX,
+            );
+            (gpu_buffer, desc.build())
+        })
+        .collect()
 }
 
 /// Loads all indices to GPU.
@@ -565,7 +550,7 @@ fn instances_to_map(instances: &[MeshInstance]) -> FnvHashMap<u16, Vec<u16>> {
 #[cfg(feature = "vulkan-interactive")]
 fn build_mat_desc_set(
     device: &Device,
-    textures: &FnvHashMap<u16, TextureLoaded>,
+    textures: &[TextureLoaded],
     params: &AllocatedBuffer,
     sampler: vk::Sampler,
     id: u16,
@@ -575,8 +560,8 @@ fn build_mat_desc_set(
     use crate::materials::DEFAULT_TEXTURE_ID;
 
     let mut shader = material.shader;
-    let dflt_tex = textures.get(&DEFAULT_TEXTURE_ID).unwrap();
-    let diffuse = textures.get(&material.diffuse).unwrap_or(dflt_tex);
+    let dflt_tex = &textures[DEFAULT_TEXTURE_ID as usize];
+    let diffuse = textures.get(material.diffuse as usize).unwrap_or(dflt_tex);
     let diffuse_image_info = vk::DescriptorImageInfo {
         sampler,
         image_view: diffuse.image.image_view,
@@ -608,7 +593,7 @@ fn build_mat_desc_set(
         );
     if material.opacity != 0 {
         shader = material.shader.two_sided(); // use a two-sided shader
-        let opacity = textures.get(&material.opacity).unwrap_or(dflt_tex);
+        let opacity = textures.get(material.opacity as usize).unwrap_or(dflt_tex);
         let opacity_image_info = vk::DescriptorImageInfo {
             sampler,
             image_view: opacity.image.image_view,
@@ -628,7 +613,7 @@ fn build_mat_desc_set(
 #[cfg(feature = "vulkan-interactive")]
 fn load_materials_parameters(
     device: &Device,
-    materials: &[(u16, Material)],
+    materials: &[Material],
     mm: &MemoryManager,
     tcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
@@ -658,7 +643,7 @@ fn load_materials_parameters(
         .expect("Failed to map memory")
         .cast()
         .as_ptr();
-    for (_, mat) in materials {
+    for mat in materials {
         let params = MaterialParams::from(mat);
         unsafe {
             std::ptr::copy_nonoverlapping(&params, mapped, 1);
@@ -683,7 +668,7 @@ fn load_materials_parameters(
     gpu_buffer
 }
 
-/// Loads all textures to the GPU with optimal layout.
+/// Loads a single texture to the GPU with optimal layout.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
 #[cfg(feature = "vulkan-interactive")]
 fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
@@ -832,13 +817,10 @@ fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
 
 // sort mehses by shader id (first) and then material id (second) to minimize binding changes
 #[cfg(feature = "vulkan-interactive")]
-fn sort_meshes(
-    meshes: &mut Vec<VulkanMesh>,
-    mats: &FnvHashMap<u16, (Material, ShaderMat, Descriptor)>,
-) {
+fn sort_meshes(meshes: &mut Vec<VulkanMesh>, mats: &[(Material, ShaderMat, Descriptor)]) {
     meshes.sort_unstable_by(|a, b| {
-        let (_, _, desc_a) = mats.get(&a.material).unwrap();
-        let (_, _, desc_b) = mats.get(&b.material).unwrap();
+        let (_, _, desc_a) = &mats[a.material as usize];
+        let (_, _, desc_b) = &mats[b.material as usize];
         match desc_a.cmp(desc_b) {
             std::cmp::Ordering::Less => std::cmp::Ordering::Less,
             std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
@@ -897,7 +879,7 @@ struct RTMaterial {
 pub struct RayTraceScene<T: Instance + Send + Sync> {
     pub camera: Camera,
     pub descriptor: Descriptor,
-    materials: Vec<(u16, Material)>,
+    materials: Vec<Material>,
     vertex_buffer: Arc<AllocatedBuffer>,
     index_buffer: Arc<AllocatedBuffer>,
     instance_buffer: AllocatedBuffer,
@@ -981,13 +963,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
 
         let instances = scene.file.instances()?;
         let transforms = scene.file.transforms()?;
-        let mut materials = scene
-            .materials
-            .iter()
-            .map(|(id, (mat, _, _))| (*id, mat.clone()))
-            .collect::<Vec<_>>();
-        //TODO: remove when the materials are indexed by their position
-        materials.sort_unstable_by_key(|a| a.0);
+        let materials = scene.materials().into_iter().cloned().collect::<Vec<_>>();
         let vertex_buffer = scene.vertex_buffer.clone();
         let index_buffer = scene.index_buffer.clone();
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
@@ -1039,8 +1015,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         tcmdm: &mut CommandManager,
         unf: &mut UnfinishedExecutions,
     ) {
-        debug_assert_eq!(self.materials[id as usize].0, id);
-        self.materials[id as usize] = (id, material);
+        self.materials[id as usize] = material;
         let mm = self.instance.allocator();
         let mut new_buffer =
             load_raytrace_materials_to_gpu(self.instance.device(), mm, tcmdm, unf, &self.materials);
@@ -1100,29 +1075,16 @@ fn load_raytrace_materials_to_gpu(
     mm: &MemoryManager,
     tcmdm: &mut CommandManager,
     unf: &mut UnfinishedExecutions,
-    materials: &[(u16, Material)],
+    materials: &[Material],
 ) -> AllocatedBuffer {
-    let max = materials
+    let data = materials
         .iter()
-        .map(|(idx, _)| idx)
-        .max()
-        .copied()
-        .unwrap_or(0);
-    let mut data = vec![
-        RTMaterial {
-            diffuse: 0,
-            opacity: 0,
-            diffuse_mul: [0.0; 4]
-        };
-        max as usize + 1
-    ];
-    for (id, material) in materials {
-        data[*id as usize] = RTMaterial {
-            diffuse: material.diffuse as u32,
-            opacity: material.opacity as u32,
-            diffuse_mul: col_int_to_f32(material.diffuse_mul),
-        };
-    }
+        .map(|mat| RTMaterial {
+            diffuse_mul: col_int_to_f32(mat.diffuse_mul),
+            diffuse: mat.diffuse as u32,
+            opacity: mat.opacity as u32,
+        })
+        .collect::<Vec<_>>();
     upload_buffer(
         device,
         mm,

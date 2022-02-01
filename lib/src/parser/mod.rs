@@ -145,11 +145,11 @@ pub fn serialize<P: AsRef<Path>>(
     version: ParserVersion,
     vertices: &[Vertex],
     meshes: &[Mesh],
-    transforms: &[(u16, Transform)],
+    transforms: &[Transform],
     instances: &[MeshInstance],
     cameras: &[Camera],
-    textures: &[(u16, Texture)],
-    materials: &[(u16, Material)],
+    textures: &[Texture],
+    materials: &[Material],
 ) -> Result<(), Error> {
     let mut fout = BufWriter::new(File::create(file)?);
     write_header(&mut fout)?;
@@ -198,20 +198,21 @@ pub trait ParsedScene {
     /// Retrieve only the [Mesh]es contained in the file.
     fn meshes(&mut self) -> Result<Vec<Mesh>, Error>;
     /// Retrieve only the [Transform]s contained in the file.
-    fn transforms(&mut self) -> Result<Vec<(u16, Transform)>, Error>;
+    fn transforms(&mut self) -> Result<Vec<Transform>, Error>;
     /// Retrieve only the [MeshInstance]s contained in the file.
     fn instances(&mut self) -> Result<Vec<MeshInstance>, Error>;
     /// Retrieve only the [Camera]s contained in the file.
     fn cameras(&mut self) -> Result<Vec<Camera>, Error>;
     /// Retrieve only the [Texture]s contained in the file.
-    fn textures(&mut self) -> Result<Vec<(u16, Texture)>, Error>;
+    fn textures(&mut self) -> Result<Vec<Texture>, Error>;
     /// Retrieve only the [Material]s contained in the file.
-    fn materials(&mut self) -> Result<Vec<(u16, Material)>, Error>;
+    fn materials(&mut self) -> Result<Vec<Material>, Error>;
     /// Updates an existing file.
+    /// Requires all the cameras and materials as input.
     fn update(
         &mut self,
         cameras: Option<&[Camera]>,
-        materials: Option<&[(u16, Material)]>,
+        materials: Option<&[Material]>,
     ) -> Result<(), Error>;
 }
 

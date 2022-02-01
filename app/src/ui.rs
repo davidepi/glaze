@@ -359,13 +359,15 @@ fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
                 .preview_value(preview)
                 .build(ui, || {
                     if let Some(scene) = scene {
-                        let mut all_textures = scene.textures().into_iter().collect::<Vec<_>>();
-                        all_textures.sort_by_key(|(id, _)| *id);
-                        all_textures.into_iter().for_each(|(id, texture)| {
-                            if Selectable::new(&texture.info.name).build(ui) {
-                                *selected = Some(id);
-                            }
-                        });
+                        scene
+                            .textures()
+                            .into_iter()
+                            .enumerate()
+                            .for_each(|(id, texture)| {
+                                if Selectable::new(&texture.info.name).build(ui) {
+                                    *selected = Some(id as u16);
+                                }
+                            });
                     }
                 });
             if let Some(selected) = selected {
@@ -435,13 +437,15 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
             .begin(ui)
         {
             if let Some(scene) = scene {
-                let mut all_mats = scene.materials();
-                all_mats.sort_by_key(|(id, _)| *id);
-                all_mats.into_iter().for_each(|(id, mat)| {
-                    if Selectable::new(&mat.name).build(ui) {
-                        *selected = Some(id);
-                    }
-                });
+                scene
+                    .materials()
+                    .into_iter()
+                    .enumerate()
+                    .for_each(|(id, mat)| {
+                        if Selectable::new(&mat.name).build(ui) {
+                            *selected = Some(id as u16);
+                        }
+                    });
             }
             mat_combo.end();
         }
@@ -523,9 +527,9 @@ fn texture_selector(ui: &Ui, text: &str, mut selected: u16, scene: &VulkanScene)
     let mut clicked_on_preview = false;
     let name = &scene.single_texture(selected).unwrap().info.name;
     if let Some(cb) = ComboBox::new(text).preview_value(name).begin(ui) {
-        for (id, texture) in scene.textures().into_iter() {
+        for (id, texture) in scene.textures().into_iter().enumerate() {
             if Selectable::new(&texture.info.name).build(ui) {
-                selected = id;
+                selected = id as u16;
             }
             if ui.is_item_hovered() {
                 ui.tooltip(|| {

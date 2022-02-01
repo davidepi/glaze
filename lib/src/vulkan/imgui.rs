@@ -7,10 +7,9 @@ use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderer::InternalStats;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
-use crate::{include_shader, PresentInstance, TextureFormat};
+use crate::{include_shader, PresentInstance, TextureFormat, TextureInfo};
 use ash::vk;
 use cgmath::Vector2 as Vec2;
-use fnv::FnvHashMap;
 use font_kit::family_name::FamilyName;
 use font_kit::properties::Properties;
 use font_kit::source::SystemSource;
@@ -54,8 +53,8 @@ pub struct ImguiRenderer {
     sampler: vk::Sampler,
     /// descriptor manager reserved for the UI resources
     dm: DescriptorSetManager,
-    /// descriptors of the various textures
-    tex_descs: FnvHashMap<u16, Descriptor>,
+    /// descriptors of the various textures, along with the texture info
+    tex_descs: Vec<(Descriptor, TextureInfo)>,
     /// Buffers that cannot be freed immediately, as they require the GPU to finish first.
     /// The first value is the number of invokation of the "draw" method before they are dropped.
     free_later: Vec<(u8, AllocatedBuffer)>,
@@ -199,7 +198,7 @@ impl ImguiRenderer {
             pipeline_bw,
             sampler,
             dm,
-            tex_descs: FnvHashMap::default(),
+            tex_descs: Vec::new(),
             free_later: Vec::new(),
             instance,
         }
@@ -221,13 +220,37 @@ impl ImguiRenderer {
         );
     }
 
+    pub(super) fn load_scene_textures(&mut self, scene: &VulkanScene) {
+        // TODO: consider keeping a reference to the scene textures to avoid early deallocations
+        self.tex_descs = scene
+            .textures
+            .iter()
+            .map(|texture| {
+                let desc_info = vk::DescriptorImageInfo {
+                    sampler: self.sampler,
+                    image_view: texture.image.image_view,
+                    image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                };
+                let desc = self
+                    .dm
+                    .new_set()
+                    .bind_image(
+                        desc_info,
+                        vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                        vk::ShaderStageFlags::FRAGMENT,
+                    )
+                    .build();
+                (desc, texture.info.clone())
+            })
+            .collect();
+    }
+
     /// draw the ui. This should be called inside an existing render pass.
     /// cmd is a command buffer for a graphic queue.
     pub(super) fn draw(
         &mut self,
         cmd: vk::CommandBuffer,
         draw_data: &imgui::DrawData,
-        scene: Option<&VulkanScene>,
         stats: &mut InternalStats,
     ) {
         let device = self.instance.device();
@@ -398,28 +421,12 @@ impl ImguiRenderer {
                                         &[],
                                     );
                                 }
-                            } else if let Some(scene) = scene {
+                            } else {
                                 // texture_id != FONT_ATLAS_TEXTURE_ID implicitly assumed
-                                let tid_u16 = texture_id.id() as u16;
+                                let tex_id = texture_id.id();
                                 // this should never fail
-                                let texture = scene.textures.get(&tid_u16).unwrap();
-                                let descriptor =
-                                    self.tex_descs.entry(tid_u16).or_insert_with(|| {
-                                        let info = vk::DescriptorImageInfo {
-                                            sampler: self.sampler,
-                                            image_view: texture.image.image_view,
-                                            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                                        };
-                                        self.dm
-                                            .new_set()
-                                            .bind_image(
-                                                info,
-                                                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                                                vk::ShaderStageFlags::FRAGMENT,
-                                            )
-                                            .build()
-                                    });
-                                if texture.info.format == TextureFormat::Rgba && pipeline_bw {
+                                let (desc, tex_info) = &self.tex_descs[tex_id];
+                                if tex_info.format == TextureFormat::Rgba && pipeline_bw {
                                     // set default pipeline
                                     pipeline_bw = false;
                                     unsafe {
@@ -436,8 +443,7 @@ impl ImguiRenderer {
                                             as_u8_slice(&imguipc),
                                         );
                                     }
-                                } else if texture.info.format == TextureFormat::Gray && !pipeline_bw
-                                {
+                                } else if tex_info.format == TextureFormat::Gray && !pipeline_bw {
                                     // set bw pipeline
                                     pipeline_bw = true;
                                     unsafe {
@@ -461,12 +467,10 @@ impl ImguiRenderer {
                                         vk::PipelineBindPoint::GRAPHICS,
                                         self.pipeline.layout,
                                         0,
-                                        &[descriptor.set],
+                                        &[desc.set],
                                         &[],
                                     );
                                 }
-                            } else {
-                                panic!("Requestest to bound non-font texture but no scene loaded");
                             }
                             bound_texture = texture_id;
                         }

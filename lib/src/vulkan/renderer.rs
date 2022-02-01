@@ -398,6 +398,7 @@ impl RealtimeRenderer {
         } else {
             None
         };
+        self.imgui_renderer.load_scene_textures(&loaded);
         self.scene = Some(loaded);
         self.start_time = Instant::now();
     }
@@ -465,7 +466,7 @@ impl RealtimeRenderer {
     /// same ID of the textures in the scene for rendering.
     pub fn add_texture(&mut self, id: u16, texture: TextureLoaded) {
         if let Some(scene) = &mut self.scene {
-            scene.textures.insert(id, texture);
+            scene.textures.push(texture);
         }
     }
 
@@ -537,8 +538,7 @@ impl RealtimeRenderer {
                 // tried doing it on its own attachment but results in blending problems
                 if let Some(dd) = imgui_data {
                     if dd.total_vtx_count > 0 {
-                        self.imgui_renderer
-                            .draw(cmd, dd, self.scene.as_ref(), &mut self.stats);
+                        self.imgui_renderer.draw(cmd, dd, &mut self.stats);
                     }
                 }
                 acquired.renderpass.end(cmd);
@@ -622,10 +622,7 @@ unsafe fn draw_objects(
     device.cmd_bind_vertex_buffers(cmd, 0, &[scene.vertex_buffer.buffer], &[0]);
     device.cmd_bind_index_buffer(cmd, scene.index_buffer.buffer, 0, vk::IndexType::UINT32); //bind once, use firts_index as offset
     for obj in &scene.meshes {
-        let (_, shader, desc) = scene
-            .materials
-            .get(&obj.material)
-            .expect("Failed to find material"); // hard error, material should be created by the converter
+        let (_, shader, desc) = &scene.materials[obj.material as usize];
         let pipeline = scene.pipelines.get(shader).unwrap(); // this definitely exists
         if current_shader.is_none() || shader != current_shader.unwrap() {
             current_shader = Some(shader);
@@ -634,7 +631,7 @@ unsafe fn draw_objects(
         let empty_vec = Vec::with_capacity(0);
         let instances = scene.instances.get(&obj.mesh_id).unwrap_or(&empty_vec);
         for instance in instances {
-            let (_, po_desc) = scene.transforms.get(instance).unwrap();
+            let (_, po_desc) = scene.transforms[*instance as usize];
             device.cmd_bind_descriptor_sets(
                 cmd,
                 vk::PipelineBindPoint::GRAPHICS,

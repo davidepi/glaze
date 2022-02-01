@@ -30,7 +30,7 @@ pub struct SceneAS {
 pub struct SceneASBuilder<'scene, 'renderer> {
     vkmeshes: Vec<&'scene VulkanMesh>,
     instances: Vec<&'scene MeshInstance>,
-    transform: FnvHashMap<u16, &'scene Transform>,
+    transform: Vec<&'scene Transform>,
     vb: &'scene AllocatedBuffer,
     ib: &'scene AllocatedBuffer,
     mm: &'renderer MemoryManager,
@@ -51,7 +51,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         SceneASBuilder {
             vkmeshes: Vec::with_capacity(0),
             instances: Vec::with_capacity(0),
-            transform: FnvHashMap::with_capacity_and_hasher(0, FnvBuildHasher::default()),
+            transform: Vec::with_capacity(0),
             vb: vertex_buffer,
             ib: index_buffer,
             mm,
@@ -65,16 +65,12 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         mut self,
         meshes: &'scene [VulkanMesh],
         instances: &'scene [MeshInstance],
-        transforms: &'scene [(u16, Transform)],
+        transforms: &'scene [Transform],
     ) -> Self {
         let meshes = meshes.iter().collect::<Vec<_>>();
-        let transforms = transforms
-            .iter()
-            .map(|(k, v)| (*k, v))
-            .collect::<FnvHashMap<_, _>>();
         self.vkmeshes = meshes;
         self.instances = instances.iter().collect();
-        self.transform = transforms;
+        self.transform = transforms.iter().collect();
         self
     }
 
@@ -306,7 +302,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         // TODO: add shader binding
         for (instance_id, instance) in self.instances.iter().enumerate() {
             let blas = blases.get(&instance.mesh_id).unwrap();
-            let transform = self.transform.get(&instance.transform_id).unwrap();
+            let transform = self.transform[instance.transform_id as usize];
             let as_addr_info = vk::AccelerationStructureDeviceAddressInfoKHR {
                 s_type: vk::StructureType::ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
                 p_next: ptr::null(),

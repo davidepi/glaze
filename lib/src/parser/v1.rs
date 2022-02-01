@@ -223,11 +223,11 @@ impl ContentV1 {
         mut fout: W,
         vertices: &[Vertex],
         meshes: &[Mesh],
-        transforms: &[(u16, Transform)],
+        transforms: &[Transform],
         instances: &[MeshInstance],
         cameras: &[Camera],
-        textures: &[(u16, Texture)],
-        materials: &[(u16, Material)],
+        textures: &[Texture],
+        materials: &[Material],
     ) -> Result<(), Error> {
         let chunks = [
             (
@@ -301,7 +301,7 @@ impl ParsedScene for ContentV1 {
             .decode_dynamic(bytes_to_mesh, "Mesh")
     }
 
-    fn transforms(&mut self) -> Result<Vec<(u16, Transform)>, Error> {
+    fn transforms(&mut self) -> Result<Vec<Transform>, Error> {
         self.read_chunk(ChunkID::Transform)?
             .decode_fixed(bytes_to_transform, "Transform")
     }
@@ -315,11 +315,11 @@ impl ParsedScene for ContentV1 {
             .decode_fixed(bytes_to_camera, "Camera")
     }
 
-    fn textures(&mut self) -> Result<Vec<(u16, Texture)>, Error> {
+    fn textures(&mut self) -> Result<Vec<Texture>, Error> {
         self.read_chunk(ChunkID::Texture)?.decode_textures()
     }
 
-    fn materials(&mut self) -> Result<Vec<(u16, Material)>, Error> {
+    fn materials(&mut self) -> Result<Vec<Material>, Error> {
         self.read_chunk(ChunkID::Material)?
             .decode_dynamic(bytes_to_material, "Material")
     }
@@ -327,7 +327,7 @@ impl ParsedScene for ContentV1 {
     fn update(
         &mut self,
         cameras: Option<&[Camera]>,
-        materials: Option<&[(u16, Material)]>,
+        materials: Option<&[Material]>,
     ) -> Result<(), Error> {
         let vertices = self.read_chunk(ChunkID::Vertex)?;
         let meshes = self.read_chunk(ChunkID::Mesh)?;
@@ -502,7 +502,7 @@ impl Chunk {
 
     /// Creates a chunk from a slice of textures.
     /// Textures uses an ad-hoc compression so they cannot use [Chunk::encode_dynamic]
-    fn encode_textures(items: &[(u16, Texture)]) -> Self {
+    fn encode_textures(items: &[Texture]) -> Self {
         if !items.is_empty() {
             let len = items.len() as u16;
             let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
@@ -525,7 +525,7 @@ impl Chunk {
 
     /// Converts back the Chunk into a vector of textures.
     /// Textures uses an ad-hoc compression so they cannot use [Chunk::decode_dynamic]
-    fn decode_textures(self) -> Result<Vec<(u16, Texture)>, Error> {
+    fn decode_textures(self) -> Result<Vec<Texture>, Error> {
         if !self.data.is_empty() {
             if let Some(verified) = verify_hash(self.data) {
                 let len = u16::from_le_bytes(verified[0..2].try_into().unwrap());
@@ -714,7 +714,7 @@ fn bytes_to_camera(data: [u8; 49]) -> Camera {
 }
 
 /// Converts a Texture to a vector of bytes.
-fn texture_to_bytes((index, texture): &(u16, Texture)) -> Vec<u8> {
+fn texture_to_bytes(texture: &Texture) -> Vec<u8> {
     let name = texture.name();
     let str_len = name.bytes().len();
     assert!(str_len < 256);
@@ -737,9 +737,8 @@ fn texture_to_bytes((index, texture): &(u16, Texture)) -> Vec<u8> {
         tex_data.extend(mip_data);
     }
     let tex_len = tex_data.len();
-    let total_len = std::mem::size_of::<u16>() + 3 * std::mem::size_of::<u8>() + str_len + tex_len;
+    let total_len = 3 * std::mem::size_of::<u8>() + str_len + tex_len;
     let mut retval = Vec::with_capacity(total_len);
-    retval.extend(index.to_le_bytes());
     retval.push(format_to_u8(texture.format()));
     retval.push(str_len as u8);
     retval.extend(name.bytes());
@@ -764,11 +763,10 @@ fn u8_to_format(format: u8) -> Result<TextureFormat, Error> {
 }
 
 /// Converts a vector of bytes to a Texture.
-fn bytes_to_texture(data: &[u8]) -> Result<(u16, Texture), Error> {
-    let tex_index = u16::from_le_bytes(data[0..2].try_into().unwrap());
-    let format = u8_to_format(data[2])?;
-    let str_len = data[3] as usize;
-    let mut index = 4;
+fn bytes_to_texture(data: &[u8]) -> Result<Texture, Error> {
+    let format = u8_to_format(data[0])?;
+    let str_len = data[1] as usize;
+    let mut index = 2;
     let name = String::from_utf8(data[index..index + str_len].to_vec()).unwrap();
     index += str_len;
     let miplvls = data[index] as usize;
@@ -819,22 +817,20 @@ fn bytes_to_texture(data: &[u8]) -> Result<(u16, Texture), Error> {
             Texture::new_rgba_with_mipmaps(info, data)
         }
     };
-    Ok((tex_index, texture))
+    Ok(texture)
 }
 
 /// Converts a Material to a vector of bytes.
-fn material_to_bytes((index, material): &(u16, Material)) -> Vec<u8> {
+fn material_to_bytes(material: &Material) -> Vec<u8> {
     let str_len = material.name.bytes().len();
     assert!(str_len < 256);
-    let total_len = std::mem::size_of::<u16>() // index
-        + std::mem::size_of::<u8>() // str_len
+    let total_len = std::mem::size_of::<u8>() // str_len
         + str_len //actual string
         + std::mem::size_of::<u8>() // shader id
         + std::mem::size_of::<u16>() // diffuse texture id
         + 4 * std::mem::size_of::<u8>() // diffuse multiplier
         + std::mem::size_of::<u16>(); // opacity texture id
     let mut retval = Vec::with_capacity(total_len);
-    retval.extend(index.to_le_bytes());
     retval.push(str_len as u8);
     retval.extend(material.name.bytes());
     retval.push(material.shader.into());
@@ -845,10 +841,9 @@ fn material_to_bytes((index, material): &(u16, Material)) -> Vec<u8> {
 }
 
 /// Converts a vector of bytes to a Material.
-fn bytes_to_material(data: &[u8]) -> (u16, Material) {
-    let mat_index = u16::from_le_bytes(data[0..2].try_into().unwrap());
-    let str_len = data[2] as usize;
-    let mut index = 3;
+fn bytes_to_material(data: &[u8]) -> Material {
+    let str_len = data[0] as usize;
+    let mut index = 1;
     let name = String::from_utf8(data[index..index + str_len].to_vec()).unwrap();
     index += str_len;
     let shader_id = data[index];
@@ -863,31 +858,23 @@ fn bytes_to_material(data: &[u8]) -> (u16, Material) {
     ];
     index += 4;
     let opacity = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
-    let material = Material {
+    Material {
         name,
         shader: shader_id.into(),
         diffuse,
         diffuse_mul,
         opacity,
-    };
-    (mat_index, material)
+    }
 }
 
 /// Converts a Transform to a vector of bytes.
-fn transform_to_bytes((index, transform): &(u16, Transform)) -> [u8; 66] {
-    let mut whole = [0; 66];
-    let i0 = u16::to_le_bytes(*index);
-    let i1 = transform.to_bytes();
-    whole[0..2].copy_from_slice(&i0);
-    whole[2..].copy_from_slice(&i1);
-    whole
+fn transform_to_bytes(transform: &Transform) -> [u8; 64] {
+    transform.to_bytes()
 }
 
 /// Converts a vector of bytes to a Transform.
-fn bytes_to_transform(data: [u8; 66]) -> (u16, Transform) {
-    let index = u16::from_le_bytes(data[0..2].try_into().unwrap());
-    let transform = Transform::from_bytes(data[2..].try_into().unwrap());
-    (index, transform)
+fn bytes_to_transform(data: [u8; 64]) -> Transform {
+    Transform::from_bytes(data)
 }
 
 /// Converts a MeshInstance to a vector of bytes.
@@ -1003,12 +990,12 @@ mod tests {
         buffer
     }
 
-    fn gen_textures(count: u16, seed: u64) -> Vec<(u16, Texture)> {
+    fn gen_textures(count: u16, seed: u64) -> Vec<Texture> {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
         let data = include_bytes!("../../../resources/checker.jpg");
         let image = image::load_from_memory_with_format(data, image::ImageFormat::Jpeg).unwrap();
         let mut data = Vec::with_capacity(count as usize);
-        for i in 0..count {
+        for _ in 0..count {
             let cur_img = image.clone();
             if rng.gen_bool(0.5) {
                 cur_img.flipv();
@@ -1039,15 +1026,15 @@ mod tests {
                 TextureFormat::Gray => Texture::new_gray(info, cur_img.into_luma8()),
                 TextureFormat::Rgba => Texture::new_rgba(info, cur_img.into_rgba8()),
             };
-            data.push((i, texture));
+            data.push(texture);
         }
         data.into_iter().collect()
     }
 
-    fn gen_materials(count: u16, seed: u64) -> Vec<(u16, Material)> {
+    fn gen_materials(count: u16, seed: u64) -> Vec<Material> {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
         let mut data = Vec::with_capacity(count as usize);
-        for i in 0..count {
+        for _ in 0..count {
             let shaders = ShaderMat::all_values();
             let shader = shaders[rng.gen_range(0..shaders.len())];
             let diffuse = if rng.gen_bool(0.5) {
@@ -1078,15 +1065,15 @@ mod tests {
                 diffuse_mul,
                 opacity,
             };
-            data.push((i, material));
+            data.push(material);
         }
         data.into_iter().collect()
     }
 
-    fn gen_transforms(count: u16, seed: u64) -> Vec<(u16, Transform)> {
+    fn gen_transforms(count: u16, seed: u64) -> Vec<Transform> {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
         let mut data = Vec::with_capacity(count as usize);
-        for i in 0..count {
+        for _ in 0..count {
             let matrix = Matrix4::new(
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0.0..1.0),
@@ -1105,7 +1092,7 @@ mod tests {
                 rng.gen_range(0.0..1.0),
                 rng.gen_range(0.0..1.0),
             );
-            data.push((i, Transform::from(matrix)));
+            data.push(Transform::from(matrix));
         }
         data
     }

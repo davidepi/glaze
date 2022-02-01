@@ -4,15 +4,14 @@ use clap::{App, Arg};
 use console::style;
 use glaze::{
     converted_file, parse, serialize, Camera, Material, Mesh, MeshInstance, ParserVersion,
-    PerspectiveCam, Texture, TextureFormat, TextureInfo, Transform, Vertex, DEFAULT_MATERIAL_ID,
-    DEFAULT_TEXTURE_ID,
+    PerspectiveCam, Texture, TextureFormat, TextureInfo, Transform, Vertex, DEFAULT_TEXTURE_ID,
 };
 use image::io::Reader as ImageReader;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use russimp::material::{MaterialProperty, PropertyTypeInfo};
 use russimp::scene::{PostProcess, Scene as RussimpScene};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -25,9 +24,9 @@ struct TempScene {
     vertices: Vec<Vertex>,
     meshes: Vec<Mesh>,
     cameras: Vec<Camera>,
-    textures: Vec<(u16, Texture)>,
-    materials: Vec<(u16, Material)>,
-    transforms: Vec<(u16, Transform)>,
+    textures: Vec<Texture>,
+    materials: Vec<Material>,
+    transforms: Vec<Transform>,
     instances: Vec<MeshInstance>,
 }
 
@@ -154,8 +153,7 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
         convert_transforms_and_instances(&root)
     } else {
         // no scene structure, puts each mesh in the scene with an identity matrix.
-        // this should never happen, even for simple files assimp should generate a base structure.
-        let transforms = vec![(0, Transform::identity())];
+        // this should never happen, even for simple files assimp should generate a single node.
         let instances = meshes
             .iter()
             .map(|m| MeshInstance {
@@ -163,7 +161,7 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
                 transform_id: 0,
             })
             .collect();
-        (transforms, instances)
+        (vec![Transform::identity()], instances)
     };
     mpb.clear().ok();
     Ok(TempScene {
@@ -189,15 +187,18 @@ fn russimp_to_cgmath_matrix(mat: russimp::Matrix4x4) -> Matrix4<f32> {
 
 fn convert_transforms_and_instances(
     root: &RefCell<russimp::node::Node>,
-) -> (Vec<(u16, Transform)>, Vec<MeshInstance>) {
+) -> (Vec<Transform>, Vec<MeshInstance>) {
     let mut transforms = HashMap::new();
+    //insert the identity transform with index 0
+    transforms.insert(Transform::identity().to_bytes(), 0);
     let mut instances = Vec::new();
     conv_trans_inst_rec(root, Matrix4::identity(), &mut transforms, &mut instances);
-    let transforms = transforms
+    // sort transforms
+    let sorted_transforms = transforms
         .into_iter()
         .map(|(trans, id)| (id, Transform::from_bytes(trans)))
-        .collect();
-    (transforms, instances)
+        .collect::<BTreeMap<_, _>>();
+    (sorted_transforms.into_values().collect(), instances)
 }
 
 fn conv_trans_inst_rec(
@@ -226,11 +227,11 @@ fn conv_trans_inst_rec(
     }
 }
 
-fn gen_mipmaps(mut textures: Vec<(u16, Texture)>, pb: ProgressBar) -> Vec<(u16, Texture)> {
+fn gen_mipmaps(mut textures: Vec<Texture>, pb: ProgressBar) -> Vec<Texture> {
     let effort = textures.len();
     pb.set_length(effort as u64);
     pb.set_message("Generating mipmaps");
-    for (_, texture) in textures.iter_mut() {
+    for texture in textures.iter_mut() {
         texture.gen_mipmaps();
         pb.inc(1);
     }
@@ -330,7 +331,7 @@ fn convert_materials(
     materials: &[russimp::material::Material],
     pb: ProgressBar,
     original_path: &str,
-) -> Result<(Vec<(u16, Material)>, Vec<(u16, Texture)>), std::io::Error> {
+) -> Result<(Vec<Material>, Vec<Texture>), std::io::Error> {
     let effort = materials.len();
     pb.set_length(effort as u64);
     pb.set_message("Converting materials and textures");
@@ -338,8 +339,8 @@ fn convert_materials(
     let mut retval_textures = Vec::new();
     let mut retval_materials = Vec::new();
     // add default texture
-    retval_textures.push((DEFAULT_TEXTURE_ID, Texture::default()));
-    retval_materials.push((DEFAULT_MATERIAL_ID, Material::default()));
+    retval_textures.push(Texture::default());
+    retval_materials.push(Material::default());
     for material in materials {
         for (texture_type, textures) in &material.textures {
             let texture = textures.first().unwrap(); // support single textures only
@@ -374,8 +375,7 @@ fn convert_materials(
         }
         // build material
         let material = convert_material(&material.properties, &used_textures);
-        let mat_id = retval_materials.len() as u16;
-        retval_materials.push((mat_id, material));
+        retval_materials.push(material);
         pb.inc(1);
     }
     pb.finish();
@@ -387,7 +387,7 @@ fn convert_texture(
     path: PathBuf,
     used: &mut HashMap<String, u16>,
     format: TextureFormat,
-    ret: &mut Vec<(u16, Texture)>,
+    ret: &mut Vec<Texture>,
 ) -> Result<(), std::io::Error> {
     let used_name = used_name(name, format);
     #[allow(clippy::map_entry)] // this block is very long, I don't want to have a single `match`
@@ -420,7 +420,7 @@ fn convert_texture(
             };
             // this works as long as the default ID is 0
             let id = ret.len() as u16;
-            ret.push((id, texture));
+            ret.push(texture);
             used.insert(used_name, id);
             Ok(())
         } else {
@@ -619,7 +619,7 @@ mod tests {
             assert_eq!(parsed.cameras()?.len(), 1);
             assert_eq!(parsed.materials()?.len(), 2);
             let textures = parsed.textures()?;
-            assert_eq!(textures[0].1.mipmap_levels(), 10);
+            assert_eq!(textures[0].mipmap_levels(), 10);
             assert_eq!(parsed.vertices()?.len(), 24);
         } else {
             panic!("Failed to parse back scene")
