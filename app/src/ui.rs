@@ -624,8 +624,10 @@ fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut R
                 Err(TryRecvError::Disconnected) => {
                     let (_, handle) = state.rtrenderer.take().unwrap();
                     if let Ok(res) = handle.join() {
-                        renderer.add_texture(RT_RESULT_TEXTURE_ID, res);
-                        state.rtrenderer_has_result = true;
+                        // FIXME: find a way to give imgui the RT_RESULT_TEXTURE_ID handle
+                        state.rtrenderer_console.push_str("Render failed");
+                        //renderer.add_texture(RT_RESULT_TEXTURE_ID, res);
+                        //state.rtrenderer_has_result = true;
                     } else {
                         state.rtrenderer_console.push_str("Render failed");
                     }

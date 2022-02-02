@@ -338,7 +338,7 @@ impl<'a> DescriptorSetBuilder<'a> {
         self
     }
 
-    /// Binds an image to the current set as a combined image-sampler.
+    /// Binds an image to the current set.
     /// Note that bindings are ordered.
     #[must_use]
     pub fn bind_image(
@@ -367,52 +367,30 @@ impl<'a> DescriptorSetBuilder<'a> {
         self
     }
 
-    /// Binds several images to the current set as an image array.
+    /// Binds several images to the current set.
     /// All images are expected to have the same layout.
-    /// The sampler must be used separately.
     /// Note that bindings are ordered.
     #[must_use]
     pub fn bind_image_array(
         mut self,
-        images: &[AllocatedImage],
+        images: &[vk::ImageView],
         layout: vk::ImageLayout,
+        sampler: vk::Sampler,
         stage_flags: vk::ShaderStageFlags,
     ) -> Self {
         let image_info = images
             .iter()
-            .map(|img| vk::DescriptorImageInfo {
-                sampler: vk::Sampler::null(),
-                image_view: img.image_view,
+            .map(|image_view| vk::DescriptorImageInfo {
+                sampler,
+                image_view: *image_view,
                 image_layout: layout,
             })
             .collect::<Vec<_>>();
         let binding = self.bindings.len() as u32;
         let layout_binding = vk::DescriptorSetLayoutBinding {
             binding,
-            descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             descriptor_count: image_info.len() as u32,
-            stage_flags,
-            p_immutable_samplers: ptr::null(),
-        };
-        self.bindings.push(layout_binding);
-        self.info.push(BufOrImgInfo::Img(image_info));
-        self
-    }
-
-    /// Binds a single sampler to the current set.
-    /// Note that bindings are ordered.
-    #[must_use]
-    pub fn bind_sampler(mut self, sampler: vk::Sampler, stage_flags: vk::ShaderStageFlags) -> Self {
-        let image_info = vec![vk::DescriptorImageInfo {
-            sampler,
-            image_view: vk::ImageView::null(),        // not read
-            image_layout: vk::ImageLayout::UNDEFINED, // not read
-        }];
-        let binding = self.bindings.len() as u32;
-        let layout_binding = vk::DescriptorSetLayoutBinding {
-            binding,
-            descriptor_type: vk::DescriptorType::SAMPLER,
-            descriptor_count: 1,
             stage_flags,
             p_immutable_samplers: ptr::null(),
         };

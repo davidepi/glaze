@@ -9,7 +9,7 @@ use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
 use super::{AllocatedImage, UnfinishedExecutions};
-use crate::{include_shader, Camera, Material, RayTraceRenderer, TextureLoaded};
+use crate::{include_shader, Camera, Material, RayTraceRenderer};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::io::ErrorKind;
@@ -444,24 +444,6 @@ impl RealtimeRenderer {
                 ErrorKind::Unsupported,
                 "The video card does not support raytraced rendering",
             ))
-        }
-    }
-
-    /// Adds a texture to the scene with the given ID.
-    ///
-    /// It can be used to draw some texture in the UI, as long as the scene remains loaded.
-    ///
-    /// If a texture with the same ID is existing, it is replaced.
-    ///
-    /// If the scene is not loaded, this method does nothing.
-    ///
-    ///
-    /// **Note:** This method adds the texture to the scene, so clearing the scene will invalidate
-    /// also the texture. This is due to the engine and UI design. In particular, the UI uses the
-    /// same ID of the textures in the scene for rendering.
-    pub fn add_texture(&mut self, id: u16, texture: TextureLoaded) {
-        if let Some(scene) = &mut self.scene {
-            scene.textures.push(texture);
         }
     }
 

@@ -38,7 +38,7 @@ macro_rules! raytrace_features {
             acceleration_structure_host_commands: vk::FALSE,
             descriptor_binding_acceleration_structure_update_after_bind: vk::FALSE,
         }];
-        let $name = [vk::PhysicalDeviceRayTracingPipelineFeaturesKHR {
+        let mut rtpipe = [vk::PhysicalDeviceRayTracingPipelineFeaturesKHR {
             s_type: vk::StructureType::PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR,
             p_next: acc.as_mut_ptr() as *mut c_void,
             ray_tracing_pipeline: vk::TRUE,
@@ -46,6 +46,30 @@ macro_rules! raytrace_features {
             ray_tracing_pipeline_shader_group_handle_capture_replay_mixed: vk::FALSE,
             ray_tracing_pipeline_trace_rays_indirect: vk::FALSE,
             ray_traversal_primitive_culling: vk::FALSE,
+        }];
+        let $name = [vk::PhysicalDeviceDescriptorIndexingFeatures {
+            s_type: vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES,
+            p_next: rtpipe.as_mut_ptr() as *mut c_void,
+            shader_input_attachment_array_dynamic_indexing: vk::FALSE,
+            shader_uniform_texel_buffer_array_dynamic_indexing: vk::FALSE,
+            shader_storage_texel_buffer_array_dynamic_indexing: vk::FALSE,
+            shader_uniform_buffer_array_non_uniform_indexing: vk::FALSE,
+            shader_sampled_image_array_non_uniform_indexing: vk::TRUE,
+            shader_storage_buffer_array_non_uniform_indexing: vk::FALSE,
+            shader_storage_image_array_non_uniform_indexing: vk::FALSE,
+            shader_input_attachment_array_non_uniform_indexing: vk::FALSE,
+            shader_uniform_texel_buffer_array_non_uniform_indexing: vk::FALSE,
+            shader_storage_texel_buffer_array_non_uniform_indexing: vk::FALSE,
+            descriptor_binding_uniform_buffer_update_after_bind: vk::FALSE,
+            descriptor_binding_sampled_image_update_after_bind: vk::FALSE,
+            descriptor_binding_storage_image_update_after_bind: vk::FALSE,
+            descriptor_binding_storage_buffer_update_after_bind: vk::FALSE,
+            descriptor_binding_uniform_texel_buffer_update_after_bind: vk::FALSE,
+            descriptor_binding_storage_texel_buffer_update_after_bind: vk::FALSE,
+            descriptor_binding_update_unused_while_pending: vk::FALSE,
+            descriptor_binding_partially_bound: vk::FALSE,
+            descriptor_binding_variable_descriptor_count: vk::FALSE,
+            runtime_descriptor_array: vk::TRUE,
         }];
     };
 }
@@ -125,6 +149,8 @@ impl PresentInstance {
     /// - bufferDeviceAddress from VK_KHR_buffer_device_address
     /// - accelerationStructure from VK_KHR_acceleration_structure
     /// - rayTracingPipeline from VK_KHR_ray_tracing_pipeline
+    /// - samplerImageArrayNonUniformIndexing from VK_EXT_descriptor_indexing
+    /// - runtimeDescriptorArray from VK_EXT_descriptor_indexing
     ///
     /// # Examples
     /// Basic usage:
@@ -335,9 +361,12 @@ impl RayTraceInstance {
     /// - VK_KHR_ray_tracing_pipeline
     ///
     /// # Features
+    /// - samplerAnisotropy from the original Vulkan 1.0 specification
     /// - bufferDeviceAddress from VK_KHR_buffer_device_address
     /// - accelerationStructure from VK_KHR_acceleration_structure
     /// - rayTracingPipeline from VK_KHR_ray_tracing_pipeline
+    /// - samplerImageArrayNonUniformIndexing from VK_EXT_descriptor_indexing
+    /// - runtimeDescriptorArray from VK_EXT_descriptor_indexing
     ///
     /// # Examples
     /// Basic usage:
@@ -356,6 +385,7 @@ impl RayTraceInstance {
             ash::extensions::khr::RayTracingPipeline::name(),
         ];
         let device_features = vk::PhysicalDeviceFeatures {
+            sampler_anisotropy: vk::TRUE,
             ..Default::default()
         };
         raytrace_features!(raytracing_features);

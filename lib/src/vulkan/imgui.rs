@@ -7,7 +7,7 @@ use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderer::InternalStats;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
-use crate::{include_shader, PresentInstance, TextureFormat, TextureInfo};
+use crate::{include_shader, PresentInstance, TextureFormat, TextureLoaded};
 use ash::vk;
 use cgmath::Vector2 as Vec2;
 use font_kit::family_name::FamilyName;
@@ -53,8 +53,11 @@ pub struct ImguiRenderer {
     sampler: vk::Sampler,
     /// descriptor manager reserved for the UI resources
     dm: DescriptorSetManager,
+    /// Reference to the scene textures, to avoid inconsistent states when the scene is
+    /// deallocated.
+    scene_textures: Option<Arc<Vec<TextureLoaded>>>,
     /// descriptors of the various textures, along with the texture info
-    tex_descs: Vec<(Descriptor, TextureInfo)>,
+    tex_descs: Vec<Descriptor>,
     /// Buffers that cannot be freed immediately, as they require the GPU to finish first.
     /// The first value is the number of invokation of the "draw" method before they are dropped.
     free_later: Vec<(u8, AllocatedBuffer)>,
@@ -195,6 +198,7 @@ impl ImguiRenderer {
             pipeline_bw,
             sampler,
             dm,
+            scene_textures: None,
             tex_descs: Vec::new(),
             free_later: Vec::new(),
             instance,
@@ -218,13 +222,11 @@ impl ImguiRenderer {
     }
 
     pub(super) fn load_scene_textures(&mut self, scene: &VulkanScene) {
-        // TODO: consider keeping a reference to the scene textures to avoid early deallocations
-        self.tex_descs = scene
-            .textures
+        let scene_textures = Arc::clone(&scene.textures);
+        self.tex_descs = scene_textures
             .iter()
             .map(|texture| {
-                let desc = self
-                    .dm
+                self.dm
                     .new_set()
                     .bind_image(
                         &texture.image,
@@ -233,10 +235,10 @@ impl ImguiRenderer {
                         vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                         vk::ShaderStageFlags::FRAGMENT,
                     )
-                    .build();
-                (desc, texture.info.clone())
+                    .build()
             })
             .collect();
+        self.scene_textures = Some(scene_textures);
     }
 
     /// draw the ui. This should be called inside an existing render pass.
@@ -418,8 +420,8 @@ impl ImguiRenderer {
                             } else {
                                 // texture_id != FONT_ATLAS_TEXTURE_ID implicitly assumed
                                 let tex_id = texture_id.id();
-                                // this should never fail
-                                let (desc, tex_info) = &self.tex_descs[tex_id];
+                                let tex_info = &self.scene_textures.as_ref().unwrap()[tex_id].info;
+                                let desc = &self.tex_descs[tex_id];
                                 if tex_info.format == TextureFormat::Rgba && pipeline_bw {
                                     // set default pipeline
                                     pipeline_bw = false;

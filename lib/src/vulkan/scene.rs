@@ -55,7 +55,7 @@ pub struct VulkanScene {
     /// Map of all shaders in the scene with their pipeline.
     pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
     /// Map of all textures in the scene.
-    pub(super) textures: Vec<TextureLoaded>,
+    pub(super) textures: Arc<Vec<TextureLoaded>>,
     /// All the transform in the scene.
     pub(super) transforms: Vec<(AllocatedBuffer, Descriptor)>,
     /// All the instances in the scene in form (Mesh ID, Vec<Transform ID>)
@@ -135,10 +135,12 @@ impl VulkanScene {
         wchan.send("[3/4] Loading textures...".to_string()).ok();
         let sampler = create_sampler(device);
         let scene_textures = parsed.textures()?;
-        let textures = scene_textures
-            .into_iter()
-            .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
-            .collect::<Vec<_>>();
+        let textures = Arc::new(
+            scene_textures
+                .into_iter()
+                .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
+                .collect::<Vec<_>>(),
+        );
         let parsed_mats = parsed.materials()?;
         let params_buffer =
             load_materials_parameters(device, &parsed_mats, mm, &mut tcmdm, &mut unf);
@@ -354,7 +356,6 @@ impl Drop for VulkanScene {
 
 /// Creates the default sampler for this scene.
 /// Uses anisotropic filtering with the max anisotropy supported by the GPU.
-#[cfg(feature = "vulkan-interactive")]
 fn create_sampler(device: &Device) -> vk::Sampler {
     let max_anisotropy = device.physical().properties.limits.max_sampler_anisotropy;
     let ci = vk::SamplerCreateInfo {
@@ -868,11 +869,13 @@ struct RTMaterial {
 pub struct RayTraceScene<T: Instance + Send + Sync> {
     pub camera: Camera,
     pub descriptor: Descriptor,
+    sampler: vk::Sampler,
     materials: Vec<Material>,
     vertex_buffer: Arc<AllocatedBuffer>,
     index_buffer: Arc<AllocatedBuffer>,
     instance_buffer: AllocatedBuffer,
     material_buffer: AllocatedBuffer,
+    textures: Arc<Vec<TextureLoaded>>,
     acc: SceneAS,
     dm: DescriptorSetManager,
     instance: Arc<T>,
@@ -902,6 +905,13 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?, true);
         let (meshes, index_buffer) =
             load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?, true);
+        let textures = Arc::new(
+            scene
+                .textures()?
+                .into_iter()
+                .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
+                .collect::<Vec<_>>(),
+        );
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
             .with_meshes(&meshes, &instances, &transforms);
         let acc = builder.build();
@@ -915,6 +925,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &Self::AVG_DESC,
             instance.desc_layout_cache(),
         );
+        let sampler = create_sampler(device);
         let descriptor = build_raytrace_descriptor(
             &mut dm,
             &acc,
@@ -922,18 +933,22 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &index_buffer,
             &instance_buffer,
             &material_buffer,
+            &textures,
+            sampler,
         );
         unf.wait_completion();
         Ok(RayTraceScene {
             camera,
+            descriptor,
+            sampler,
             materials,
             vertex_buffer: Arc::new(vertex_buffer),
             index_buffer: Arc::new(index_buffer),
             instance_buffer,
             material_buffer,
+            textures,
             acc,
             dm,
-            descriptor,
             instance,
         })
     }
@@ -953,8 +968,9 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         let instances = scene.file.instances()?;
         let transforms = scene.file.transforms()?;
         let materials = scene.materials().into_iter().cloned().collect::<Vec<_>>();
-        let vertex_buffer = scene.vertex_buffer.clone();
-        let index_buffer = scene.index_buffer.clone();
+        let vertex_buffer = Arc::clone(&scene.vertex_buffer);
+        let index_buffer = Arc::clone(&scene.index_buffer);
+        let textures = Arc::clone(&scene.textures);
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
             .with_meshes(&scene.meshes, &instances, &transforms);
         let acc = builder.build();
@@ -973,6 +989,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &Self::AVG_DESC,
             instance.desc_layout_cache(),
         );
+        let sampler = create_sampler(device);
         let descriptor = build_raytrace_descriptor(
             &mut dm,
             &acc,
@@ -980,18 +997,22 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &index_buffer,
             &instance_buffer,
             &material_buffer,
+            &textures,
+            sampler,
         );
         unf.wait_completion();
         Ok(RayTraceScene {
-            materials,
             camera: scene.current_cam.clone(),
+            descriptor,
+            sampler,
+            materials,
             vertex_buffer,
             index_buffer,
             instance_buffer,
             material_buffer,
+            textures,
             acc,
             dm,
-            descriptor,
             instance,
         })
     }
@@ -1018,7 +1039,20 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.index_buffer,
             &self.instance_buffer,
             &self.material_buffer,
+            &self.textures,
+            self.sampler,
         );
+    }
+}
+
+impl<T: Instance + Send + Sync> Drop for RayTraceScene<T> {
+    fn drop(&mut self) {
+        unsafe {
+            self.instance
+                .device()
+                .logical()
+                .destroy_sampler(self.sampler, None)
+        }
     }
 }
 
@@ -1146,7 +1180,13 @@ fn build_raytrace_descriptor(
     index_buffer: &AllocatedBuffer,
     instance_buffer: &AllocatedBuffer,
     material_buffer: &AllocatedBuffer,
+    textures: &[TextureLoaded],
+    sampler: vk::Sampler,
 ) -> Descriptor {
+    let textures_memory = textures
+        .iter()
+        .map(|t| t.image.image_view)
+        .collect::<Vec<_>>();
     dm.new_set()
         .bind_acceleration_structure(&acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
         .bind_buffer(
@@ -1167,6 +1207,12 @@ fn build_raytrace_descriptor(
         .bind_buffer(
             material_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
+        .bind_image_array(
+            &textures_memory,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            sampler,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
         .build()

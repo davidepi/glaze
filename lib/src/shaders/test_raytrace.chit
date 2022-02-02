@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier : require
 
 struct RTInstance {
   uint index_offset;
@@ -49,6 +50,7 @@ layout(std430, set=1, binding=3) readonly buffer instanceBuffer {
 layout(std430, set=1, binding=4) readonly buffer materialBuffer {
   RTMaterial materials[];
 } MaterialBuffer;
+layout(set=1, binding=5) uniform sampler2D textures[];
 
 Vertex from_packed(VertexPacked vp) {
   vec3 normal = vec3(vp.pxyznx.w, vp.nyztxy.xy);
@@ -60,12 +62,14 @@ void main()
   const vec3 barycentric = vec3(1.0 - attrib.x - attrib.y, attrib.x, attrib.y);
   RTInstance instance = InstanceBuffer.instances[gl_InstanceCustomIndexEXT];
   RTMaterial material = MaterialBuffer.materials[instance.mat_id];
-  //Index idx = IndexBuffer.indices[instance.index_offset/3+gl_PrimitiveID];
-  //Vertex v0 = from_packed(VertexBuffer.vertices[idx.x]);
-  //Vertex v1 = from_packed(VertexBuffer.vertices[idx.y]);
-  //Vertex v2 = from_packed(VertexBuffer.vertices[idx.z]);
+  Index idx = IndexBuffer.indices[instance.index_offset/3+gl_PrimitiveID];
+  Vertex v0 = from_packed(VertexBuffer.vertices[idx.x]);
+  Vertex v1 = from_packed(VertexBuffer.vertices[idx.y]);
+  Vertex v2 = from_packed(VertexBuffer.vertices[idx.z]);
 
-  //vec2 hit_tcoord = v0.tcoord * barycentric.x + v1.tcoord * barycentric.y + v2.tcoord * barycentric.z;
+  vec2 uv = v0.tcoord * barycentric.x + v1.tcoord * barycentric.y + v2.tcoord * barycentric.z;
+  vec3 diffuse = texture(textures[nonuniformEXT(material.diffuse)], uv).rgb;
 
-  payload = material.diffuse_mul.xyz;
+
+  payload = diffuse*material.diffuse_mul.xyz;
 }

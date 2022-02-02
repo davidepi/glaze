@@ -360,7 +360,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         TextureLoaded {
             info: out_info,
             image: out_image,
-            instance: self.instance,
+            instance: self.instance.clone(),
         }
     }
 }
