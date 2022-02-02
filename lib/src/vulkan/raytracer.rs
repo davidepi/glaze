@@ -568,14 +568,11 @@ fn init_rt<T: Instance + Send + Sync>(
 }
 
 fn build_descriptor(dm: &mut DescriptorSetManager, out_img: &AllocatedImage) -> Descriptor {
-    let outimg_descinfo = vk::DescriptorImageInfo {
-        sampler: vk::Sampler::null(),
-        image_view: out_img.image_view,
-        image_layout: vk::ImageLayout::GENERAL,
-    };
     dm.new_set()
         .bind_image(
-            outimg_descinfo,
+            out_img,
+            vk::ImageLayout::GENERAL,
+            vk::Sampler::null(),
             vk::DescriptorType::STORAGE_IMAGE,
             vk::ShaderStageFlags::RAYGEN_KHR,
         )

@@ -432,13 +432,8 @@ fn load_transforms_to_gpu(
                 unf,
                 &[transform.clone()],
             );
-            let buf_info = vk::DescriptorBufferInfo {
-                buffer: gpu_buffer.buffer,
-                offset: 0,
-                range: std::mem::size_of::<Transform>() as u64,
-            };
             let desc = dm.new_set().bind_buffer(
-                buf_info,
+                &gpu_buffer,
                 vk::DescriptorType::UNIFORM_BUFFER,
                 vk::ShaderStageFlags::VERTEX,
             );
@@ -562,11 +557,6 @@ fn build_mat_desc_set(
     let mut shader = material.shader;
     let dflt_tex = &textures[DEFAULT_TEXTURE_ID as usize];
     let diffuse = textures.get(material.diffuse as usize).unwrap_or(dflt_tex);
-    let diffuse_image_info = vk::DescriptorImageInfo {
-        sampler,
-        image_view: diffuse.image.image_view,
-        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-    };
     let align = device
         .physical()
         .properties
@@ -581,26 +571,25 @@ fn build_mat_desc_set(
     // TODO: merge materials with the same textures to avoid extra bindings
     let mut descriptor = dm
         .new_set()
-        .bind_buffer(
+        .bind_buffer_with_info(
             buf_info,
             vk::DescriptorType::UNIFORM_BUFFER,
             vk::ShaderStageFlags::FRAGMENT,
         )
         .bind_image(
-            diffuse_image_info,
+            &diffuse.image,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            sampler,
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             vk::ShaderStageFlags::FRAGMENT,
         );
     if material.opacity != 0 {
         shader = material.shader.two_sided(); // use a two-sided shader
         let opacity = textures.get(material.opacity as usize).unwrap_or(dflt_tex);
-        let opacity_image_info = vk::DescriptorImageInfo {
-            sampler,
-            image_view: opacity.image.image_view,
-            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        };
         descriptor = descriptor.bind_image(
-            opacity_image_info,
+            &opacity.image,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            sampler,
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             vk::ShaderStageFlags::FRAGMENT,
         );
@@ -1181,22 +1170,22 @@ fn build_raytrace_descriptor(
     dm.new_set()
         .bind_acceleration_structure(&acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
         .bind_buffer(
-            vertex_buffer_info,
+            &vertex_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
         .bind_buffer(
-            index_buffer_info,
+            &index_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
         .bind_buffer(
-            instance_buffer_info,
+            &instance_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
         .bind_buffer(
-            material_buffer_info,
+            &material_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )

@@ -1,9 +1,14 @@
 use ash::vk;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::ptr;
 use std::sync::{Arc, Mutex};
+
+use crate::TextureLoaded;
+
+use super::memory::AllocatedBuffer;
+use super::AllocatedImage;
 
 /// Initial number of allocated descriptor pools.
 const MAX_POOLS: usize = 4;
@@ -189,10 +194,10 @@ impl Hash for DescriptorSetLayoutBindingWrapper {
 /// build one. Therefore, in the optimized build, the target of this pointers is deallocated so I'm
 /// forced to store it in this wrapper and build the DescriptorSetLayoutWrite function in the
 /// DescriptorSetBuilder::build()
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 enum BufOrImgInfo {
     Buf(vk::DescriptorBufferInfo),
-    Img(vk::DescriptorImageInfo),
+    Img(Vec<vk::DescriptorImageInfo>),
     Acc(vk::WriteDescriptorSetAccelerationStructureKHR),
 }
 
@@ -302,7 +307,21 @@ impl<'a> DescriptorSetBuilder<'a> {
     #[must_use]
     pub fn bind_buffer(
         mut self,
-        buf_info: vk::DescriptorBufferInfo,
+        buffer: &AllocatedBuffer,
+        descriptor_type: vk::DescriptorType,
+        stage_flags: vk::ShaderStageFlags,
+    ) -> Self {
+        let buf_info = vk::DescriptorBufferInfo {
+            buffer: buffer.buffer,
+            offset: 0,
+            range: buffer.size,
+        };
+        self.bind_buffer_with_info(buf_info, descriptor_type, stage_flags)
+    }
+
+    pub fn bind_buffer_with_info(
+        mut self,
+        info: vk::DescriptorBufferInfo,
         descriptor_type: vk::DescriptorType,
         stage_flags: vk::ShaderStageFlags,
     ) -> Self {
@@ -315,19 +334,26 @@ impl<'a> DescriptorSetBuilder<'a> {
             p_immutable_samplers: ptr::null(),
         };
         self.bindings.push(layout_binding);
-        self.info.push(BufOrImgInfo::Buf(buf_info));
+        self.info.push(BufOrImgInfo::Buf(info));
         self
     }
 
-    /// Binds an image to the current set.
+    /// Binds an image to the current set as a combined image-sampler.
     /// Note that bindings are ordered.
     #[must_use]
     pub fn bind_image(
         mut self,
-        image_info: vk::DescriptorImageInfo,
+        image: &AllocatedImage,
+        layout: vk::ImageLayout,
+        sampler: vk::Sampler,
         descriptor_type: vk::DescriptorType,
         stage_flags: vk::ShaderStageFlags,
     ) -> Self {
+        let image_info = vec![vk::DescriptorImageInfo {
+            sampler,
+            image_view: image.image_view,
+            image_layout: layout,
+        }];
         let binding = self.bindings.len() as u32;
         let layout_binding = vk::DescriptorSetLayoutBinding {
             binding,
@@ -390,7 +416,7 @@ impl<'a> DescriptorSetBuilder<'a> {
                     write.p_buffer_info = buf;
                 }
                 BufOrImgInfo::Img(img) => {
-                    write.p_image_info = img;
+                    write.p_image_info = img.as_ptr();
                 }
                 BufOrImgInfo::Acc(acc) => {
                     write.p_next = acc as *const _ as *const c_void;

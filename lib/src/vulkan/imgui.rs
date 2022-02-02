@@ -168,15 +168,12 @@ impl ImguiRenderer {
         };
         let sampler = unsafe { device.logical().create_sampler(&sampler_ci, None) }
             .expect("Failed to create sampler");
-        let texture_binding = vk::DescriptorImageInfo {
-            sampler,
-            image_view: fonts_gpu_buf.image_view,
-            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        };
         let font_descriptor = dm
             .new_set()
             .bind_image(
-                texture_binding,
+                &fonts_gpu_buf,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                sampler,
                 vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                 vk::ShaderStageFlags::FRAGMENT,
             )
@@ -226,16 +223,13 @@ impl ImguiRenderer {
             .textures
             .iter()
             .map(|texture| {
-                let desc_info = vk::DescriptorImageInfo {
-                    sampler: self.sampler,
-                    image_view: texture.image.image_view,
-                    image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                };
                 let desc = self
                     .dm
                     .new_set()
                     .bind_image(
-                        desc_info,
+                        &texture.image,
+                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                        self.sampler,
                         vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                         vk::ShaderStageFlags::FRAGMENT,
                     )

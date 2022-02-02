@@ -134,15 +134,12 @@ impl RenderPass {
         };
         let framebuffer = unsafe { device.create_framebuffer(&fb_ci, None) }
             .expect("Failed to create frambebuffer");
-        let image_info = vk::DescriptorImageInfo {
-            sampler: copy_sampler,
-            image_view: color_img.image_view,
-            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        };
         let copy_descriptor = descriptor_creator
             .new_set()
             .bind_image(
-                image_info,
+                &color_img,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                copy_sampler,
                 vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                 vk::ShaderStageFlags::FRAGMENT,
             )

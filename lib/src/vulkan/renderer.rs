@@ -157,15 +157,10 @@ impl RealtimeRenderer {
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 gpu_allocator::MemoryLocation::CpuToGpu,
             );
-            let buf_info = vk::DescriptorBufferInfo {
-                buffer: buffer.buffer,
-                offset: 0,
-                range: std::mem::size_of::<FrameData>() as u64,
-            };
             let descriptor = dm
                 .new_set()
                 .bind_buffer(
-                    buf_info,
+                    &buffer,
                     vk::DescriptorType::UNIFORM_BUFFER,
                     vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                 )
@@ -735,15 +730,12 @@ fn raytracer_copy_helpers(
         vk::ImageAspectFlags::COLOR,
         1,
     );
-    let rdii = vk::DescriptorImageInfo {
-        sampler,
-        image_view: raytrace_output.image_view,
-        image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-    };
     let raytrace_copy_desc = dm
         .new_set()
         .bind_image(
-            rdii,
+            &raytrace_output,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            sampler,
             vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             vk::ShaderStageFlags::FRAGMENT,
         )
