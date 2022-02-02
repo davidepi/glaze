@@ -1,14 +1,11 @@
+use super::memory::AllocatedBuffer;
+use super::AllocatedImage;
 use ash::vk;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::hash::{BuildHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::ptr;
 use std::sync::{Arc, Mutex};
-
-use crate::TextureLoaded;
-
-use super::memory::AllocatedBuffer;
-use super::AllocatedImage;
 
 /// Initial number of allocated descriptor pools.
 const MAX_POOLS: usize = 4;
@@ -303,10 +300,11 @@ pub struct DescriptorSetBuilder<'a> {
 
 impl<'a> DescriptorSetBuilder<'a> {
     /// Binds a buffer to the current set.
+    /// The buffer is bound in its entirety.
     /// Note that bindings are ordered.
     #[must_use]
     pub fn bind_buffer(
-        mut self,
+        self,
         buffer: &AllocatedBuffer,
         descriptor_type: vk::DescriptorType,
         stage_flags: vk::ShaderStageFlags,
@@ -319,6 +317,8 @@ impl<'a> DescriptorSetBuilder<'a> {
         self.bind_buffer_with_info(buf_info, descriptor_type, stage_flags)
     }
 
+    /// Binds a buffer to the current set, but requires the buffer extent to be specified.
+    /// Note that bindings are ordered.
     pub fn bind_buffer_with_info(
         mut self,
         info: vk::DescriptorBufferInfo,
@@ -367,6 +367,62 @@ impl<'a> DescriptorSetBuilder<'a> {
         self
     }
 
+    /// Binds several images to the current set as an image array.
+    /// All images are expected to have the same layout.
+    /// The sampler must be used separately.
+    /// Note that bindings are ordered.
+    #[must_use]
+    pub fn bind_image_array(
+        mut self,
+        images: &[AllocatedImage],
+        layout: vk::ImageLayout,
+        stage_flags: vk::ShaderStageFlags,
+    ) -> Self {
+        let image_info = images
+            .iter()
+            .map(|img| vk::DescriptorImageInfo {
+                sampler: vk::Sampler::null(),
+                image_view: img.image_view,
+                image_layout: layout,
+            })
+            .collect::<Vec<_>>();
+        let binding = self.bindings.len() as u32;
+        let layout_binding = vk::DescriptorSetLayoutBinding {
+            binding,
+            descriptor_type: vk::DescriptorType::SAMPLED_IMAGE,
+            descriptor_count: image_info.len() as u32,
+            stage_flags,
+            p_immutable_samplers: ptr::null(),
+        };
+        self.bindings.push(layout_binding);
+        self.info.push(BufOrImgInfo::Img(image_info));
+        self
+    }
+
+    /// Binds a single sampler to the current set.
+    /// Note that bindings are ordered.
+    #[must_use]
+    pub fn bind_sampler(mut self, sampler: vk::Sampler, stage_flags: vk::ShaderStageFlags) -> Self {
+        let image_info = vec![vk::DescriptorImageInfo {
+            sampler,
+            image_view: vk::ImageView::null(),        // not read
+            image_layout: vk::ImageLayout::UNDEFINED, // not read
+        }];
+        let binding = self.bindings.len() as u32;
+        let layout_binding = vk::DescriptorSetLayoutBinding {
+            binding,
+            descriptor_type: vk::DescriptorType::SAMPLER,
+            descriptor_count: 1,
+            stage_flags,
+            p_immutable_samplers: ptr::null(),
+        };
+        self.bindings.push(layout_binding);
+        self.info.push(BufOrImgInfo::Img(image_info));
+        self
+    }
+
+    /// Binds an acceleration structure to the current set.
+    /// Note that bindings are ordered.
     #[must_use]
     pub fn bind_acceleration_structure(
         mut self,
@@ -416,6 +472,7 @@ impl<'a> DescriptorSetBuilder<'a> {
                     write.p_buffer_info = buf;
                 }
                 BufOrImgInfo::Img(img) => {
+                    write.descriptor_count = img.len() as u32;
                     write.p_image_info = img.as_ptr();
                 }
                 BufOrImgInfo::Acc(acc) => {

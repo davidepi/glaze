@@ -1147,45 +1147,25 @@ fn build_raytrace_descriptor(
     instance_buffer: &AllocatedBuffer,
     material_buffer: &AllocatedBuffer,
 ) -> Descriptor {
-    let vertex_buffer_info = vk::DescriptorBufferInfo {
-        buffer: vertex_buffer.buffer,
-        offset: 0,
-        range: vertex_buffer.size,
-    };
-    let index_buffer_info = vk::DescriptorBufferInfo {
-        buffer: index_buffer.buffer,
-        offset: 0,
-        range: index_buffer.size,
-    };
-    let instance_buffer_info = vk::DescriptorBufferInfo {
-        buffer: instance_buffer.buffer,
-        offset: 0,
-        range: instance_buffer.size,
-    };
-    let material_buffer_info = vk::DescriptorBufferInfo {
-        buffer: material_buffer.buffer,
-        offset: 0,
-        range: material_buffer.size,
-    };
     dm.new_set()
         .bind_acceleration_structure(&acc.tlas.accel, vk::ShaderStageFlags::RAYGEN_KHR)
         .bind_buffer(
-            &vertex_buffer,
+            vertex_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
         .bind_buffer(
-            &index_buffer,
+            index_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
         .bind_buffer(
-            &instance_buffer,
+            instance_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
         .bind_buffer(
-            &material_buffer,
+            material_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
