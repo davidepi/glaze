@@ -4,3 +4,5 @@ mod mesh;
 pub use self::mesh::{Mesh, MeshInstance, Transform};
 mod camera;
 pub use self::camera::{Camera, OrthographicCam, PerspectiveCam};
+mod color;
+pub use self::color::{ColorRGB, ColorXYZ};
