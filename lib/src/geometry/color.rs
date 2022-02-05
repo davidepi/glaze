@@ -78,6 +78,9 @@ impl From<ColorXYZ> for ColorRGB {
         } else {
             b *= 12.92;
         }
+        r = f32::max(r, 0.0);
+        g = f32::max(g, 0.0);
+        b = f32::max(b, 0.0);
         ColorRGB { r, g, b }
     }
 }
@@ -103,9 +106,12 @@ impl From<ColorRGB> for ColorXYZ {
         r *= 100.0;
         g *= 100.0;
         b *= 100.0;
-        let x = r * 0.4124564 + g * 0.3575761 + b * 0.1804375;
-        let y = r * 0.2126729 + g * 0.7151522 + b * 0.0721750;
-        let z = r * 0.0193339 + g * 0.119192 + b * 0.9503041;
+        let mut x = r * 0.4124564 + g * 0.3575761 + b * 0.1804375;
+        let mut y = r * 0.2126729 + g * 0.7151522 + b * 0.0721750;
+        let mut z = r * 0.0193339 + g * 0.119192 + b * 0.9503041;
+        x = f32::max(x, 0.0);
+        y = f32::max(y, 0.0);
+        z = f32::max(z, 0.0);
         ColorXYZ { x, y, z }
     }
 }

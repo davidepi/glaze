@@ -8,8 +8,8 @@ mod parser;
 mod vulkan;
 
 pub use geometry::{
-    Camera, ColorRGB, ColorXYZ, Mesh, MeshInstance, OrthographicCam, PerspectiveCam, Transform,
-    Vertex,
+    Camera, ColorRGB, ColorXYZ, Mesh, MeshInstance, OrthographicCam, PerspectiveCam, Spectrum,
+    Transform, Vertex,
 };
 #[cfg(feature = "vulkan")]
 pub use materials::TextureLoaded;

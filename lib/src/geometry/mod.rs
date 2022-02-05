@@ -6,3 +6,5 @@ mod camera;
 pub use self::camera::{Camera, OrthographicCam, PerspectiveCam};
 mod color;
 pub use self::color::{ColorRGB, ColorXYZ};
+mod spectrum;
+pub use self::spectrum::Spectrum;
