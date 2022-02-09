@@ -1,7 +1,7 @@
 use super::{write_header, ParsedScene, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
 use crate::materials::{TextureFormat, TextureInfo};
-use crate::{Material, MeshInstance, Texture, Transform};
+use crate::{Light, Material, MeshInstance, Spectrum, Texture, Transform};
 use cgmath::{Point3, Vector2 as Vec2, Vector3 as Vec3};
 use fnv::FnvHashMap;
 use image::png::{CompressionType, FilterType, PngDecoder, PngEncoder};
@@ -75,6 +75,7 @@ enum ChunkID {
     Material = 4,
     Transform = 5,
     Instance = 6,
+    Light = 7,
 }
 
 impl TryFrom<u8> for ChunkID {
@@ -89,6 +90,7 @@ impl TryFrom<u8> for ChunkID {
             4 => Ok(ChunkID::Material),
             5 => Ok(ChunkID::Transform),
             6 => Ok(ChunkID::Instance),
+            7 => Ok(ChunkID::Light),
             _ => Err(Error::new(ErrorKind::Unsupported, "Unsupported chunk")),
         }
     }
@@ -104,6 +106,7 @@ impl From<ChunkID> for u8 {
             ChunkID::Material => 4,
             ChunkID::Transform => 5,
             ChunkID::Instance => 6,
+            ChunkID::Light => 7,
         }
     }
 }
@@ -228,6 +231,7 @@ impl ContentV1 {
         cameras: &[Camera],
         textures: &[Texture],
         materials: &[Material],
+        lights: &[Light],
     ) -> Result<(), Error> {
         let chunks = [
             (
@@ -251,6 +255,10 @@ impl ContentV1 {
             (
                 ChunkID::Instance,
                 Chunk::encode_fixed(instances, instance_to_bytes),
+            ),
+            (
+                ChunkID::Light,
+                Chunk::encode_dynamic(lights, light_to_bytes),
             ),
         ];
         ContentV1::write_chunks(&mut fout, &chunks)
@@ -324,10 +332,16 @@ impl ParsedScene for ContentV1 {
             .decode_dynamic(bytes_to_material, "Material")
     }
 
+    fn lights(&mut self) -> Result<Vec<Light>, Error> {
+        self.read_chunk(ChunkID::Light)?
+            .decode_dynamic(bytes_to_light, "Light")
+    }
+
     fn update(
         &mut self,
         cameras: Option<&[Camera]>,
         materials: Option<&[Material]>,
+        lights: Option<&[Light]>,
     ) -> Result<(), Error> {
         let vertices = self.read_chunk(ChunkID::Vertex)?;
         let meshes = self.read_chunk(ChunkID::Mesh)?;
@@ -344,6 +358,11 @@ impl ParsedScene for ContentV1 {
         } else {
             self.read_chunk(ChunkID::Material)?
         };
+        let lights = if let Some(lights) = lights {
+            Chunk::encode_dynamic(lights, light_to_bytes)
+        } else {
+            self.read_chunk(ChunkID::Light)?
+        };
         {
             // Reopens the file in write mode (actually creates a new file, as most content will be
             // shifted).
@@ -357,6 +376,7 @@ impl ParsedScene for ContentV1 {
                 (ChunkID::Material, materials),
                 (ChunkID::Transform, transforms),
                 (ChunkID::Instance, instances),
+                (ChunkID::Light, lights),
             ];
             ContentV1::write_chunks(&mut writer, &chunks)?;
             self.reader = BufReader::new(File::open(&self.filepath)?);
@@ -894,6 +914,59 @@ fn bytes_to_instance(data: [u8; 4]) -> MeshInstance {
     }
 }
 
+/// Converts a Transform to a vector of bytes.
+fn light_to_bytes(light: &Light) -> Vec<u8> {
+    let ltype = match light {
+        Light::Omni(_) => 0,
+        Light::Sun(_) => 1,
+    };
+    let color = light.emission().to_bytes();
+    let posdir: [f32; 3] = match light {
+        Light::Omni(l) => l.position.into(),
+        Light::Sun(l) => l.direction.into(),
+    };
+    let posdir = posdir
+        .into_iter()
+        .flat_map(|x| x.to_le_bytes())
+        .collect::<Vec<_>>();
+    let name_len = light.name().bytes().len();
+    let mut retval = Vec::with_capacity(1 + color.len() + posdir.len() + name_len);
+    retval.push(ltype);
+    retval.extend(color);
+    retval.extend(posdir);
+    retval.extend(light.name().bytes());
+    retval
+}
+
+/// Converts a vector of bytes to a Transform.
+fn bytes_to_light(data: &[u8]) -> Light {
+    let color = Spectrum::from_bytes(data[1..65].try_into().unwrap());
+    let mut index = 65;
+    match data[0] {
+        0 => {
+            let position = Point3::new(
+                f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
+                f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
+                f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
+            );
+            index += 12;
+            let name = String::from_utf8(data[index..].to_vec()).unwrap();
+            Light::new_omni(name, color, position)
+        }
+        1 => {
+            let direction = Vec3::new(
+                f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
+                f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
+                f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
+            );
+            index += 12;
+            let name = String::from_utf8(data[index..].to_vec()).unwrap();
+            Light::new_sun(name, color, direction)
+        }
+        _ => panic!(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -904,10 +977,13 @@ mod tests {
     use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
     use crate::materials::{TextureFormat, TextureInfo};
     use crate::parser::v1::{
-        bytes_to_instance, bytes_to_material, instance_to_bytes, material_to_bytes, HASH_SIZE,
+        bytes_to_instance, bytes_to_light, bytes_to_material, instance_to_bytes, light_to_bytes,
+        material_to_bytes, HASH_SIZE,
     };
     use crate::parser::{parse, ParserVersion, HEADER_LEN};
-    use crate::{serialize, Material, MeshInstance, ShaderMat, Texture, Transform};
+    use crate::{
+        serialize, Light, Material, MeshInstance, ShaderMat, Spectrum, Texture, Transform,
+    };
     use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
     use image::GenericImageView;
     use rand::distributions::Alphanumeric;
@@ -1112,6 +1188,28 @@ mod tests {
         data
     }
 
+    fn gen_lights(count: u16, seed: u64) -> Vec<Light> {
+        let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
+        let mut data = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            let name = Xoshiro128StarStar::seed_from_u64(rng.gen())
+                .sample_iter(&Alphanumeric)
+                .take(rng.gen_range(0..255))
+                .map(char::from)
+                .collect::<String>();
+            let color = Spectrum::from_blackbody(rng.gen_range(800.0..10000.0));
+            let light = if rng.gen_bool(0.5) {
+                let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+                Light::new_omni(name, color, position)
+            } else {
+                let direction = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+                Light::new_sun(name, color, direction)
+            };
+            data.push(light);
+        }
+        data
+    }
+
     #[test]
     fn encode_decode_vertex() {
         let vertices = gen_vertices(32, 0xC2B4D5A5A9E49945);
@@ -1183,6 +1281,16 @@ mod tests {
     }
 
     #[test]
+    fn encode_decode_lights() {
+        let lights = gen_lights(118, 0xF7B3E064F943374E);
+        for light in lights {
+            let data = light_to_bytes(&light);
+            let decoded = bytes_to_light(&data);
+            assert_eq!(decoded, light);
+        }
+    }
+
+    #[test]
     fn write_and_read_only_vert() -> Result<(), std::io::Error> {
         let vertices = gen_vertices(1000, 0xBE8AE7F7E3A5248E);
         let dir = tempdir()?;
@@ -1191,6 +1299,7 @@ mod tests {
             file.as_path(),
             ParserVersion::V1,
             &vertices,
+            &[],
             &[],
             &[],
             &[],
@@ -1225,6 +1334,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         )?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
@@ -1251,6 +1361,7 @@ mod tests {
             &[],
             &[],
             &cameras,
+            &[],
             &[],
             &[],
         )?;
@@ -1281,6 +1392,7 @@ mod tests {
             &[],
             &textures,
             &[],
+            &[],
         )?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
@@ -1309,6 +1421,7 @@ mod tests {
             &[],
             &[],
             &materials,
+            &[],
         )?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
@@ -1333,6 +1446,7 @@ mod tests {
             &[],
             &[],
             &transforms,
+            &[],
             &[],
             &[],
             &[],
@@ -1365,6 +1479,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         )?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
@@ -1379,6 +1494,35 @@ mod tests {
     }
 
     #[test]
+    fn write_and_read_only_lights() -> Result<(), std::io::Error> {
+        let lights = gen_lights(512, 0x6C1A6FE161CFC7DE);
+        let dir = tempdir()?;
+        let file = dir.path().join("write_and_read_lights.bin");
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &lights,
+        )?;
+        let mut read = parse(file.as_path())?;
+        remove_file(file.as_path())?;
+        let read_lights = read.lights()?;
+        assert_eq!(read_lights.len(), lights.len());
+        for i in 0..read_lights.len() {
+            let val = &read_lights.get(i).unwrap();
+            let expected = &lights.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn write_and_read_everything() -> Result<(), std::io::Error> {
         let vertices = gen_vertices(100, 0x98DA1392A52639C2);
         let meshes = gen_meshes(100, 0xEFB101FDF7F185FB);
@@ -1387,6 +1531,7 @@ mod tests {
         let materials = gen_materials(100, 0x76D7971188303D82);
         let instances = gen_instances(100, 0xCAB0F2794E10665C);
         let transforms = gen_transforms(100, 0x8AFE0C931FBD4D69);
+        let lights = gen_lights(150, 0x10FD94C4A4B032C0);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_everything.bin");
         serialize(
@@ -1399,6 +1544,7 @@ mod tests {
             &cameras,
             &textures,
             &materials,
+            &lights,
         )?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
@@ -1409,6 +1555,7 @@ mod tests {
         let read_materials = read.materials()?;
         let read_transforms = read.transforms()?;
         let read_instances = read.instances()?;
+        let read_lights = read.lights()?;
         assert_eq!(read_vertices.len(), vertices.len());
         assert_eq!(read_meshes.len(), meshes.len());
         assert_eq!(read_cameras.len(), cameras.len());
@@ -1416,6 +1563,7 @@ mod tests {
         assert_eq!(read_materials.len(), materials.len());
         assert_eq!(read_transforms.len(), transforms.len());
         assert_eq!(read_instances.len(), instances.len());
+        assert_eq!(read_lights.len(), lights.len());
         for i in 0..read_vertices.len() {
             let val = &read_vertices.get(i).unwrap();
             let expected = &vertices.get(i).unwrap();
@@ -1451,6 +1599,11 @@ mod tests {
             let expected = &instances.get(i).unwrap();
             assert_eq!(val, expected);
         }
+        for i in 0..read_lights.len() {
+            let val = &read_lights.get(i).unwrap();
+            let expected = &lights.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
         Ok(())
     }
 
@@ -1463,6 +1616,7 @@ mod tests {
             file.as_path(),
             ParserVersion::V1,
             &vertices,
+            &[],
             &[],
             &[],
             &[],
@@ -1502,6 +1656,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         )?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.vertices().is_ok());
@@ -1530,6 +1685,7 @@ mod tests {
             ParserVersion::V1,
             &[],
             &meshes,
+            &[],
             &[],
             &[],
             &[],
@@ -1568,6 +1724,7 @@ mod tests {
             &cameras,
             &[],
             &[],
+            &[],
         )?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.cameras().is_ok());
@@ -1600,6 +1757,7 @@ mod tests {
             &[],
             &[],
             &textures,
+            &[],
             &[],
         )?;
         let mut read_ok = parse(file.as_path()).unwrap();
@@ -1634,6 +1792,7 @@ mod tests {
             &[],
             &[],
             &materials,
+            &[],
         )?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.materials().is_ok());
@@ -1663,6 +1822,7 @@ mod tests {
             &[],
             &[],
             &transforms,
+            &[],
             &[],
             &[],
             &[],
@@ -1700,6 +1860,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         )?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.instances().is_ok());
@@ -1715,6 +1876,40 @@ mod tests {
         let mut read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.instances().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn corrupted_lights() -> Result<(), std::io::Error> {
+        let lights = gen_lights(250, 0xB9206AA3C2681F81);
+        let dir = tempdir()?;
+        let file = dir.path().join("corrupted_lights.bin");
+        serialize(
+            file.as_path(),
+            ParserVersion::V1,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+            &lights,
+        )?;
+        let mut read_ok = parse(file.as_path()).unwrap();
+        assert!(read_ok.lights().is_ok());
+        {
+            //corrupt file
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(file.as_path())?;
+            file.seek(SeekFrom::Start(1000))?;
+            file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
+        }
+        let mut read_corrupted = parse(file.as_path()).unwrap();
+        remove_file(file.as_path())?;
+        assert!(read_corrupted.lights().is_err());
         Ok(())
     }
 
@@ -1744,10 +1939,11 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         )?;
         let mut read = parse(file.as_path())?;
         assert_eq!(read.vertices()?.len(), vertices.len());
-        read.update(None, None)?;
+        read.update(None, None, None)?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         // close file and reopen it
         let mut read = parse(file.as_path())?;
@@ -1770,15 +1966,18 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
         )?;
         let mut read = parse(file.as_path())?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         let new_cameras = gen_cameras(100, 0xECD7D80A8A4C4C95);
         let new_materials = gen_materials(100, 0xAA9475DE05B6CE41);
-        read.update(Some(&new_cameras), Some(&new_materials))?;
+        let new_lights = gen_lights(100, 0xEF2F6EF8FD11E92E);
+        read.update(Some(&new_cameras), Some(&new_materials), Some(&new_lights))?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         assert_eq!(read.cameras()?.len(), new_cameras.len());
         assert_eq!(read.materials()?.len(), new_materials.len());
+        assert_eq!(read.lights()?.len(), new_lights.len());
         Ok(())
     }
 
@@ -1791,6 +1990,7 @@ mod tests {
         let materials = gen_materials(25, 0x6FEC53A488FBDB4F);
         let transforms = gen_transforms(25, 0x1E5CBA94679D9D3B);
         let instances = gen_instances(100, 0xC79389E3BBC74BCF);
+        let lights = gen_lights(50, 0xA39F34BA2C56A7DC);
         let dir = tempdir()?;
         let file = dir.path().join("update_all.bin");
         serialize(
@@ -1803,6 +2003,7 @@ mod tests {
             &cameras,
             &textures,
             &materials,
+            &lights,
         )?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
@@ -1813,9 +2014,11 @@ mod tests {
         assert_eq!(read.materials()?.len(), materials.len());
         assert_eq!(read.transforms()?.len(), transforms.len());
         assert_eq!(read.instances()?.len(), instances.len());
+        assert_eq!(read.lights()?.len(), lights.len());
         let new_cameras = gen_cameras(100, 0x056F0B996A248BC4);
         let new_materials = gen_materials(100, 0x3ABE1A9BEB00DA7B);
-        read.update(Some(&new_cameras), Some(&new_materials))?;
+        let new_lights = gen_lights(100, 0x5871F342932A7B6A);
+        read.update(Some(&new_cameras), Some(&new_materials), Some(&new_lights))?;
         let read_vertices = read.vertices()?;
         let read_meshes = read.meshes()?;
         let read_cameras = read.cameras()?;
@@ -1823,6 +2026,7 @@ mod tests {
         let read_materials = read.materials()?;
         let read_transforms = read.transforms()?;
         let read_instances = read.instances()?;
+        let read_lights = read.lights()?;
         assert_eq!(read_vertices.len(), vertices.len());
         assert_eq!(read_meshes.len(), meshes.len());
         assert_eq!(read_cameras.len(), new_cameras.len());
@@ -1830,6 +2034,7 @@ mod tests {
         assert_eq!(read_materials.len(), new_materials.len());
         assert_eq!(read_transforms.len(), transforms.len());
         assert_eq!(read_instances.len(), instances.len());
+        assert_eq!(read_lights.len(), new_lights.len());
         for i in 0..read_vertices.len() {
             let val = &read_vertices.get(i).unwrap();
             let expected = &vertices.get(i).unwrap();
@@ -1863,6 +2068,11 @@ mod tests {
         for i in 0..read_instances.len() {
             let val = &read_instances.get(i).unwrap();
             let expected = &instances.get(i).unwrap();
+            assert_eq!(val, expected);
+        }
+        for i in 0..read_lights.len() {
+            let val = &read_lights.get(i).unwrap();
+            let expected = &new_lights.get(i).unwrap();
             assert_eq!(val, expected);
         }
         Ok(())

@@ -8,3 +8,5 @@ mod color;
 pub use self::color::{ColorRGB, ColorXYZ};
 mod spectrum;
 pub use self::spectrum::Spectrum;
+mod light;
+pub use self::light::Light;

@@ -9,7 +9,7 @@ use crate::{ColorRGB, ColorXYZ};
 /// represents a colour by sampling its EM spectrum. The samples span the range
 /// 400nm to 700nm (included) with an interval of 20nm. For example, the first
 /// sample is the value in the interval [400,420) nm
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Spectrum {
     wavelength: [f32; Spectrum::SAMPLES],
 }
@@ -179,6 +179,30 @@ impl Spectrum {
             y += self.wavelength[i] * Y.wavelength[i];
         }
         (y * INVY_SUM).clamp(0.0, 1.0)
+    }
+
+    /// Converts the spectrum to an array of bytes
+    pub fn to_bytes(self) -> [u8; Spectrum::SAMPLES * 4] {
+        let mut retval = [0; Spectrum::SAMPLES * 4];
+        let mut index = 0;
+        for val in self.wavelength {
+            let bytes = f32::to_le_bytes(val);
+            retval[index] = bytes[0];
+            retval[index + 1] = bytes[1];
+            retval[index + 2] = bytes[2];
+            retval[index + 3] = bytes[3];
+            index += 4;
+        }
+        retval
+    }
+
+    /// Creates the spectrum from an array of bytes
+    pub fn from_bytes(bytes: [u8; Spectrum::SAMPLES * 4]) -> Spectrum {
+        let mut wavelength = [0.0; Spectrum::SAMPLES];
+        for (i, chunk) in bytes.chunks_exact(4).enumerate() {
+            wavelength[i] = f32::from_le_bytes(chunk.try_into().unwrap());
+        }
+        Spectrum { wavelength }
     }
 }
 
@@ -709,6 +733,8 @@ mod tests {
 
     use crate::{ColorRGB, Spectrum};
 
+    use super::SPECTRUM_CYAN;
+
     #[test]
     fn spectrum_constructor_black() {
         let sp = Spectrum::black();
@@ -787,6 +813,16 @@ mod tests {
         assert!(rgb.b > 0.8);
         assert!(rgb.b > rgb.r);
         assert!(rgb.b > rgb.g);
+    }
+
+    #[test]
+    fn spectrum_from_to_bytes() {
+        let sp = SPECTRUM_CYAN;
+        let bytes = sp.to_bytes();
+        let from = Spectrum::from_bytes(bytes);
+        for i in 0..Spectrum::SAMPLES {
+            assert_eq!(sp.wavelength[i], from.wavelength[i])
+        }
     }
 
     #[test]

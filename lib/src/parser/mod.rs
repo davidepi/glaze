@@ -1,6 +1,6 @@
 use self::v1::ContentV1;
 use crate::geometry::{Camera, Mesh, Vertex};
-use crate::{Material, MeshInstance, Texture, Transform};
+use crate::{Light, Material, MeshInstance, Texture, Transform};
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Error, ErrorKind, Read, Seek, Write};
@@ -150,12 +150,13 @@ pub fn serialize<P: AsRef<Path>>(
     cameras: &[Camera],
     textures: &[Texture],
     materials: &[Material],
+    lights: &[Light],
 ) -> Result<(), Error> {
     let mut fout = BufWriter::new(File::create(file)?);
     write_header(&mut fout)?;
     match version {
         ParserVersion::V1 => ContentV1::serialize(
-            fout, vertices, meshes, transforms, instances, cameras, textures, materials,
+            fout, vertices, meshes, transforms, instances, cameras, textures, materials, lights,
         )?,
     };
     Ok(())
@@ -207,12 +208,15 @@ pub trait ParsedScene {
     fn textures(&mut self) -> Result<Vec<Texture>, Error>;
     /// Retrieve only the [Material]s contained in the file.
     fn materials(&mut self) -> Result<Vec<Material>, Error>;
+    /// Retrieve only the [Light]s contained in the file.
+    fn lights(&mut self) -> Result<Vec<Light>, Error>;
     /// Updates an existing file.
     /// Requires all the cameras and materials as input.
     fn update(
         &mut self,
         cameras: Option<&[Camera]>,
         materials: Option<&[Material]>,
+        lights: Option<&[Light]>,
     ) -> Result<(), Error>;
 }
 

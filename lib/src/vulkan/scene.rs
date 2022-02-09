@@ -10,7 +10,7 @@ use super::pipeline::Pipeline;
 use super::UnfinishedExecutions;
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
-use crate::{Camera, Material, Mesh, MeshInstance, ParsedScene, RayTraceInstance, Vertex};
+use crate::{Camera, Light, Material, Mesh, MeshInstance, ParsedScene, RayTraceInstance, Vertex};
 #[cfg(feature = "vulkan-interactive")]
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
@@ -58,10 +58,10 @@ pub struct VulkanScene {
     pub(super) textures: Arc<Vec<TextureLoaded>>,
     /// All the transform in the scene.
     pub(super) transforms: Vec<(AllocatedBuffer, Descriptor)>,
-    /// All the instances in the scene in form (Mesh ID, Vec<Transform ID>)
+    /// All the instances in the scene in form (Mesh ID, Vec<Transform ID>).
     pub(super) instances: FnvHashMap<u16, Vec<u16>>,
-    /// If the materials changed after loading the scene
-    mat_changed: bool,
+    /// All the lights in the scene.
+    lights: Vec<Light>,
     /// Instance storing this scene.
     instance: Arc<PresentInstance>,
 }
@@ -163,6 +163,7 @@ impl VulkanScene {
             })
             .collect::<Vec<_>>();
         let current_cam = parsed.cameras()?[0].clone(); // parser automatically adds a default cam
+        let lights = parsed.lights()?;
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
             "Material update transfer buffer",
@@ -186,7 +187,7 @@ impl VulkanScene {
             textures,
             transforms,
             instances,
-            mat_changed: false,
+            lights,
             instance,
         })
     }
@@ -262,7 +263,6 @@ impl VulkanScene {
         self.materials[mat_id as usize] = (new, new_shader, new_desc);
         // sort the meshes to minimize bindings
         sort_meshes(&mut self.meshes, &self.materials);
-        self.mat_changed = true;
     }
 
     /// Initializes the scene's pipelines.
@@ -328,16 +328,14 @@ impl VulkanScene {
 
     pub fn save(&mut self) -> Result<(), std::io::Error> {
         let cameras = [self.current_cam.clone()];
-        if self.mat_changed {
-            let materials = self
-                .materials
-                .iter()
-                .map(|(mat, _, _)| mat.clone())
-                .collect::<Vec<_>>();
-            self.file.update(Some(&cameras), Some(&materials))
-        } else {
-            self.file.update(Some(&cameras), None)
-        }
+        let lights = self.lights.clone();
+        let materials = self
+            .materials
+            .iter()
+            .map(|(mat, _, _)| mat.clone())
+            .collect::<Vec<_>>();
+        self.file
+            .update(Some(&cameras), Some(&materials), Some(&lights))
     }
 }
 
