@@ -326,6 +326,34 @@ impl VulkanScene {
         self.textures.iter().collect()
     }
 
+    /// Returns all the lights in the scene.
+    pub fn lights(&self) -> Vec<&Light> {
+        self.lights.iter().collect()
+    }
+
+    /// Adds a light to the scene.
+    pub fn add_light(&mut self, light: Light) {
+        self.lights.push(light);
+    }
+
+    /// Replaces an existing light with the one passed as input.
+    /// Does nothing if the index does not exist.
+    pub fn update_light(&mut self, index: usize, light: Light) {
+        if index < self.lights().len() {
+            self.lights[index] = light;
+        }
+    }
+
+    /// Removes a light at a specific index.
+    /// This has complexity O(n) in the number of lights.
+    ///
+    /// Does nothing if the light does not exist.
+    pub fn remove_light(&mut self, index: usize) {
+        if index < self.lights.len() {
+            self.lights.remove(index);
+        }
+    }
+
     pub fn save(&mut self) -> Result<(), std::io::Error> {
         let cameras = [self.current_cam.clone()];
         let lights = self.lights.clone();

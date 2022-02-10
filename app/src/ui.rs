@@ -1,10 +1,11 @@
+use cgmath::Point3;
 use glaze::{
-    parse, Camera, OrthographicCam, PerspectiveCam, PresentInstance, RealtimeRenderer, ShaderMat,
-    TextureFormat, TextureLoaded, VulkanScene,
+    parse, Camera, ColorRGB, Light, LightType, OrthographicCam, PerspectiveCam, PresentInstance,
+    RealtimeRenderer, ShaderMat, Spectrum, TextureFormat, TextureLoaded, VulkanScene,
 };
 use imgui::{
-    CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
-    Selectable, SelectableFlags, Slider, SliderFlags, TextureId, Ui,
+    CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem,
+    PopupModal, Selectable, SelectableFlags, Slider, SliderFlags, TextureId, Ui,
 };
 use native_dialog::FileDialog;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -34,6 +35,9 @@ pub struct UiState {
     textures_selected: Option<u16>,
     materials_window: bool,
     materials_selected: Option<u16>,
+    lights_window: bool,
+    light_selected: Option<usize>,
+    spectrum_temperature: bool,
     stats_window: bool,
     info_window: bool,
     render_window: bool,
@@ -68,6 +72,9 @@ impl UiState {
             textures_selected: None,
             materials_window: false,
             materials_selected: None,
+            lights_window: false,
+            light_selected: None,
+            spectrum_temperature: true,
             stats_window: true,
             info_window: false,
             render_window: false,
@@ -123,6 +130,7 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
             ui.checkbox("Settings", &mut state.settings_window);
             ui.checkbox("Textures", &mut state.textures_window);
             ui.checkbox("Materials", &mut state.materials_window);
+            ui.checkbox("Lights", &mut state.lights_window);
             ui.checkbox("Stats", &mut state.stats_window);
         });
         ui.menu("Help", || {
@@ -143,6 +151,9 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
     }
     if state.materials_window {
         window_materials(ui, state, renderer);
+    }
+    if state.lights_window {
+        window_lights(ui, state, renderer);
     }
     if state.info_window {
         window_info(ui, state);
@@ -553,6 +564,130 @@ fn texture_selector(ui: &Ui, text: &str, mut selected: u16, scene: &VulkanScene)
         });
     }
     (selected, clicked_on_preview)
+}
+
+fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) {
+    let closed = &mut state.lights_window;
+    if let Some(window) = imgui::Window::new("Lights")
+        .opened(closed)
+        .size([400.0, 400.0], Condition::Appearing)
+        .save_settings(false)
+        .begin(ui)
+    {
+        if let Some(scene) = renderer.scene_mut() {
+            if ui.button("Add") {
+                let dflt_light = Light::new_omni(
+                    format!("Light{}", scene.lights().len()),
+                    Spectrum::from_blackbody(2500.0),
+                    Point3::<f32>::new(0.0, 0.0, 0.0),
+                );
+                scene.add_light(dflt_light);
+            }
+            ui.separator();
+            ui.spacing();
+            ui.text("Lights in the scene:");
+            let header = [
+                imgui::TableColumnSetup::new("Name"),
+                imgui::TableColumnSetup::new("Type"),
+                imgui::TableColumnSetup::new("Color"),
+            ];
+            // if let Some(table) = ui.begin_table("lighttable", 3) {
+            if let Some(table) =
+                ui.begin_table_header_with_flags("lighttable", header, imgui::TableFlags::ROW_BG)
+            {
+                for (light_id, &light) in scene.lights().iter().enumerate() {
+                    ui.table_next_row();
+                    ui.table_next_column();
+                    if imgui::Selectable::new(light.name())
+                        .span_all_columns(true)
+                        .build(ui)
+                    {
+                        state.light_selected = Some(light_id);
+                    }
+                    ui.table_next_column();
+                    ui.text(light.ltype().name());
+                    ui.table_next_column();
+                    let spectrum_rgb = light.emission().to_xyz().to_rgb();
+                    imgui::ColorButton::new(format!("spectrum{light_id}"), spectrum_rgb.into())
+                        .build(ui);
+                }
+                table.end();
+            }
+            if let Some(selected) = state.light_selected {
+                let mut edited = false;
+                let light = scene.lights()[selected];
+                let mut new_name = light.name().to_string();
+                let mut new_type = light.ltype();
+                let mut new_color = light.emission();
+                let mut new_pos = light.position();
+                let mut new_dir = light.direction();
+                ui.spacing();
+                if imgui::InputText::new(ui, "Light Name", &mut new_name)
+                    .enter_returns_true(true)
+                    .build()
+                {
+                    edited = true;
+                }
+                ComboBox::new("Light type")
+                    .preview_value(new_type.name())
+                    .build(ui, || {
+                        for light_type in LightType::all() {
+                            if Selectable::new(light_type.name()).build(ui) {
+                                edited = true;
+                                new_type = light_type;
+                            }
+                        }
+                    });
+                if state.spectrum_temperature {
+                    let mut temperature = 1500.0;
+                    if imgui::InputFloat::new(ui, "Temperature (K)", &mut temperature).build() {
+                        edited = true;
+                        new_color = Spectrum::from_blackbody(temperature);
+                    }
+                } else {
+                    let mut current: [f32; 3] = new_color.to_xyz().to_rgb().into();
+                    if imgui::ColorPicker::new("Spectrum color", &mut current)
+                        .small_preview(false)
+                        .side_preview(false)
+                        .build(ui)
+                    {
+                        edited = true;
+                        new_color = Spectrum::from_rgb(ColorRGB::from(current), true);
+                    }
+                }
+                ui.same_line();
+                if imgui::ColorButton::new("spectrum_current", new_color.to_xyz().to_rgb().into())
+                    .tooltip(false)
+                    .build(ui)
+                {
+                    state.spectrum_temperature = !state.spectrum_temperature;
+                }
+                match new_type {
+                    LightType::OMNI => {
+                        if imgui::InputFloat3::new(ui, "Position", new_pos.as_mut()).build() {
+                            edited = true;
+                        }
+                    }
+                    LightType::SUN => {
+                        if imgui::InputFloat3::new(ui, "Direction", new_dir.as_mut()).build() {
+                            edited = true;
+                        }
+                    }
+                }
+                if ui.button("Remove") {
+                    scene.remove_light(selected);
+                    state.light_selected = None;
+                } else if edited {
+                    let new_light = match new_type {
+                        LightType::OMNI => Light::new_omni(new_name, new_color, new_pos),
+                        LightType::SUN => Light::new_sun(new_name, new_color, new_dir),
+                    };
+                    scene.update_light(selected, new_light);
+                }
+            }
+        }
+        window.end();
+    }
 }
 
 fn window_stats(ui: &Ui, window: &Window, instance: &PresentInstance, renderer: &RealtimeRenderer) {

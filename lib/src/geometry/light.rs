@@ -7,6 +7,27 @@ pub enum Light {
     Sun(SunLight),
 }
 
+/// Used to safely update all the light instances if new lights are added.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[allow(non_camel_case_types)]
+pub enum LightType{
+    OMNI,
+    SUN,
+}
+
+impl LightType {
+    pub fn all() -> [Self; 2] {
+        [Self::OMNI, Self::SUN]
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            LightType::OMNI => "Omni",
+            LightType::SUN => "Sun",
+        }
+    }
+}
+
 impl Light {
     pub fn new_omni(name: String, color: Spectrum, position: Point3<f32>) -> Self {
         Light::Omni(OmniLight {
@@ -24,6 +45,13 @@ impl Light {
         })
     }
 
+    pub fn ltype(&self) -> LightType {
+        match self {
+            Light::Omni(_) => LightType::OMNI,
+            Light::Sun(_) => LightType::SUN,
+        }
+    }
+
     pub fn name(&self) -> &str {
         match self {
             Light::Omni(l) => &l.name,
@@ -35,6 +63,20 @@ impl Light {
         match self {
             Light::Omni(l) => l.color,
             Light::Sun(l) => l.color,
+        }
+    }
+
+    pub fn position(&self) -> Point3<f32> {
+        match self {
+            Light::Omni(l) => l.position,
+            Light::Sun(_) => Point3::<f32>::new(0.0, 0.0, 0.0)
+        }
+    }
+
+    pub fn direction(&self) -> Vec3<f32> {
+        match self {
+            Light::Omni(_) => Vec3::<f32>::new(0.0, 0.0, 0.0),
+            Light::Sun(l) => l.direction,
         }
     }
 }

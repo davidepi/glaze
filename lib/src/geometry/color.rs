@@ -53,6 +53,28 @@ impl ColorXYZ {
     }
 }
 
+impl From<ColorRGB> for [f32;3] {
+    fn from(col: ColorRGB) -> Self {
+        [col.r, col.g, col.b]
+    }
+}
+
+impl From<[f32;3]> for ColorRGB {
+    fn from(col: [f32;3]) -> Self {
+        ColorRGB {
+            r:col[0],
+            g:col[1],
+            b:col[2],
+        }
+    }
+}
+
+impl From<ColorRGB> for [f32;4] {
+    fn from(col: ColorRGB) -> Self {
+        [col.r, col.g, col.b, 1.0]
+    }
+}
+
 impl From<ColorXYZ> for ColorRGB {
     fn from(col: ColorXYZ) -> Self {
         const EXP: f32 = 1.0 / 2.4;
