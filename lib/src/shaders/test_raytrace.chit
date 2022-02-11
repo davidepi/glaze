@@ -31,6 +31,14 @@ struct RTMaterial {
   uint opacity;
 };
 
+struct RTLight {
+  vec4 postype;
+  vec4 col0;
+  vec4 col1;
+  vec4 col2;
+  vec4 col3;
+};
+
 hitAttributeEXT vec2 attrib;
 
 layout(location = 0)  rayPayloadInEXT vec3 payload;
@@ -50,7 +58,12 @@ layout(std430, set=1, binding=3) readonly buffer instanceBuffer {
 layout(std430, set=1, binding=4) readonly buffer materialBuffer {
   RTMaterial materials[];
 } MaterialBuffer;
-layout(set=1, binding=5) uniform sampler2D textures[];
+
+layout(std430, set=1, binding=5) readonly buffer lightBuffer {
+  RTLight lights[];
+} LightBuffer;
+
+layout(set=1, binding=6) uniform sampler2D textures[];
 
 Vertex from_packed(VertexPacked vp) {
   vec3 normal = vec3(vp.pxyznx.w, vp.nyztxy.xy);

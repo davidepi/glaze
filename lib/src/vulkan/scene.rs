@@ -10,7 +10,9 @@ use super::pipeline::Pipeline;
 use super::UnfinishedExecutions;
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
-use crate::{Camera, Light, Material, Mesh, MeshInstance, ParsedScene, RayTraceInstance, Vertex};
+use crate::{
+    Camera, Light, LightType, Material, Mesh, MeshInstance, ParsedScene, RayTraceInstance, Vertex,
+};
 #[cfg(feature = "vulkan-interactive")]
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
@@ -50,13 +52,15 @@ pub struct VulkanScene {
     sampler: vk::Sampler,
     /// Manages descriptors in the current scene.
     dm: DescriptorSetManager,
-    /// Map of all materials in the scene.
-    pub(super) materials: Vec<(Material, ShaderMat, Descriptor)>,
+    /// All materials descriptors in the scene.
+    pub(super) materials_desc: Vec<(ShaderMat, Descriptor)>,
+    /// All the materials in the scene.
+    materials: Vec<Material>,
     /// Map of all shaders in the scene with their pipeline.
     pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
-    /// Map of all textures in the scene.
+    /// All textures in the scene.
     pub(super) textures: Arc<Vec<TextureLoaded>>,
-    /// All the transform in the scene.
+    /// All the transforms in the scene.
     pub(super) transforms: Vec<(AllocatedBuffer, Descriptor)>,
     /// All the instances in the scene in form (Mesh ID, Vec<Transform ID>).
     pub(super) instances: FnvHashMap<u16, Vec<u16>>,
@@ -141,13 +145,12 @@ impl VulkanScene {
                 .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
                 .collect::<Vec<_>>(),
         );
-        let parsed_mats = parsed.materials()?;
-        let params_buffer =
-            load_materials_parameters(device, &parsed_mats, mm, &mut tcmdm, &mut unf);
+        let materials = parsed.materials()?;
+        let params_buffer = load_materials_parameters(device, &materials, mm, &mut tcmdm, &mut unf);
         unf.wait_completion();
         wchan.send("[4/4] Loading materials...".to_string()).ok();
-        let materials = parsed_mats
-            .into_iter()
+        let materials_desc = materials
+            .iter()
             .enumerate()
             .map(|(id, mat)| {
                 let (shader, desc) = build_mat_desc_set(
@@ -159,7 +162,7 @@ impl VulkanScene {
                     &mat,
                     &mut dm,
                 );
-                (mat, shader, desc)
+                (shader, desc)
             })
             .collect::<Vec<_>>();
         let current_cam = parsed.cameras()?[0].clone(); // parser automatically adds a default cam
@@ -171,7 +174,7 @@ impl VulkanScene {
             vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
             MemoryLocation::CpuToGpu,
         );
-        sort_meshes(&mut meshes, &materials);
+        sort_meshes(&mut meshes, &materials_desc);
         Ok(VulkanScene {
             file: parsed,
             current_cam,
@@ -182,6 +185,7 @@ impl VulkanScene {
             meshes,
             sampler,
             dm,
+            materials_desc,
             materials,
             pipelines,
             textures,
@@ -260,9 +264,10 @@ impl VulkanScene {
             )
         });
         // replace the old material
-        self.materials[mat_id as usize] = (new, new_shader, new_desc);
+        self.materials[mat_id as usize] = new;
+        self.materials_desc[mat_id as usize] = (new_shader, new_desc);
         // sort the meshes to minimize bindings
-        sort_meshes(&mut self.meshes, &self.materials);
+        sort_meshes(&mut self.meshes, &self.materials_desc);
     }
 
     /// Initializes the scene's pipelines.
@@ -274,7 +279,7 @@ impl VulkanScene {
         frame_desc_layout: vk::DescriptorSetLayout,
     ) {
         self.pipelines = FnvHashMap::default();
-        for (_, shader, desc) in &self.materials {
+        for (shader, desc) in &self.materials_desc {
             let device = device.clone();
             self.pipelines.entry(*shader).or_insert_with(|| {
                 shader.build_pipeline().build(
@@ -299,18 +304,13 @@ impl VulkanScene {
     /// Returns a material in the scene, given its ID.
     /// Returns None if the material does not exist.
     pub fn single_material(&self, id: u16) -> Option<&Material> {
-        if let Some((mat, _, _)) = self.materials.get(id as usize) {
-            Some(mat)
-        } else {
-            None
-        }
+        self.materials.get(id as usize)
     }
 
     /// Returns all the materials in the scene.
-    /// Each returned material is a tuple containing the material ID and the material itself.
-    /// The order of the materials is not guaranteed.
-    pub fn materials(&self) -> Vec<&Material> {
-        self.materials.iter().map(|(mat, _, _)| mat).collect()
+    /// The index of the material correspond to its ID.
+    pub fn materials(&self) -> &[Material] {
+        &self.materials
     }
 
     //// Returns a texture in the scene, given its ID.
@@ -320,25 +320,24 @@ impl VulkanScene {
     }
 
     /// Returns all the textures in the scene.
-    /// Each returned texture is a tuple containing the texture ID and the texture itself.
-    /// The order of the textures is not guaranteed.
-    pub fn textures(&self) -> Vec<&TextureLoaded> {
-        self.textures.iter().collect()
+    /// The position in the array is the texture ID.
+    pub fn textures(&self) -> &[TextureLoaded] {
+        &self.textures
     }
 
     /// Returns all the lights in the scene.
-    pub fn lights(&self) -> Vec<&Light> {
-        self.lights.iter().collect()
+    pub fn lights(&self) -> &[Light] {
+        &self.lights
     }
 
     /// Adds a light to the scene.
-    pub fn add_light(&mut self, light: Light) {
+    pub(super) fn add_light(&mut self, light: Light) {
         self.lights.push(light);
     }
 
     /// Replaces an existing light with the one passed as input.
     /// Does nothing if the index does not exist.
-    pub fn update_light(&mut self, index: usize, light: Light) {
+    pub(super) fn update_light(&mut self, index: usize, light: Light) {
         if index < self.lights().len() {
             self.lights[index] = light;
         }
@@ -356,12 +355,8 @@ impl VulkanScene {
 
     pub fn save(&mut self) -> Result<(), std::io::Error> {
         let cameras = [self.current_cam.clone()];
-        let lights = self.lights.clone();
-        let materials = self
-            .materials
-            .iter()
-            .map(|(mat, _, _)| mat.clone())
-            .collect::<Vec<_>>();
+        let lights = self.lights().to_vec();
+        let materials = self.materials().to_vec();
         self.file
             .update(Some(&cameras), Some(&materials), Some(&lights))
     }
@@ -833,10 +828,10 @@ fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
 
 // sort mehses by shader id (first) and then material id (second) to minimize binding changes
 #[cfg(feature = "vulkan-interactive")]
-fn sort_meshes(meshes: &mut Vec<VulkanMesh>, mats: &[(Material, ShaderMat, Descriptor)]) {
+fn sort_meshes(meshes: &mut Vec<VulkanMesh>, mats: &[(ShaderMat, Descriptor)]) {
     meshes.sort_unstable_by(|a, b| {
-        let (_, _, desc_a) = &mats[a.material as usize];
-        let (_, _, desc_b) = &mats[b.material as usize];
+        let (_, desc_a) = &mats[a.material as usize];
+        let (_, desc_b) = &mats[b.material as usize];
         match desc_a.cmp(desc_b) {
             std::cmp::Ordering::Less => std::cmp::Ordering::Less,
             std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
@@ -892,15 +887,26 @@ struct RTMaterial {
     opacity: u32,
 }
 
+#[repr(C, align(16))]
+#[derive(Debug, Copy, Clone)]
+struct RTLight {
+    // w is the type, xyz is either position or direction
+    typeposdir: [f32; 4],
+    color0: [f32; 4],
+    color1: [f32; 4],
+    color2: [f32; 4],
+    color3: [f32; 4],
+}
+
 pub struct RayTraceScene<T: Instance + Send + Sync> {
     pub camera: Camera,
     pub descriptor: Descriptor,
     sampler: vk::Sampler,
-    materials: Vec<Material>,
     vertex_buffer: Arc<AllocatedBuffer>,
     index_buffer: Arc<AllocatedBuffer>,
     instance_buffer: AllocatedBuffer,
     material_buffer: AllocatedBuffer,
+    light_buffer: AllocatedBuffer,
     textures: Arc<Vec<TextureLoaded>>,
     acc: SceneAS,
     dm: DescriptorSetManager,
@@ -927,6 +933,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         let instances = scene.instances()?;
         let transforms = scene.transforms()?;
         let materials = scene.materials()?;
+        let lights = scene.lights()?;
         let vertex_buffer =
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?, true);
         let (meshes, index_buffer) =
@@ -951,6 +958,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &Self::AVG_DESC,
             instance.desc_layout_cache(),
         );
+        let light_buffer = load_raytrace_lights_to_gpu(device, mm, &mut tcmdm, &mut unf, &lights);
         let sampler = create_sampler(device);
         let descriptor = build_raytrace_descriptor(
             &mut dm,
@@ -959,6 +967,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &index_buffer,
             &instance_buffer,
             &material_buffer,
+            &light_buffer,
             &textures,
             sampler,
         );
@@ -967,11 +976,11 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             camera,
             descriptor,
             sampler,
-            materials,
             vertex_buffer: Arc::new(vertex_buffer),
             index_buffer: Arc::new(index_buffer),
             instance_buffer,
             material_buffer,
+            light_buffer,
             textures,
             acc,
             dm,
@@ -1010,6 +1019,8 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         );
         let material_buffer =
             load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
+        let light_buffer =
+            load_raytrace_lights_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.lights);
         let mut dm = DescriptorSetManager::new(
             instance.device().logical_clone(),
             &Self::AVG_DESC,
@@ -1023,6 +1034,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &index_buffer,
             &instance_buffer,
             &material_buffer,
+            &light_buffer,
             &textures,
             sampler,
         );
@@ -1031,11 +1043,11 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             camera: scene.current_cam.clone(),
             descriptor,
             sampler,
-            materials,
             vertex_buffer,
             index_buffer,
             instance_buffer,
             material_buffer,
+            light_buffer,
             textures,
             acc,
             dm,
@@ -1044,17 +1056,15 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
     }
 
     #[cfg(feature = "vulkan-interactive")]
-    pub(super) fn update_material(
+    pub(super) fn update_materials(
         &mut self,
-        id: u16,
-        material: Material,
+        materials: &[Material],
         tcmdm: &mut CommandManager,
         unf: &mut UnfinishedExecutions,
     ) {
-        self.materials[id as usize] = material;
         let mm = self.instance.allocator();
         let mut new_buffer =
-            load_raytrace_materials_to_gpu(self.instance.device(), mm, tcmdm, unf, &self.materials);
+            load_raytrace_materials_to_gpu(self.instance.device(), mm, tcmdm, unf, materials);
         // cannot drop yet, the loading is not finished yet
         std::mem::swap(&mut self.material_buffer, &mut new_buffer);
         unf.add_buffer(new_buffer);
@@ -1065,6 +1075,33 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.index_buffer,
             &self.instance_buffer,
             &self.material_buffer,
+            &self.light_buffer,
+            &self.textures,
+            self.sampler,
+        );
+    }
+
+    #[cfg(feature = "vulkan-interactive")]
+    pub(super) fn update_lights(
+        &mut self,
+        lights: &[Light],
+        tcmdm: &mut CommandManager,
+        unf: &mut UnfinishedExecutions,
+    ) {
+        let mm = self.instance.allocator();
+        let mut new_buffer =
+            load_raytrace_lights_to_gpu(self.instance.device(), mm, tcmdm, unf, lights);
+        // cannot drop yet, the loading is not finished yet
+        std::mem::swap(&mut self.light_buffer, &mut new_buffer);
+        unf.add_buffer(new_buffer);
+        self.descriptor = build_raytrace_descriptor(
+            &mut self.dm,
+            &self.acc,
+            &self.vertex_buffer,
+            &self.index_buffer,
+            &self.instance_buffer,
+            &self.material_buffer,
+            &self.light_buffer,
             &self.textures,
             self.sampler,
         );
@@ -1144,6 +1181,56 @@ fn load_raytrace_materials_to_gpu(
     )
 }
 
+fn load_raytrace_lights_to_gpu(
+    device: &Device,
+    mm: &MemoryManager,
+    tcmdm: &mut CommandManager,
+    unf: &mut UnfinishedExecutions,
+    lights: &[Light],
+) -> AllocatedBuffer {
+    let mut data = lights
+        .iter()
+        .map(|l| {
+            let w = l.emission().wavelength;
+            RTLight {
+                typeposdir: match l.ltype() {
+                    LightType::OMNI => {
+                        let pos = l.position();
+                        [pos.x, pos.y, pos.z, 0.0]
+                    }
+                    LightType::SUN => {
+                        let dir = l.direction();
+                        [dir.x, dir.y, dir.z, 1.0]
+                    }
+                },
+                color0: [w[0], w[1], w[2], w[3]],
+                color1: [w[4], w[5], w[6], w[7]],
+                color2: [w[8], w[9], w[10], w[11]],
+                color3: [w[12], w[13], w[14], w[15]],
+            }
+        })
+        .collect::<Vec<_>>();
+    if data.is_empty() {
+        // push an empty light to avoid having a zero sized buffer
+        // since there is no "default" light
+        data.push(RTLight {
+            typeposdir: [0.0; 4],
+            color0: [0.0; 4],
+            color1: [0.0; 4],
+            color2: [0.0; 4],
+            color3: [0.0; 4],
+        })
+    }
+    upload_buffer(
+        device,
+        mm,
+        tcmdm,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        unf,
+        &data,
+    )
+}
+
 fn col_int_to_f32(col: [u8; 4]) -> [f32; 4] {
     [
         col[0] as f32 / 255.0,
@@ -1206,6 +1293,7 @@ fn build_raytrace_descriptor(
     index_buffer: &AllocatedBuffer,
     instance_buffer: &AllocatedBuffer,
     material_buffer: &AllocatedBuffer,
+    light_buffer: &AllocatedBuffer,
     textures: &[TextureLoaded],
     sampler: vk::Sampler,
 ) -> Descriptor {
@@ -1232,6 +1320,11 @@ fn build_raytrace_descriptor(
         )
         .bind_buffer(
             material_buffer,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
+        .bind_buffer(
+            light_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )

@@ -4,8 +4,8 @@ use glaze::{
     RealtimeRenderer, ShaderMat, Spectrum, TextureFormat, TextureLoaded, VulkanScene,
 };
 use imgui::{
-    CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem,
-    PopupModal, Selectable, SelectableFlags, Slider, SliderFlags, TextureId, Ui,
+    CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
+    Selectable, SelectableFlags, Slider, SliderFlags, TextureId, Ui,
 };
 use native_dialog::FileDialog;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -568,6 +568,9 @@ fn texture_selector(ui: &Ui, text: &str, mut selected: u16, scene: &VulkanScene)
 
 fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) {
     let closed = &mut state.lights_window;
+    let mut add = None;
+    let mut update = None;
+    let mut remove = None;
     if let Some(window) = imgui::Window::new("Lights")
         .opened(closed)
         .size([400.0, 400.0], Condition::Appearing)
@@ -581,7 +584,7 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
                     Spectrum::from_blackbody(2500.0),
                     Point3::<f32>::new(0.0, 0.0, 0.0),
                 );
-                scene.add_light(dflt_light);
+                add = Some(dflt_light);
             }
             ui.separator();
             ui.spacing();
@@ -595,7 +598,7 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
             if let Some(table) =
                 ui.begin_table_header_with_flags("lighttable", header, imgui::TableFlags::ROW_BG)
             {
-                for (light_id, &light) in scene.lights().iter().enumerate() {
+                for (light_id, light) in scene.lights().iter().enumerate() {
                     ui.table_next_row();
                     ui.table_next_column();
                     if imgui::Selectable::new(light.name())
@@ -615,7 +618,7 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
             }
             if let Some(selected) = state.light_selected {
                 let mut edited = false;
-                let light = scene.lights()[selected];
+                let light = &scene.lights()[selected];
                 let mut new_name = light.name().to_string();
                 let mut new_type = light.ltype();
                 let mut new_color = light.emission();
@@ -675,18 +678,25 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
                     }
                 }
                 if ui.button("Remove") {
-                    scene.remove_light(selected);
-                    state.light_selected = None;
+                    remove = Some(selected);
                 } else if edited {
                     let new_light = match new_type {
                         LightType::OMNI => Light::new_omni(new_name, new_color, new_pos),
                         LightType::SUN => Light::new_sun(new_name, new_color, new_dir),
                     };
-                    scene.update_light(selected, new_light);
+                    update = Some((selected, new_light));
                 }
             }
         }
         window.end();
+    }
+    if let Some(new) = add {
+        renderer.add_light(new);
+    } else if let Some((old, new)) = update {
+        renderer.change_light(old, new);
+    } else if let Some(old) = remove {
+        renderer.remove_light(old);
+        state.light_selected = None;
     }
 }
 

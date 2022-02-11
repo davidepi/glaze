@@ -11,7 +11,7 @@ use crate::{ColorRGB, ColorXYZ};
 /// sample is the value in the interval [400,420) nm
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Spectrum {
-    wavelength: [f32; Spectrum::SAMPLES],
+    pub(crate) wavelength: [f32; Spectrum::SAMPLES],
 }
 
 impl Spectrum {

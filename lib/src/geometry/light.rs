@@ -10,7 +10,7 @@ pub enum Light {
 /// Used to safely update all the light instances if new lights are added.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(non_camel_case_types)]
-pub enum LightType{
+pub enum LightType {
     OMNI,
     SUN,
 }
@@ -69,7 +69,7 @@ impl Light {
     pub fn position(&self) -> Point3<f32> {
         match self {
             Light::Omni(l) => l.position,
-            Light::Sun(_) => Point3::<f32>::new(0.0, 0.0, 0.0)
+            Light::Sun(_) => Point3::<f32>::new(0.0, 0.0, 0.0),
         }
     }
 

@@ -9,7 +9,7 @@ use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
 use super::{AllocatedImage, UnfinishedExecutions};
-use crate::{include_shader, Camera, Material, RayTraceRenderer};
+use crate::{include_shader, Camera, Light, Material, RayTraceRenderer};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::io::ErrorKind;
@@ -409,11 +409,6 @@ impl RealtimeRenderer {
                 height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
             };
             let mut unf = UnfinishedExecutions::new(self.instance.device());
-            if let Some(raytracer) = &mut self.raytracer {
-                raytracer
-                    .scene
-                    .update_material(old, new.clone(), &mut self.tcmdm, &mut unf);
-            }
             scene.update_material(
                 old,
                 new,
@@ -423,7 +418,59 @@ impl RealtimeRenderer {
                 self.frame_data[0].descriptor.layout,
                 render_size,
             );
+            if let Some(raytracer) = &mut self.raytracer {
+                raytracer
+                    .scene
+                    .update_materials(scene.materials(), &mut self.tcmdm, &mut unf);
+            }
             unf.wait_completion();
+        }
+    }
+
+    /// Adds a new light to the scene.
+    pub fn add_light(&mut self, new: Light) {
+        self.wait_idle();
+        if let Some(scene) = &mut self.scene {
+            scene.add_light(new);
+            if let Some(raytracer) = &mut self.raytracer {
+                let mut unf = UnfinishedExecutions::new(self.instance.device());
+                raytracer
+                    .scene
+                    .update_lights(scene.lights(), &mut self.tcmdm, &mut unf);
+                unf.wait_completion();
+            }
+        }
+    }
+
+    /// Removes from the scene the light with the given id.
+    ///
+    /// If the light does not exist, nothing happens.
+    pub fn remove_light(&mut self, id: usize) {
+        self.wait_idle();
+        if let Some(scene) = &mut self.scene {
+            scene.remove_light(id);
+            if let Some(raytracer) = &mut self.raytracer {
+                let mut unf = UnfinishedExecutions::new(self.instance.device());
+                raytracer
+                    .scene
+                    .update_lights(scene.lights(), &mut self.tcmdm, &mut unf);
+                unf.wait_completion();
+            }
+        }
+    }
+
+    /// Replaces a light in the scene.
+    pub fn change_light(&mut self, old: usize, new: Light) {
+        self.wait_idle();
+        if let Some(scene) = &mut self.scene {
+            scene.update_light(old, new);
+            if let Some(raytracer) = &mut self.raytracer {
+                let mut unf = UnfinishedExecutions::new(self.instance.device());
+                raytracer
+                    .scene
+                    .update_lights(scene.lights(), &mut self.tcmdm, &mut unf);
+                unf.wait_completion();
+            }
         }
     }
 
@@ -599,7 +646,7 @@ unsafe fn draw_objects(
     device.cmd_bind_vertex_buffers(cmd, 0, &[scene.vertex_buffer.buffer], &[0]);
     device.cmd_bind_index_buffer(cmd, scene.index_buffer.buffer, 0, vk::IndexType::UINT32); //bind once, use firts_index as offset
     for obj in &scene.meshes {
-        let (_, shader, desc) = &scene.materials[obj.material as usize];
+        let (shader, desc) = &scene.materials_desc[obj.material as usize];
         let pipeline = scene.pipelines.get(shader).unwrap(); // this definitely exists
         if current_shader.is_none() || shader != current_shader.unwrap() {
             current_shader = Some(shader);
