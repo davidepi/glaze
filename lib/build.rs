@@ -1,13 +1,38 @@
+#[cfg(feature = "vulkan")]
+use shaderc::{
+    CompileOptions, Compiler, EnvVersion, IncludeCallbackResult, IncludeType, OptimizationLevel,
+    ResolvedInclude, ShaderKind, TargetEnv,
+};
+#[cfg(feature = "vulkan")]
+use std::env;
 use std::error::Error;
+#[cfg(feature = "vulkan")]
+use std::path::PathBuf;
+
+#[cfg(feature = "vulkan")]
+fn handle_includes(name: &str, _: IncludeType, _: &str, _: usize) -> IncludeCallbackResult {
+    let file = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("shaders")
+        .join(name);
+    match file.canonicalize() {
+        Ok(absolute) => match std::fs::read_to_string(absolute.clone()) {
+            Ok(content) => {
+                let resolved_name = absolute.to_str().unwrap().to_string();
+                Ok(ResolvedInclude {
+                    resolved_name,
+                    content,
+                })
+            }
+            Err(error) => Err(error.to_string()),
+        },
+        Err(error) => Err(error.to_string()),
+    }
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     #[cfg(feature = "vulkan")]
     {
-        use shaderc::{
-            CompileOptions, Compiler, EnvVersion, OptimizationLevel, ShaderKind, TargetEnv,
-        };
-        use std::env;
-        use std::path::PathBuf;
         println!("cargo:rerun-if-changed=src/shaders");
 
         let is_debug = cfg!(debug_assertions);
@@ -16,6 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         std::fs::create_dir_all(outdir.clone())?;
         let mut compiler = Compiler::new().expect("Failed to find a SPIR-V compiler");
         let mut options = CompileOptions::new().expect("Error while initializing compiler");
+        options.set_include_callback(handle_includes);
         #[cfg(target_os = "macos")]
         options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_1 as u32);
         #[cfg(not(target_os = "macos"))]
