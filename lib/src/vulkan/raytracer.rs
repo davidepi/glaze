@@ -18,9 +18,18 @@ use ash::extensions::khr::{
 use ash::vk;
 use cgmath::SquareMatrix;
 use gpu_allocator::MemoryLocation;
+use rand::{Rng, SeedableRng};
+use rand_xoshiro::Xoshiro128PlusPlus;
 use std::ptr;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+struct RTFrameData {
+    seed: u32,
+    lights_no: u32,
+}
 
 struct ShaderBindingTable {
     rgen_addr: vk::StridedDeviceAddressRegionKHR,
@@ -34,9 +43,12 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     pub(super) scene: RayTraceScene<T>,
     camera: Camera,
     push_constants: [u8; 128],
-    extent: vk::Extent2D,
+    frame_data: Vec<AllocatedBuffer>,
+    rng: Xoshiro128PlusPlus,
     out_img: AllocatedImage,
-    descriptor: Descriptor,
+    // contains also the out_img
+    frame_desc: Vec<Descriptor>,
+    extent: vk::Extent2D,
     sbt: ShaderBindingTable,
     pipeline: Pipeline,
     dm: DescriptorSetManager,
@@ -69,7 +81,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             &mut ccmdm,
         )?;
         let extent = vk::Extent2D { width, height };
-        Ok(init_rt(instance, loader, ccmdm, scene, extent))
+        Ok(init_rt(instance, loader, ccmdm, scene, extent, 1))
     }
 
     #[cfg(feature = "vulkan-interactive")]
@@ -78,6 +90,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         scene: &mut VulkanScene,
         width: u32,
         height: u32,
+        frames_in_flight: usize,
     ) -> Result<RayTraceRenderer<PresentInstance>, std::io::Error> {
         let device = instance.device();
         let compute = device.compute_queue();
@@ -88,7 +101,14 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         ));
         let scene = RayTraceScene::<PresentInstance>::from(loader.clone(), scene, &mut ccmdm)?;
         let extent = vk::Extent2D { width, height };
-        Ok(init_rt(instance, loader, ccmdm, scene, extent))
+        Ok(init_rt(
+            instance,
+            loader,
+            ccmdm,
+            scene,
+            extent,
+            frames_in_flight as u8,
+        ))
     }
 
     pub fn change_resolution(&mut self, width: u32, height: u32) {
@@ -100,11 +120,11 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             self.extent,
             &mut unf,
         );
-        let new_desc = build_descriptor(&mut self.dm, &new_out_img);
+        let new_desc = build_descriptor(&mut self.dm, &self.frame_data, &new_out_img);
         unf.wait_completion();
         self.update_camera(&self.camera.clone());
         self.out_img = new_out_img;
-        self.descriptor = new_desc
+        self.frame_desc = new_desc
     }
 
     pub fn update_camera(&mut self, camera: &Camera) {
@@ -117,6 +137,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         wait: vk::Semaphore,
         signal: vk::Semaphore,
         out_img: &AllocatedImage,
+        frame_no: usize,
     ) {
         let device = self.instance.device();
         let vkdevice = device.logical();
@@ -222,6 +243,12 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             image: out_img.image,
             subresource_range,
         };
+        let frame_index = frame_no % self.frame_desc.len();
+        let fd = RTFrameData {
+            seed: self.rng.gen(),
+            lights_no: self.scene.lights_no,
+        };
+        update_frame_data(fd, &mut self.frame_data[frame_index]);
         let queue = device.compute_queue();
         unsafe {
             vkdevice
@@ -244,7 +271,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
                 self.pipeline.layout,
                 0,
-                &[self.descriptor.set, self.scene.descriptor.set],
+                &[self.frame_desc[frame_index].set, self.scene.descriptor.set],
                 &[],
             );
             self.rploader.cmd_trace_rays(
@@ -304,6 +331,11 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     pub fn draw(mut self, channel: Sender<String>) -> TextureLoaded {
         // if the other end disconnected, this thread can die anyway, so unwrap()
         channel.send("Tracing rays".to_string()).unwrap();
+        let fd = RTFrameData {
+            seed: self.rng.gen(),
+            lights_no: self.scene.lights_no,
+        };
+        update_frame_data(fd, &mut self.frame_data[0]);
         let cmd = self.ccmdm.get_cmd_buffer();
         let device = self.instance.device();
         let command = unsafe {
@@ -325,7 +357,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                     vk::PipelineBindPoint::RAY_TRACING_KHR,
                     self.pipeline.layout,
                     0,
-                    &[self.descriptor.set, self.scene.descriptor.set],
+                    &[self.frame_desc[0].set, self.scene.descriptor.set],
                     &[],
                 );
                 self.rploader.cmd_trace_rays(
@@ -516,8 +548,12 @@ fn init_rt<T: Instance + Send + Sync>(
     ccmdm: CommandManager,
     scene: RayTraceScene<T>,
     extent: vk::Extent2D,
+    frames_in_flight: u8,
 ) -> RayTraceRenderer<T> {
-    const AVG_DESC: [(vk::DescriptorType, f32); 1] = [(vk::DescriptorType::STORAGE_IMAGE, 1.0)];
+    const AVG_DESC: [(vk::DescriptorType, f32); 2] = [
+        (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
+        (vk::DescriptorType::STORAGE_IMAGE, 1.0),
+    ];
     let device = instance.device();
     let mut unf = UnfinishedExecutions::new(device);
     let rploader = RTPipelineLoader::new(instance.instance(), device.logical());
@@ -531,13 +567,24 @@ fn init_rt<T: Instance + Send + Sync>(
         instance.desc_layout_cache(),
     );
     let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
-    let descriptor = build_descriptor(&mut dm, &out_img);
     let camera = scene.camera.clone();
     let push_constants = build_push_constants(&camera, extent);
+    let frame_data = (0..frames_in_flight)
+        .into_iter()
+        .map(|_| {
+            instance.allocator().create_buffer(
+                "raytrace framedata",
+                std::mem::size_of::<RTFrameData>() as u64,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
+                MemoryLocation::CpuToGpu,
+            )
+        })
+        .collect::<Vec<_>>();
+    let frame_desc = build_descriptor(&mut dm, &frame_data, &out_img);
     let pipeline = build_raytracing_pipeline(
         &rploader,
         device.logical_clone(),
-        &[descriptor.layout, scene.descriptor.layout],
+        &[frame_desc[0].layout, scene.descriptor.layout],
     );
     let sbt = build_sbt(
         instance.as_ref(),
@@ -547,14 +594,17 @@ fn init_rt<T: Instance + Send + Sync>(
         1,
         &mut unf,
     );
+    let rng = Xoshiro128PlusPlus::from_entropy();
     unf.wait_completion();
     RayTraceRenderer {
         scene,
         camera,
         push_constants,
-        extent,
+        frame_data,
+        rng,
         out_img,
-        descriptor,
+        frame_desc,
+        extent,
         sbt,
         pipeline,
         dm,
@@ -567,16 +617,30 @@ fn init_rt<T: Instance + Send + Sync>(
     }
 }
 
-fn build_descriptor(dm: &mut DescriptorSetManager, out_img: &AllocatedImage) -> Descriptor {
-    dm.new_set()
-        .bind_image(
-            out_img,
-            vk::ImageLayout::GENERAL,
-            vk::Sampler::null(),
-            vk::DescriptorType::STORAGE_IMAGE,
-            vk::ShaderStageFlags::RAYGEN_KHR,
-        )
-        .build()
+fn build_descriptor(
+    dm: &mut DescriptorSetManager,
+    frame_data: &[AllocatedBuffer],
+    out_img: &AllocatedImage,
+) -> Vec<Descriptor> {
+    frame_data
+        .iter()
+        .map(|fd| {
+            dm.new_set()
+                .bind_buffer(
+                    fd,
+                    vk::DescriptorType::UNIFORM_BUFFER,
+                    vk::ShaderStageFlags::RAYGEN_KHR,
+                )
+                .bind_image(
+                    out_img,
+                    vk::ImageLayout::GENERAL,
+                    vk::Sampler::null(),
+                    vk::DescriptorType::STORAGE_IMAGE,
+                    vk::ShaderStageFlags::RAYGEN_KHR,
+                )
+                .build()
+        })
+        .collect()
 }
 
 fn create_storage_image<T: Instance>(
@@ -789,6 +853,16 @@ fn build_push_constants(camera: &Camera, extent: vk::Extent2D) -> [u8; 128] {
         }
     }
     retval
+}
+
+fn update_frame_data(fd: RTFrameData, buf: &mut AllocatedBuffer) {
+    let mapped = buf
+        .allocation()
+        .mapped_ptr()
+        .expect("Failed to map memory")
+        .cast()
+        .as_ptr();
+    unsafe { std::ptr::copy_nonoverlapping(&fd, mapped, 1) };
 }
 
 #[cfg(test)]

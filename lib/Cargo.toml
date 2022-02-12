@@ -16,6 +16,8 @@ twox-hash = "1.6"
 fnv = "1.0"
 xz2 ="0.1"
 rayon = "1.5"
+rand = "0.8"
+rand_xoshiro = "0.6"
 ash = {version="0.35", optional=true}
 winit = {version="0.25.0", optional=true}
 gpu-allocator = {version="0.16", optional=true}
@@ -31,8 +33,6 @@ cocoa = {version="0.24.0", optional=true}
 winapi = {version="0.3.9", optional=true}
 
 [dev-dependencies]
-rand = "0.8"
-rand_xoshiro = "0.6"
 tempfile = "3.2"
 float-cmp = "0.9"
 env_logger = "0.9" # log validation errors in vulkan tests

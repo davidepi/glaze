@@ -387,6 +387,7 @@ impl RealtimeRenderer {
                     &mut loaded,
                     render_size.width,
                     render_size.height,
+                    FRAMES_IN_FLIGHT,
                 )
                 .unwrap(),
             )
@@ -482,7 +483,13 @@ impl RealtimeRenderer {
         if self.instance.supports_raytrace() {
             if let Some(scene) = &mut self.scene {
                 let instance = self.instance.clone();
-                RayTraceRenderer::<PresentInstance>::from_realtime(instance, scene, width, height)
+                RayTraceRenderer::<PresentInstance>::from_realtime(
+                    instance,
+                    scene,
+                    width,
+                    height,
+                    FRAMES_IN_FLIGHT,
+                )
             } else {
                 Err(std::io::Error::new(ErrorKind::InvalidData, "Missing scene"))
             }
@@ -514,6 +521,7 @@ impl RealtimeRenderer {
                     frame_sync.image_available,
                     compute_finished[0],
                     &self.raytrace_output,
+                    self.frame_no,
                 );
                 // swap signal: the graphic queue have to wait the raytrace, not the image
                 // available

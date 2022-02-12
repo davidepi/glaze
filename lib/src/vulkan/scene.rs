@@ -907,6 +907,7 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     instance_buffer: AllocatedBuffer,
     material_buffer: AllocatedBuffer,
     light_buffer: AllocatedBuffer,
+    pub lights_no: u32,
     textures: Arc<Vec<TextureLoaded>>,
     acc: SceneAS,
     dm: DescriptorSetManager,
@@ -981,6 +982,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             instance_buffer,
             material_buffer,
             light_buffer,
+            lights_no: lights.len() as u32,
             textures,
             acc,
             dm,
@@ -1048,6 +1050,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             instance_buffer,
             material_buffer,
             light_buffer,
+            lights_no: scene.lights.len() as u32,
             textures,
             acc,
             dm,
@@ -1093,6 +1096,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             load_raytrace_lights_to_gpu(self.instance.device(), mm, tcmdm, unf, lights);
         // cannot drop yet, the loading is not finished yet
         std::mem::swap(&mut self.light_buffer, &mut new_buffer);
+        self.lights_no = lights.len() as u32;
         unf.add_buffer(new_buffer);
         self.descriptor = build_raytrace_descriptor(
             &mut self.dm,
