@@ -1,7 +1,9 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 
-layout(location=0) rayPayloadEXT vec3 payload;
+#include "raytrace_commons.glsl"
+
+layout(location=0) rayPayloadEXT HitPoint hit;
 layout(push_constant) uniform readonly pc {
   mat4 camera2world;
   mat4 screen2camera;
@@ -81,7 +83,7 @@ void main()
              tmax,
              payloadLocation);
   // add result
-  cumulative_val.xyz += payload;
+  cumulative_val.xyz += vec3(hit.uv, 0.0);
   cumulative_val.w += 1.0; // this is the number of samples
   imageStore(accumulate_image, ivec2(gl_LaunchIDEXT.xy), cumulative_val);
   imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(cumulative_val.xyz/cumulative_val.w, 1.0));

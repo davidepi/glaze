@@ -1322,21 +1322,22 @@ fn build_raytrace_descriptor(
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
-        .bind_buffer(
-            material_buffer,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-        )
-        .bind_buffer(
-            light_buffer,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-        )
-        .bind_image_array(
-            &textures_memory,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            sampler,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-        )
+        // TODO: I will definitely use these, I just don't know in which shader stage yet
+        // .bind_buffer(
+        //     material_buffer,
+        //     vk::DescriptorType::STORAGE_BUFFER,
+        //     vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        // )
+        // .bind_buffer(
+        //     light_buffer,
+        //     vk::DescriptorType::STORAGE_BUFFER,
+        //     vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        // )
+        // .bind_image_array(
+        //     &textures_memory,
+        //     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        //     sampler,
+        //     vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        // )
         .build()
 }

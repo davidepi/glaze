@@ -65,11 +65,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                             #[cfg(not(target_os = "macos"))]
                             "rgen" => Some(ShaderKind::RayGeneration),
                             #[cfg(not(target_os = "macos"))]
-                            "ahit" => Some(ShaderKind::AnyHit),
+                            "rahit" => Some(ShaderKind::AnyHit),
                             #[cfg(not(target_os = "macos"))]
-                            "chit" => Some(ShaderKind::ClosestHit),
+                            "rchit" => Some(ShaderKind::ClosestHit),
                             #[cfg(not(target_os = "macos"))]
-                            "miss" => Some(ShaderKind::Miss),
+                            "rmiss" => Some(ShaderKind::Miss),
+                            #[cfg(not(target_os = "macos"))]
+                            "rcall" => Some(ShaderKind::Callable),
                             _ => None,
                         });
                 if let Some(shader_kind) = maybe_correct_kind {

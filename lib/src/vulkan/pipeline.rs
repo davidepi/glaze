@@ -336,7 +336,7 @@ pub fn build_raytracing_pipeline(
     set_layout: &[vk::DescriptorSetLayout],
 ) -> Pipeline {
     let rgen = include_shader!("test_raytrace.rgen");
-    let miss = include_shader!("test_raytrace.miss");
+    let miss = include_shader!("raytrace_miss.rmiss");
     let main_cstr = CString::new("main".as_bytes()).unwrap();
     let create_ci =
         |shader: &[u8], stage: vk::ShaderStageFlags| vk::PipelineShaderStageCreateInfo {
@@ -376,8 +376,7 @@ pub fn build_raytracing_pipeline(
             p_shader_group_capture_replay_handle: ptr::null(),
         },
     ];
-    //TODO: handle multiple chit shaders
-    let chit = include_shader!("test_raytrace.chit");
+    let chit = include_shader!("raytrace_hit.rchit");
     shader_stages.push(create_ci(chit, vk::ShaderStageFlags::CLOSEST_HIT_KHR));
     shader_groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
         s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
@@ -389,7 +388,6 @@ pub fn build_raytracing_pipeline(
         intersection_shader: vk::SHADER_UNUSED_KHR,
         p_shader_group_capture_replay_handle: ptr::null(),
     });
-    // end of TODO
     let push_constants = [vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::RAYGEN_KHR,
         offset: 0,
