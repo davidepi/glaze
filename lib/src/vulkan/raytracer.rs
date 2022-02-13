@@ -16,7 +16,7 @@ use ash::extensions::khr::{
     AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
 };
 use ash::vk;
-use cgmath::SquareMatrix;
+use cgmath::{SquareMatrix, Vector2 as Vec2};
 use gpu_allocator::MemoryLocation;
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro128PlusPlus;
@@ -25,10 +25,23 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 #[repr(C)]
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct RTFrameData {
     seed: u32,
     lights_no: u32,
+    pixel_offset: Vec2<f32>,
+    new_frame: bool,
+}
+
+impl Default for RTFrameData {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            lights_no: 0,
+            pixel_offset: Vec2::new(0.0, 0.0),
+            new_frame: true,
+        }
+    }
 }
 
 struct ShaderBindingTable {
@@ -45,7 +58,10 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     push_constants: [u8; 128],
     frame_data: Vec<AllocatedBuffer>,
     rng: Xoshiro128PlusPlus,
+    cumulative_img: AllocatedImage,
     out_img: AllocatedImage,
+    sample_scheduler: WorkScheduler,
+    pub(crate) request_new_frame: bool,
     // contains also the out_img
     frame_desc: Vec<Descriptor>,
     extent: vk::Extent2D,
@@ -111,24 +127,34 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         ))
     }
 
-    pub fn change_resolution(&mut self, width: u32, height: u32) {
+    pub(crate) fn change_resolution(&mut self, width: u32, height: u32) {
         self.extent = vk::Extent2D { width, height };
         let mut unf = UnfinishedExecutions::new(self.instance.device());
-        let new_out_img = create_storage_image(
+        self.out_img = create_storage_image(
             self.instance.as_ref(),
             &mut self.tcmdm,
             self.extent,
             &mut unf,
         );
-        let new_desc = build_descriptor(&mut self.dm, &self.frame_data, &new_out_img);
+        self.cumulative_img = create_storage_image(
+            self.instance.as_ref(),
+            &mut self.tcmdm,
+            self.extent,
+            &mut unf,
+        );
+        self.frame_desc = build_descriptor(
+            &mut self.dm,
+            &self.frame_data,
+            &self.cumulative_img,
+            &self.out_img,
+        );
         unf.wait_completion();
         self.update_camera(&self.camera.clone());
-        self.out_img = new_out_img;
-        self.frame_desc = new_desc
     }
 
-    pub fn update_camera(&mut self, camera: &Camera) {
+    pub(crate) fn update_camera(&mut self, camera: &Camera) {
         self.push_constants = build_push_constants(camera, self.extent);
+        self.request_new_frame = true;
     }
 
     #[cfg(feature = "vulkan-interactive")]
@@ -247,7 +273,10 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         let fd = RTFrameData {
             seed: self.rng.gen(),
             lights_no: self.scene.lights_no,
+            pixel_offset: self.sample_scheduler.next().unwrap(),
+            new_frame: self.request_new_frame,
         };
+        self.request_new_frame = false;
         update_frame_data(fd, &mut self.frame_data[frame_index]);
         let queue = device.compute_queue();
         unsafe {
@@ -334,7 +363,10 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         let fd = RTFrameData {
             seed: self.rng.gen(),
             lights_no: self.scene.lights_no,
+            pixel_offset: self.sample_scheduler.next().unwrap(),
+            new_frame: self.request_new_frame,
         };
+        self.request_new_frame = false;
         update_frame_data(fd, &mut self.frame_data[0]);
         let cmd = self.ccmdm.get_cmd_buffer();
         let device = self.instance.device();
@@ -560,6 +592,7 @@ fn init_rt<T: Instance + Send + Sync>(
     let graphic_queue = device.graphic_queue();
     let transfer_queue = device.transfer_queue();
     let gcmdm = CommandManager::new(device.logical_clone(), graphic_queue.idx, 1);
+    let sample_scheduler = WorkScheduler::new();
     let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
     let mut dm = DescriptorSetManager::new(
         device.logical_clone(),
@@ -567,6 +600,7 @@ fn init_rt<T: Instance + Send + Sync>(
         instance.desc_layout_cache(),
     );
     let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
+    let cumulative_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
     let camera = scene.camera.clone();
     let push_constants = build_push_constants(&camera, extent);
     let frame_data = (0..frames_in_flight)
@@ -580,7 +614,7 @@ fn init_rt<T: Instance + Send + Sync>(
             )
         })
         .collect::<Vec<_>>();
-    let frame_desc = build_descriptor(&mut dm, &frame_data, &out_img);
+    let frame_desc = build_descriptor(&mut dm, &frame_data, &cumulative_img, &out_img);
     let pipeline = build_raytracing_pipeline(
         &rploader,
         device.logical_clone(),
@@ -602,7 +636,10 @@ fn init_rt<T: Instance + Send + Sync>(
         push_constants,
         frame_data,
         rng,
+        cumulative_img,
         out_img,
+        sample_scheduler,
+        request_new_frame: true,
         frame_desc,
         extent,
         sbt,
@@ -620,6 +657,7 @@ fn init_rt<T: Instance + Send + Sync>(
 fn build_descriptor(
     dm: &mut DescriptorSetManager,
     frame_data: &[AllocatedBuffer],
+    cumulative_img: &AllocatedImage,
     out_img: &AllocatedImage,
 ) -> Vec<Descriptor> {
     frame_data
@@ -629,6 +667,13 @@ fn build_descriptor(
                 .bind_buffer(
                     fd,
                     vk::DescriptorType::UNIFORM_BUFFER,
+                    vk::ShaderStageFlags::RAYGEN_KHR,
+                )
+                .bind_image(
+                    cumulative_img,
+                    vk::ImageLayout::GENERAL,
+                    vk::Sampler::null(),
+                    vk::DescriptorType::STORAGE_IMAGE,
                     vk::ShaderStageFlags::RAYGEN_KHR,
                 )
                 .bind_image(
@@ -863,6 +908,52 @@ fn update_frame_data(fd: RTFrameData, buf: &mut AllocatedBuffer) {
         .cast()
         .as_ptr();
     unsafe { std::ptr::copy_nonoverlapping(&fd, mapped, 1) };
+}
+
+/// Iterator used to schedule the samples in a pixel.
+/// Starting from the entire pixel area ((0,0),(1,1)) this iterator subdivides the pixel
+/// and choses which area to sample.
+/// In the realtime raytracing the number of samples per pixel is not fixed so this process has to
+/// be incremental.
+///
+/// This iterator is unlimited and will never produce None.
+struct WorkScheduler {
+    current: Vec<(Vec2<f32>, Vec2<f32>)>,
+    next: Vec<(Vec2<f32>, Vec2<f32>)>,
+}
+
+impl WorkScheduler {
+    pub fn new() -> Self {
+        WorkScheduler {
+            current: vec![(Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0))],
+            next: Vec::new(),
+        }
+    }
+
+    /// Resets this iterator
+    pub fn rewind(self) -> Self {
+        WorkScheduler::new()
+    }
+}
+
+impl Iterator for WorkScheduler {
+    type Item = Vec2<f32>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(area) = self.current.pop() {
+            let middle = Vec2::new((area.0.x + area.1.x) / 2.0, (area.0.y + area.1.y) / 2.0);
+            self.next.push((area.0, middle));
+            self.next.push((middle, area.1));
+            self.next
+                .push((Vec2::new(middle.x, area.0.y), Vec2::new(area.1.x, middle.y)));
+            self.next
+                .push((Vec2::new(area.0.x, middle.y), Vec2::new(middle.x, area.1.y)));
+            Some(middle)
+        } else {
+            self.current.append(&mut self.next);
+            self.next()
+        }
+    }
 }
 
 #[cfg(test)]

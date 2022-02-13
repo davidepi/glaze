@@ -2,25 +2,30 @@
 #extension GL_EXT_ray_tracing : require
 
 layout(location=0) rayPayloadEXT vec3 payload;
-layout(push_constant) uniform pc {
+layout(push_constant) uniform readonly pc {
   mat4 camera2world;
   mat4 screen2camera;
 } Camera;
-layout(set=0, binding=0) uniform frameData {
+layout(set=0, binding=0) uniform readonly frameData {
   uint seed;
   uint lights_no;
+  vec2 sample_shift;
+  bool new_frame;
 }FrameData;
-layout(set=0, binding=1, rgba32f) uniform image2D result_image;
+layout(set=0, binding=1, rgba32f) uniform image2D accumulate_image;
+layout(set=0, binding=2, rgba32f) uniform writeonly image2D result_image;
 layout(set=1, binding=0) uniform accelerationStructureEXT scene;
 
-vec3 ray_origin() {
+vec3 ray_origin()
+{
   // technically this could be just the camera position...
   vec4 origin_screen_space = vec4(0.0, 0.0, 0.0, 1.0);
   vec4 origin = Camera.camera2world * origin_screen_space;
   return origin.xyz;
 }
 
-vec3 ray_dir(vec2 ndc) {
+vec3 ray_dir(vec2 ndc)
+{
   // take a pixel in screen space (-1.0, 1.0) and calculates the ray in world space
   // by applying the inverse of the transformation matrices usually used in raster rendering
 
@@ -32,12 +37,28 @@ vec3 ray_dir(vec2 ndc) {
  return direction.xyz;
 }
 
-void main() {
-  const vec2 pixel = gl_LaunchIDEXT.xy + vec2(0.5);
+void main()
+{
+  if (FrameData.lights_no == 0)
+  {
+    // not even worth dealing with the accumulation
+    imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(0.0, 0.0, 0.0, 1.0));
+    return;
+  }
+  const vec2 pixel = gl_LaunchIDEXT.xy + FrameData.sample_shift;
   const vec2 uv = pixel / gl_LaunchSizeEXT.xy;
   const vec2 ndc = vec2(-1.0)+2.0*uv;
   vec3 origin = ray_origin();
   vec3 direction = ray_dir(ndc);
+  vec4 cumulative_val;
+  if(FrameData.new_frame)
+  {
+    cumulative_val = vec4(0.0);
+  }
+  else
+  {
+    cumulative_val = imageLoad(accumulate_image, ivec2(gl_LaunchIDEXT.xy));
+  }
 
   const uint rayFlags = gl_RayFlagsOpaqueEXT;
   const uint cullMask = 0xFF;
@@ -59,6 +80,9 @@ void main() {
              direction,
              tmax,
              payloadLocation);
-
-  imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(payload, 1.0));
+  // add result
+  cumulative_val.xyz += payload;
+  cumulative_val.w += 1.0; // this is the number of samples
+  imageStore(accumulate_image, ivec2(gl_LaunchIDEXT.xy), cumulative_val);
+  imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(cumulative_val.xyz/cumulative_val.w, 1.0));
 }
