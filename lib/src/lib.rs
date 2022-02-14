@@ -17,7 +17,7 @@ pub use materials::{
     Material, ShaderMat, Texture, TextureFormat, TextureGray, TextureInfo, TextureRGBA,
     DEFAULT_MATERIAL_ID, DEFAULT_TEXTURE_ID,
 };
-pub use parser::{converted_file, parse, ParsedScene, ParserVersion, Serializer};
+pub use parser::{converted_file, parse, Meta, ParsedScene, ParserVersion, Serializer};
 #[cfg(feature = "vulkan")]
 pub use vulkan::{DeviceInfo, Pipeline, PipelineBuilder, RayTraceInstance, RayTraceRenderer};
 #[cfg(feature = "vulkan-interactive")]

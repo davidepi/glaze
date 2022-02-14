@@ -138,6 +138,7 @@ pub struct Serializer<'a> {
     textures: &'a [Texture],
     materials: &'a [Material],
     lights: &'a [Light],
+    meta: Option<&'a Meta>,
 }
 
 impl<'a> Serializer<'a> {
@@ -155,6 +156,7 @@ impl<'a> Serializer<'a> {
             textures: &[],
             materials: &[],
             lights: &[],
+            meta: None,
         }
     }
 
@@ -206,6 +208,14 @@ impl<'a> Serializer<'a> {
         self
     }
 
+    /// Sets the metadata structure that will be written to file.
+    ///
+    /// Not exactly "metadata", but contains additional unstructured bytes of information.
+    pub fn with_metadata(mut self, meta: &'a Meta) -> Self {
+        self.meta = Some(meta);
+        self
+    }
+
     /// Writes to file.
     ///
     /// # Errors
@@ -225,6 +235,7 @@ impl<'a> Serializer<'a> {
                 self.textures,
                 self.materials,
                 self.lights,
+                self.meta,
             )?,
         };
         Ok(())
@@ -258,6 +269,14 @@ pub fn converted_file<P: AsRef<Path>>(file: P) -> bool {
     }
 }
 
+/// Struct to store generic data inside the scene format.
+/// Handling the indices is responsibility of the user.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Meta {
+    pub ints: Vec<u32>,
+    pub floats: Vec<f32>,
+}
+
 /// Trait used for accessing the content of the parsed file and updating them.
 ///
 /// This trait is used to access the content of the parsed file. Various parser versions may
@@ -279,6 +298,8 @@ pub trait ParsedScene {
     fn materials(&mut self) -> Result<Vec<Material>, Error>;
     /// Retrieve only the [Light]s contained in the file.
     fn lights(&mut self) -> Result<Vec<Light>, Error>;
+    /// Retrieve additional data from the scene.
+    fn meta(&mut self) -> Result<Meta, Error>;
     /// Updates an existing file.
     /// Requires all the cameras and materials as input.
     fn update(

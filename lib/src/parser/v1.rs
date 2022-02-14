@@ -1,4 +1,4 @@
-use super::{write_header, ParsedScene, HEADER_LEN};
+use super::{write_header, Meta, ParsedScene, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
 use crate::materials::{TextureFormat, TextureInfo};
 use crate::{Light, Material, MeshInstance, Spectrum, Texture, Transform};
@@ -13,6 +13,7 @@ use std::fs::File;
 use std::hash::Hasher;
 use std::io::{BufReader, BufWriter, Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::slice::from_ref;
 use twox_hash::XxHash64;
 use xz2::read::{XzDecoder, XzEncoder};
 
@@ -76,6 +77,7 @@ enum ChunkID {
     Transform = 5,
     Instance = 6,
     Light = 7,
+    Meta = 250,
 }
 
 impl TryFrom<u8> for ChunkID {
@@ -91,6 +93,7 @@ impl TryFrom<u8> for ChunkID {
             5 => Ok(ChunkID::Transform),
             6 => Ok(ChunkID::Instance),
             7 => Ok(ChunkID::Light),
+            250 => Ok(ChunkID::Meta),
             _ => Err(Error::new(ErrorKind::Unsupported, "Unsupported chunk")),
         }
     }
@@ -107,6 +110,7 @@ impl From<ChunkID> for u8 {
             ChunkID::Transform => 5,
             ChunkID::Instance => 6,
             ChunkID::Light => 7,
+            ChunkID::Meta => 250,
         }
     }
 }
@@ -232,8 +236,9 @@ impl ContentV1 {
         textures: &[Texture],
         materials: &[Material],
         lights: &[Light],
+        meta: Option<&Meta>,
     ) -> Result<(), Error> {
-        let chunks = [
+        let mut chunks = vec![
             (
                 ChunkID::Vertex,
                 Chunk::encode_fixed(vertices, vertex_to_bytes),
@@ -261,6 +266,12 @@ impl ContentV1 {
                 Chunk::encode_dynamic(lights, light_to_bytes),
             ),
         ];
+        if let Some(meta) = meta {
+            chunks.push((
+                ChunkID::Meta,
+                Chunk::encode_dynamic(from_ref(meta), meta_to_bytes),
+            ));
+        }
         ContentV1::write_chunks(&mut fout, &chunks)
     }
 
@@ -337,6 +348,16 @@ impl ParsedScene for ContentV1 {
             .decode_dynamic(bytes_to_light, "Light")
     }
 
+    fn meta(&mut self) -> Result<Meta, Error> {
+        match self
+            .read_chunk(ChunkID::Meta)?
+            .decode_dynamic(bytes_to_meta, "Meta")
+        {
+            Ok(mut m) => Ok(m.pop().unwrap()),
+            Err(e) => Err(e),
+        }
+    }
+
     fn update(
         &mut self,
         cameras: Option<&[Camera]>,
@@ -348,6 +369,7 @@ impl ParsedScene for ContentV1 {
         let textures = self.read_chunk(ChunkID::Texture)?;
         let transforms = self.read_chunk(ChunkID::Transform)?;
         let instances = self.read_chunk(ChunkID::Instance)?;
+        let meta = self.read_chunk(ChunkID::Meta)?;
         let cameras = if let Some(cameras) = cameras {
             Chunk::encode_fixed(cameras, camera_to_bytes)
         } else {
@@ -377,6 +399,7 @@ impl ParsedScene for ContentV1 {
                 (ChunkID::Transform, transforms),
                 (ChunkID::Instance, instances),
                 (ChunkID::Light, lights),
+                (ChunkID::Meta, meta),
             ];
             ContentV1::write_chunks(&mut writer, &chunks)?;
             self.reader = BufReader::new(File::open(&self.filepath)?);
@@ -914,7 +937,7 @@ fn bytes_to_instance(data: [u8; 4]) -> MeshInstance {
     }
 }
 
-/// Converts a Transform to a vector of bytes.
+/// Converts a Light to a vector of bytes.
 fn light_to_bytes(light: &Light) -> Vec<u8> {
     let ltype = match light {
         Light::Omni(_) => 0,
@@ -946,7 +969,7 @@ fn light_to_bytes(light: &Light) -> Vec<u8> {
     retval
 }
 
-/// Converts a vector of bytes to a Transform.
+/// Converts a vector of bytes to a Light.
 fn bytes_to_light(data: &[u8]) -> Light {
     let color = Spectrum::from_bytes(data[1..65].try_into().unwrap());
     let mut index = 65;
@@ -981,12 +1004,42 @@ fn bytes_to_light(data: &[u8]) -> Light {
     }
 }
 
+/// Converts a Light to a vector of bytes.
+fn meta_to_bytes(meta: &Meta) -> Vec<u8> {
+    let ints = meta.ints.len();
+    let floats = meta.floats.len();
+    let mut retval = Vec::with_capacity(8 + ints * 4 + floats * 4);
+    retval.extend(u32::to_le_bytes(ints as u32));
+    retval.extend(u32::to_le_bytes(floats as u32));
+    retval.extend(meta.ints.iter().copied().flat_map(u32::to_le_bytes));
+    retval.extend(meta.floats.iter().copied().flat_map(f32::to_le_bytes));
+    retval
+}
+
+/// Converts a vector of bytes to the Meta struct.
+fn bytes_to_meta(data: &[u8]) -> Meta {
+    let mut index = 0;
+    let ints_no = u32::from_le_bytes(data[index..index + 4].try_into().unwrap()) as usize;
+    let floats_no = u32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()) as usize;
+    index += 8;
+    let ints = data[index..index + ints_no * 4]
+        .chunks_exact(4)
+        .map(|x| u32::from_le_bytes(x.try_into().unwrap()))
+        .collect();
+    index += ints_no * 4;
+    let floats = data[index..index + floats_no * 4]
+        .chunks_exact(4)
+        .map(|x| f32::from_le_bytes(x.try_into().unwrap()))
+        .collect();
+    Meta { ints, floats }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        bytes_to_camera, bytes_to_mesh, bytes_to_texture, bytes_to_transform, bytes_to_vertex,
-        camera_to_bytes, compress, decompress, mesh_to_bytes, texture_to_bytes, transform_to_bytes,
-        vertex_to_bytes,
+        bytes_to_camera, bytes_to_mesh, bytes_to_meta, bytes_to_texture, bytes_to_transform,
+        bytes_to_vertex, camera_to_bytes, compress, decompress, mesh_to_bytes, meta_to_bytes,
+        texture_to_bytes, transform_to_bytes, vertex_to_bytes,
     };
     use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
     use crate::materials::{TextureFormat, TextureInfo};
@@ -994,7 +1047,7 @@ mod tests {
         bytes_to_instance, bytes_to_light, bytes_to_material, instance_to_bytes, light_to_bytes,
         material_to_bytes, HASH_SIZE,
     };
-    use crate::parser::{parse, ParserVersion, HEADER_LEN};
+    use crate::parser::{parse, Meta, ParserVersion, HEADER_LEN};
     use crate::{
         Light, Material, MeshInstance, Serializer, ShaderMat, Spectrum, Texture, Transform,
     };
@@ -1225,6 +1278,15 @@ mod tests {
         data
     }
 
+    fn gen_meta(seed: u64) -> Meta {
+        let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
+        let ints_no = rng.gen_range(0..1000);
+        let floats_no = rng.gen_range(0..1000);
+        let ints = (0..ints_no).map(|_| rng.gen()).collect();
+        let floats = (0..floats_no).map(|_| rng.gen()).collect();
+        Meta { ints, floats }
+    }
+
     #[test]
     fn encode_decode_vertex() {
         let vertices = gen_vertices(32, 0xC2B4D5A5A9E49945);
@@ -1303,6 +1365,14 @@ mod tests {
             let decoded = bytes_to_light(&data);
             assert_eq!(decoded, light);
         }
+    }
+
+    #[test]
+    fn encode_decode_meta() {
+        let meta = gen_meta(0x546DB57AB5589A5A);
+        let data = meta_to_bytes(&meta);
+        let decoded = bytes_to_meta(&data);
+        assert_eq!(decoded, meta);
     }
 
     #[test]
@@ -1466,6 +1536,21 @@ mod tests {
     }
 
     #[test]
+    fn write_and_read_only_meta() -> Result<(), std::io::Error> {
+        let meta = gen_meta(0x0FC1E162A949E22A);
+        let dir = tempdir()?;
+        let file = dir.path().join("write_and_read_meta.bin");
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_metadata(&meta)
+            .serialize()?;
+        let mut read = parse(file.as_path())?;
+        remove_file(file.as_path())?;
+        let read_meta = read.meta()?;
+        assert_eq!(read_meta, meta);
+        Ok(())
+    }
+
+    #[test]
     fn write_and_read_everything() -> Result<(), std::io::Error> {
         let vertices = gen_vertices(100, 0x98DA1392A52639C2);
         let meshes = gen_meshes(100, 0xEFB101FDF7F185FB);
@@ -1475,6 +1560,7 @@ mod tests {
         let instances = gen_instances(100, 0xCAB0F2794E10665C);
         let transforms = gen_transforms(100, 0x8AFE0C931FBD4D69);
         let lights = gen_lights(150, 0x10FD94C4A4B032C0);
+        let meta = gen_meta(0xC6FB668642859F83);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_everything.bin");
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
@@ -1486,6 +1572,7 @@ mod tests {
             .with_materials(&materials)
             .with_lights(&lights)
             .with_cameras(&cameras)
+            .with_metadata(&meta)
             .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
@@ -1497,6 +1584,7 @@ mod tests {
         let read_transforms = read.transforms()?;
         let read_instances = read.instances()?;
         let read_lights = read.lights()?;
+        let read_meta = read.meta()?;
         assert_eq!(read_vertices.len(), vertices.len());
         assert_eq!(read_meshes.len(), meshes.len());
         assert_eq!(read_cameras.len(), cameras.len());
@@ -1505,6 +1593,7 @@ mod tests {
         assert_eq!(read_transforms.len(), transforms.len());
         assert_eq!(read_instances.len(), instances.len());
         assert_eq!(read_lights.len(), lights.len());
+        assert_eq!(read_meta, meta);
         for i in 0..read_vertices.len() {
             let val = &read_vertices.get(i).unwrap();
             let expected = &vertices.get(i).unwrap();
@@ -1774,6 +1863,31 @@ mod tests {
     }
 
     #[test]
+    fn corrupted_meta() -> Result<(), std::io::Error> {
+        let meta = gen_meta(0x0550B0A6D89B03E6);
+        let dir = tempdir()?;
+        let file = dir.path().join("corrupted_meta.bin");
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_metadata(&meta)
+            .serialize()?;
+        let mut read_ok = parse(file.as_path()).unwrap();
+        assert!(read_ok.lights().is_ok());
+        {
+            //corrupt file
+            let mut file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(file.as_path())?;
+            file.seek(SeekFrom::Start(1000))?;
+            file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
+        }
+        let mut read_corrupted = parse(file.as_path()).unwrap();
+        remove_file(file.as_path())?;
+        assert!(read_corrupted.meta().is_err());
+        Ok(())
+    }
+
+    #[test]
     fn compress_decompress() {
         let data = "The quick brown fox jumps over the lazy dog";
         let compressed = compress(data.as_bytes());
@@ -1833,6 +1947,7 @@ mod tests {
         let transforms = gen_transforms(25, 0x1E5CBA94679D9D3B);
         let instances = gen_instances(100, 0xC79389E3BBC74BCF);
         let lights = gen_lights(50, 0xA39F34BA2C56A7DC);
+        let meta = gen_meta(0x16B1FF1406A24CA6);
         let dir = tempdir()?;
         let file = dir.path().join("update_all.bin");
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
@@ -1844,6 +1959,7 @@ mod tests {
             .with_materials(&materials)
             .with_lights(&lights)
             .with_cameras(&cameras)
+            .with_metadata(&meta)
             .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
@@ -1855,6 +1971,7 @@ mod tests {
         assert_eq!(read.transforms()?.len(), transforms.len());
         assert_eq!(read.instances()?.len(), instances.len());
         assert_eq!(read.lights()?.len(), lights.len());
+        assert_eq!(read.meta()?, meta);
         let new_cameras = gen_cameras(100, 0x056F0B996A248BC4);
         let new_materials = gen_materials(100, 0x3ABE1A9BEB00DA7B);
         let new_lights = gen_lights(100, 0x5871F342932A7B6A);
@@ -1875,6 +1992,7 @@ mod tests {
         assert_eq!(read_transforms.len(), transforms.len());
         assert_eq!(read_instances.len(), instances.len());
         assert_eq!(read_lights.len(), new_lights.len());
+        assert_eq!(read.meta()?, meta);
         for i in 0..read_vertices.len() {
             let val = &read_vertices.get(i).unwrap();
             let expected = &vertices.get(i).unwrap();
