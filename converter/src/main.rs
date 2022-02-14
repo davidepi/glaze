@@ -1,5 +1,5 @@
 #![allow(clippy::type_complexity)]
-use cgmath::{Matrix, Matrix4, Point3, SquareMatrix, Vector2 as Vec2, Vector3 as Vec3};
+use cgmath::{Matrix, Matrix4, Point2, Point3, SquareMatrix, Vector3 as Vec3};
 use clap::{App, Arg};
 use console::style;
 use glaze::{
@@ -113,9 +113,9 @@ fn preprocess_input<S: AsRef<str>>(input: S) -> Result<RussimpScene, Box<dyn Err
 }
 
 fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
-    let vv: [f32; 3] = Vec3::into(vert.vv);
+    let vv: [f32; 3] = Point3::into(vert.vv);
     let vn: [f32; 3] = Vec3::into(vert.vn);
-    let vt: [f32; 2] = Vec2::into(vert.vt);
+    let vt: [f32; 2] = Point2::into(vert.vt);
     vv.iter()
         .chain(vn.iter())
         .chain(vt.iter())
@@ -268,9 +268,9 @@ fn convert_meshes(
                 let vn = mesh.normals[*index as usize];
                 let vt = mesh.texture_coords[0].as_ref().unwrap()[*index as usize];
                 let vertex = Vertex {
-                    vv: Vec3::new(vv.x, vv.y, vv.z),
+                    vv: Point3::new(vv.x, vv.y, vv.z),
                     vn: Vec3::new(vn.x, vn.y, vn.z),
-                    vt: Vec2::new(vt.x, 1.0 - vt.y), // flip y for vulkan
+                    vt: Point2::new(vt.x, 1.0 - vt.y), // flip y for vulkan
                 };
                 let vertex_bytes = vertex_to_bytes(&vertex);
                 let vertex_index = if let Some(v) = used_vert.get(&vertex_bytes) {

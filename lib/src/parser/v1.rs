@@ -2,7 +2,7 @@ use super::{write_header, Meta, ParsedScene, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
 use crate::materials::{TextureFormat, TextureInfo};
 use crate::{Light, Material, MeshInstance, Spectrum, Texture, Transform};
-use cgmath::{Point3, Vector2 as Vec2, Vector3 as Vec3};
+use cgmath::{Point2, Point3, Vector3 as Vec3};
 use fnv::FnvHashMap;
 use image::png::{CompressionType, FilterType, PngDecoder, PngEncoder};
 use image::{GrayImage, ImageDecoder, RgbaImage};
@@ -603,9 +603,9 @@ impl Chunk {
 
 /// Converts a Vertex to a vector of bytes.
 fn vertex_to_bytes(vert: &Vertex) -> [u8; 32] {
-    let vv: [f32; 3] = Vec3::into(vert.vv);
+    let vv: [f32; 3] = Point3::into(vert.vv);
     let vn: [f32; 3] = Vec3::into(vert.vn);
-    let vt: [f32; 2] = Vec2::into(vert.vt);
+    let vt: [f32; 2] = Point2::into(vert.vt);
     let mut retval = [0; 32];
     let mut i = 0;
     for val in vv.iter().chain(vn.iter()).chain(vt.iter()) {
@@ -621,7 +621,7 @@ fn vertex_to_bytes(vert: &Vertex) -> [u8; 32] {
 
 /// Converts a vector of bytes to a Vertex.
 fn bytes_to_vertex(data: [u8; 32]) -> Vertex {
-    let vv = Vec3::new(
+    let vv = Point3::new(
         f32::from_le_bytes(data[0..4].try_into().unwrap()),
         f32::from_le_bytes(data[4..8].try_into().unwrap()),
         f32::from_le_bytes(data[8..12].try_into().unwrap()),
@@ -631,7 +631,7 @@ fn bytes_to_vertex(data: [u8; 32]) -> Vertex {
         f32::from_le_bytes(data[16..20].try_into().unwrap()),
         f32::from_le_bytes(data[20..24].try_into().unwrap()),
     );
-    let vt = Vec2::new(
+    let vt = Point2::new(
         f32::from_le_bytes(data[24..28].try_into().unwrap()),
         f32::from_le_bytes(data[28..32].try_into().unwrap()),
     );
@@ -1056,7 +1056,7 @@ mod tests {
     use crate::{
         Light, Material, MeshInstance, Serializer, ShaderMat, Spectrum, Texture, Transform,
     };
-    use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
+    use cgmath::{Matrix4, Point2, Point3, Vector3 as Vec3};
     use image::GenericImageView;
     use rand::distributions::Alphanumeric;
     use rand::prelude::*;
@@ -1070,9 +1070,9 @@ mod tests {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
         let mut buffer = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            let vv = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+            let vv = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
             let vn = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-            let vt = Vec2::<f32>::new(rng.gen(), rng.gen());
+            let vt = Point2::<f32>::new(rng.gen(), rng.gen());
             let vertex = Vertex { vv, vn, vt };
             buffer.push(vertex);
         }

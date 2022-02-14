@@ -1,17 +1,17 @@
 #[cfg(feature = "vulkan")]
 use ash::vk;
-use cgmath::{Vector2 as Vec2, Vector3 as Vec3};
+use cgmath::{Point2, Point3, Vector3 as Vec3};
 
 /// A three dimensional point in space, used as a vertex for a triangle.
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vertex {
     /// The vertex position in 3D space.
-    pub vv: Vec3<f32>,
+    pub vv: Point3<f32>,
     /// The vertex normal.
     pub vn: Vec3<f32>,
     /// The vertex texture coordinate.
-    pub vt: Vec2<f32>,
+    pub vt: Point2<f32>,
 }
 
 impl Vertex {
