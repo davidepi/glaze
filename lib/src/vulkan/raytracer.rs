@@ -270,6 +270,9 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             subresource_range,
         };
         let frame_index = frame_no % self.frame_desc.len();
+        if self.request_new_frame {
+            self.sample_scheduler.rewind();
+        }
         let fd = RTFrameData {
             seed: self.rng.gen(),
             lights_no: self.scene.lights_no,
@@ -360,6 +363,9 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     pub fn draw(mut self, channel: Sender<String>) -> TextureLoaded {
         // if the other end disconnected, this thread can die anyway, so unwrap()
         channel.send("Tracing rays".to_string()).unwrap();
+        if self.request_new_frame {
+            self.sample_scheduler.rewind();
+        }
         let fd = RTFrameData {
             seed: self.rng.gen(),
             lights_no: self.scene.lights_no,
@@ -931,8 +937,8 @@ impl WorkScheduler {
     }
 
     /// Resets this iterator
-    pub fn rewind(self) -> Self {
-        WorkScheduler::new()
+    pub fn rewind(&mut self) {
+        *self = WorkScheduler::new()
     }
 }
 
