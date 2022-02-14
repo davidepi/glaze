@@ -4,7 +4,7 @@ use crate::{Light, Material, MeshInstance, Texture, Transform};
 use std::fmt::Display;
 use std::fs::File;
 use std::io::{BufWriter, Error, ErrorKind, Read, Seek, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 // DO NOT CHANGE THESE TWO! Any changes should be made with a new ParserVersion, changing the inner
@@ -115,51 +115,120 @@ pub fn parse<P: AsRef<Path>>(file: P) -> Result<Box<dyn ParsedScene + Send>, Err
     }
 }
 
-/// Saves a file using the format expected by this crate.
-///
-/// This function saves a list of vertices/meshes/camera/textures/materials to the given path
-/// using the provided [ParserVersion].
-///
-/// # Errors
-/// This function may return an error if the file is impossible to write, either for permissions
-/// reasons or because theres no space left on the disk.
+/// Saves a file with the builder pattern.
 ///
 /// # Examples
+/// Basic Usage:
 /// ```no_run
 /// let vertices = Vec::new();
-/// glaze::serialize(
-///     "test.bin",
-///     glaze::ParserVersion::V1,
-///     &vertices,
-///     &[],
-///     &[],
-///     &[],
-///     &[],
-///     &[],
-///     &[],
-/// )
-/// .expect("Failed to save file");
+/// let serializer = glaze::Serializer::new("test.bin", glaze::ParserVersion::V1);
+/// serializer
+///     .with_vertices(&vertices)
+///     .serialize()
+///     .expect("Failed to save file");
 /// ```
-pub fn serialize<P: AsRef<Path>>(
-    file: P,
+pub struct Serializer<'a> {
+    file: PathBuf,
     version: ParserVersion,
-    vertices: &[Vertex],
-    meshes: &[Mesh],
-    transforms: &[Transform],
-    instances: &[MeshInstance],
-    cameras: &[Camera],
-    textures: &[Texture],
-    materials: &[Material],
-    lights: &[Light],
-) -> Result<(), Error> {
-    let mut fout = BufWriter::new(File::create(file)?);
-    write_header(&mut fout)?;
-    match version {
-        ParserVersion::V1 => ContentV1::serialize(
-            fout, vertices, meshes, transforms, instances, cameras, textures, materials, lights,
-        )?,
-    };
-    Ok(())
+    vertices: &'a [Vertex],
+    meshes: &'a [Mesh],
+    transforms: &'a [Transform],
+    instances: &'a [MeshInstance],
+    cameras: &'a [Camera],
+    textures: &'a [Texture],
+    materials: &'a [Material],
+    lights: &'a [Light],
+}
+
+impl<'a> Serializer<'a> {
+    /// Creates a new serializer with the given file name and parser version.
+    pub fn new<T: AsRef<str>>(file: T, version: ParserVersion) -> Self {
+        let name = file.as_ref().to_string();
+        Serializer {
+            file: PathBuf::from(name),
+            version,
+            vertices: &[],
+            meshes: &[],
+            transforms: &[],
+            instances: &[],
+            cameras: &[],
+            textures: &[],
+            materials: &[],
+            lights: &[],
+        }
+    }
+
+    /// Sets the list of vertices that will be written to file.
+    pub fn with_vertices(mut self, vertices: &'a [Vertex]) -> Self {
+        self.vertices = vertices;
+        self
+    }
+
+    /// Sets the list of meshes that will be written to file.
+    pub fn with_meshes(mut self, meshes: &'a [Mesh]) -> Self {
+        self.meshes = meshes;
+        self
+    }
+
+    /// Sets the list of transforms that will be written to file.
+    pub fn with_transforms(mut self, transforms: &'a [Transform]) -> Self {
+        self.transforms = transforms;
+        self
+    }
+
+    /// Sets the list of instances that will be written to file.
+    pub fn with_instances(mut self, instances: &'a [MeshInstance]) -> Self {
+        self.instances = instances;
+        self
+    }
+
+    /// Sets the list of cameras that will be written to file.
+    pub fn with_cameras(mut self, cameras: &'a [Camera]) -> Self {
+        self.cameras = cameras;
+        self
+    }
+
+    /// Sets the list of textures that will be written to file.
+    pub fn with_textures(mut self, textures: &'a [Texture]) -> Self {
+        self.textures = textures;
+        self
+    }
+
+    /// Sets the list of materials that will be written to file.
+    pub fn with_materials(mut self, materials: &'a [Material]) -> Self {
+        self.materials = materials;
+        self
+    }
+
+    /// Sets the list of lights that will be written to file.
+    pub fn with_lights(mut self, lights: &'a [Light]) -> Self {
+        self.lights = lights;
+        self
+    }
+
+    /// Writes to file.
+    ///
+    /// # Errors
+    /// This function may return an error if the file is impossible to write, either for permissions
+    /// reasons or because theres no space left on the disk.
+    pub fn serialize(self) -> Result<(), Error> {
+        let mut fout = BufWriter::new(File::create(self.file)?);
+        write_header(&mut fout)?;
+        match self.version {
+            ParserVersion::V1 => ContentV1::serialize(
+                fout,
+                self.vertices,
+                self.meshes,
+                self.transforms,
+                self.instances,
+                self.cameras,
+                self.textures,
+                self.materials,
+                self.lights,
+            )?,
+        };
+        Ok(())
+    }
 }
 
 /// Writes the header of the file.

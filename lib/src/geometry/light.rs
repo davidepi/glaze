@@ -37,10 +37,16 @@ impl Light {
         })
     }
 
-    pub fn new_sun(name: String, color: Spectrum, direction: Vec3<f32>) -> Self {
+    pub fn new_sun(
+        name: String,
+        color: Spectrum,
+        position: Point3<f32>,
+        direction: Vec3<f32>,
+    ) -> Self {
         Light::Sun(SunLight {
             name,
             color,
+            position,
             direction,
         })
     }
@@ -69,7 +75,7 @@ impl Light {
     pub fn position(&self) -> Point3<f32> {
         match self {
             Light::Omni(l) => l.position,
-            Light::Sun(_) => Point3::<f32>::new(0.0, 0.0, 0.0),
+            Light::Sun(l) => l.position,
         }
     }
 
@@ -92,5 +98,6 @@ pub struct OmniLight {
 pub struct SunLight {
     pub name: String,
     pub color: Spectrum,
+    pub position: Point3<f32>,
     pub direction: Vec3<f32>,
 }

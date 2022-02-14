@@ -921,14 +921,22 @@ fn light_to_bytes(light: &Light) -> Vec<u8> {
         Light::Sun(_) => 1,
     };
     let color = light.emission().to_bytes();
-    let posdir: [f32; 3] = match light {
-        Light::Omni(l) => l.position.into(),
-        Light::Sun(l) => l.direction.into(),
+    let posdir = match light {
+        Light::Omni(l) => {
+            let pos: [f32; 3] = l.position.into();
+            pos.into_iter()
+                .flat_map(|x| x.to_le_bytes())
+                .collect::<Vec<_>>()
+        }
+        Light::Sun(l) => {
+            let pos: [f32; 3] = l.position.into();
+            let dir: [f32; 3] = l.direction.into();
+            pos.into_iter()
+                .chain(dir)
+                .flat_map(|x| x.to_le_bytes())
+                .collect::<Vec<_>>()
+        }
     };
-    let posdir = posdir
-        .into_iter()
-        .flat_map(|x| x.to_le_bytes())
-        .collect::<Vec<_>>();
     let name_len = light.name().bytes().len();
     let mut retval = Vec::with_capacity(1 + color.len() + posdir.len() + name_len);
     retval.push(ltype);
@@ -954,6 +962,12 @@ fn bytes_to_light(data: &[u8]) -> Light {
             Light::new_omni(name, color, position)
         }
         1 => {
+            let position = Point3::new(
+                f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
+                f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
+                f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
+            );
+            index += 12;
             let direction = Vec3::new(
                 f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
                 f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
@@ -961,7 +975,7 @@ fn bytes_to_light(data: &[u8]) -> Light {
             );
             index += 12;
             let name = String::from_utf8(data[index..].to_vec()).unwrap();
-            Light::new_sun(name, color, direction)
+            Light::new_sun(name, color, position, direction)
         }
         _ => panic!(),
     }
@@ -982,7 +996,7 @@ mod tests {
     };
     use crate::parser::{parse, ParserVersion, HEADER_LEN};
     use crate::{
-        serialize, Light, Material, MeshInstance, ShaderMat, Spectrum, Texture, Transform,
+        Light, Material, MeshInstance, Serializer, ShaderMat, Spectrum, Texture, Transform,
     };
     use cgmath::{Matrix4, Point3, Vector2 as Vec2, Vector3 as Vec3};
     use image::GenericImageView;
@@ -1202,8 +1216,9 @@ mod tests {
                 let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
                 Light::new_omni(name, color, position)
             } else {
+                let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
                 let direction = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-                Light::new_sun(name, color, direction)
+                Light::new_sun(name, color, position, direction)
             };
             data.push(light);
         }
@@ -1295,18 +1310,9 @@ mod tests {
         let vertices = gen_vertices(1000, 0xBE8AE7F7E3A5248E);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_vertices.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &vertices,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_vertices(&vertices)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_vertices = read.vertices()?;
@@ -1324,18 +1330,9 @@ mod tests {
         let meshes = gen_meshes(128, 0xDD219155A3536881);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_meshes.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &meshes,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_meshes(&meshes)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_meshes = read.meshes()?;
@@ -1353,18 +1350,9 @@ mod tests {
         let cameras = gen_cameras(32, 0xCC6AD9820F396116);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_cameras.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &[],
-            &[],
-            &cameras,
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_cameras(&cameras)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_cameras = read.cameras()?;
@@ -1382,18 +1370,9 @@ mod tests {
         let textures = gen_textures(2, 0x50DFC0EA9BF6E9BE);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_textures.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &textures,
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_textures(&textures)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_textures = read.textures()?;
@@ -1411,18 +1390,9 @@ mod tests {
         let materials = gen_materials(512, 0xCEF1587343C7486C);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_materials.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &materials,
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_materials(&materials)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_materials = read.materials()?;
@@ -1440,18 +1410,9 @@ mod tests {
         let transforms = gen_transforms(512, 0x091722F61F6D3E1A);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_transforms.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &transforms,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_transforms(&transforms)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_transforms = read.transforms()?;
@@ -1469,18 +1430,9 @@ mod tests {
         let instances = gen_instances(512, 0x3B88C0CCB06D05CB);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_instances.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &[],
-            &instances,
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_instances(&instances)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_instances = read.instances()?;
@@ -1498,18 +1450,9 @@ mod tests {
         let lights = gen_lights(512, 0x6C1A6FE161CFC7DE);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_lights.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &lights,
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_lights(&lights)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_lights = read.lights()?;
@@ -1534,18 +1477,16 @@ mod tests {
         let lights = gen_lights(150, 0x10FD94C4A4B032C0);
         let dir = tempdir()?;
         let file = dir.path().join("write_and_read_everything.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &vertices,
-            &meshes,
-            &transforms,
-            &instances,
-            &cameras,
-            &textures,
-            &materials,
-            &lights,
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_vertices(&vertices)
+            .with_meshes(&meshes)
+            .with_instances(&instances)
+            .with_transforms(&transforms)
+            .with_textures(&textures)
+            .with_materials(&materials)
+            .with_lights(&lights)
+            .with_cameras(&cameras)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_vertices = read.vertices()?;
@@ -1612,18 +1553,9 @@ mod tests {
         let vertices = gen_vertices(100, 0x8794A1E593281F2F);
         let dir = tempdir()?;
         let file = dir.path().join("corrupted_off.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &vertices,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_vertices(&vertices)
+            .serialize()?;
         let read_ok = parse(file.as_path());
         assert!(read_ok.is_ok());
         {
@@ -1646,18 +1578,9 @@ mod tests {
         let vertices = gen_vertices(100, 0x62A9F273AF56253C);
         let dir = tempdir()?;
         let file = dir.path().join("corrupted_vert.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &vertices,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_vertices(&vertices)
+            .serialize()?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.vertices().is_ok());
         {
@@ -1680,18 +1603,9 @@ mod tests {
         let meshes = gen_meshes(100, 0x9EB228E1A9586DD2);
         let dir = tempdir()?;
         let file = dir.path().join("corrupted_mesh.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &meshes,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_meshes(&meshes)
+            .serialize()?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.meshes().is_ok());
         {
@@ -1714,18 +1628,9 @@ mod tests {
         let cameras = gen_cameras(100, 0x0090DE663C0E2450);
         let dir = tempdir()?;
         let file = dir.path().join("corrupted_cam.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &[],
-            &[],
-            &cameras,
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_cameras(&cameras)
+            .serialize()?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.cameras().is_ok());
         {
@@ -1748,18 +1653,9 @@ mod tests {
         let textures = gen_textures(4, 0x8D1B42A77650F752);
         let dir = tempdir()?;
         let file = dir.path().join("corrupted_textures.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &textures,
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_textures(&textures)
+            .serialize()?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.textures().is_ok());
         {
@@ -1782,18 +1678,9 @@ mod tests {
         let materials = gen_materials(100, 0xA7446EB290EF428F);
         let dir = tempdir()?;
         let file = dir.path().join("corrupted_materials.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &materials,
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_materials(&materials)
+            .serialize()?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.materials().is_ok());
         {
@@ -1816,18 +1703,9 @@ mod tests {
         let transforms = gen_transforms(100, 0x52220531E08FB566);
         let dir = tempdir()?;
         let file = dir.path().join("corrupted_transforms.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &transforms,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_transforms(&transforms)
+            .serialize()?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.transforms().is_ok());
         {
@@ -1850,18 +1728,9 @@ mod tests {
         let instances = gen_instances(500, 0x52C7F0FE60D65D06);
         let dir = tempdir()?;
         let file = dir.path().join("corrupted_instances.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &[],
-            &instances,
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_instances(&instances)
+            .serialize()?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.instances().is_ok());
         {
@@ -1884,18 +1753,9 @@ mod tests {
         let lights = gen_lights(250, 0xB9206AA3C2681F81);
         let dir = tempdir()?;
         let file = dir.path().join("corrupted_lights.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &lights,
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_lights(&lights)
+            .serialize()?;
         let mut read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.lights().is_ok());
         {
@@ -1929,18 +1789,9 @@ mod tests {
         let vertices = gen_vertices(100, 0xBD4D59BF04981A1A);
         let dir = tempdir()?;
         let file = dir.path().join("update_some.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &vertices,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_vertices(&vertices)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         read.update(None, None, None)?;
@@ -1956,18 +1807,9 @@ mod tests {
         let vertices = gen_vertices(100, 0xBD4D59BF04981A1A);
         let dir = tempdir()?;
         let file = dir.path().join("update_some.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &vertices,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_vertices(&vertices)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         let new_cameras = gen_cameras(100, 0xECD7D80A8A4C4C95);
@@ -1993,18 +1835,16 @@ mod tests {
         let lights = gen_lights(50, 0xA39F34BA2C56A7DC);
         let dir = tempdir()?;
         let file = dir.path().join("update_all.bin");
-        serialize(
-            file.as_path(),
-            ParserVersion::V1,
-            &vertices,
-            &meshes,
-            &transforms,
-            &instances,
-            &cameras,
-            &textures,
-            &materials,
-            &lights,
-        )?;
+        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
+            .with_vertices(&vertices)
+            .with_meshes(&meshes)
+            .with_instances(&instances)
+            .with_transforms(&transforms)
+            .with_textures(&textures)
+            .with_materials(&materials)
+            .with_lights(&lights)
+            .with_cameras(&cameras)
+            .serialize()?;
         let mut read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         assert_eq!(read.vertices()?.len(), vertices.len());

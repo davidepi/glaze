@@ -3,8 +3,8 @@ use cgmath::{Matrix, Matrix4, Point3, SquareMatrix, Vector2 as Vec2, Vector3 as 
 use clap::{App, Arg};
 use console::style;
 use glaze::{
-    converted_file, parse, serialize, Camera, Material, Mesh, MeshInstance, ParserVersion,
-    PerspectiveCam, Texture, TextureFormat, TextureInfo, Transform, Vertex, DEFAULT_TEXTURE_ID,
+    converted_file, parse, Camera, Material, Mesh, MeshInstance, ParserVersion, PerspectiveCam,
+    Serializer, Texture, TextureFormat, TextureInfo, Transform, Vertex, DEFAULT_TEXTURE_ID,
 };
 use image::io::Reader as ImageReader;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::Write;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::thread;
 use std::time::Instant;
@@ -498,22 +498,20 @@ fn matprop_to_fvec(property: &MaterialProperty) -> [f32; 3] {
     }
 }
 
-fn write_output<P: AsRef<Path>>(
+fn write_output(
     scene: TempScene,
     version: ParserVersion,
-    output: P,
-) -> Result<(), Box<dyn Error>> {
-    Ok(serialize(
-        output,
-        version,
-        &scene.vertices,
-        &scene.meshes,
-        &scene.transforms,
-        &scene.instances,
-        &scene.cameras,
-        &scene.textures,
-        &scene.materials,
-    )?)
+    output: &str,
+) -> Result<(), std::io::Error> {
+    Serializer::new(output, version)
+        .with_vertices(&scene.vertices)
+        .with_meshes(&scene.meshes)
+        .with_transforms(&scene.transforms)
+        .with_instances(&scene.instances)
+        .with_cameras(&scene.cameras)
+        .with_textures(&scene.textures)
+        .with_materials(&scene.materials)
+        .serialize()
 }
 
 fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std::error::Error>> {
@@ -529,7 +527,7 @@ fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std::err
         let preprocess_end = Instant::now();
         let conversion = convert_input(preprocessed, input)?;
         let conversion_end = Instant::now();
-        let _ = write_output(conversion, version, &file)?;
+        let _ = write_output(conversion, version, file.to_str().unwrap())?;
         let compression_end = Instant::now();
         writeln!(&mut conv_results, "--- Writing ---")?;
         writeln!(
@@ -582,7 +580,7 @@ fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std::err
 
 #[cfg(test)]
 mod tests {
-    use glaze::{parse, serialize};
+    use glaze::{parse, Serializer};
     use std::error::Error;
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -598,18 +596,18 @@ mod tests {
         let scene = super::convert_input(scene, path.to_str().unwrap()).unwrap();
         let dir = tempdir()?;
         let file = dir.path().join("serializer.bin");
-        assert!(serialize(
-            &file,
-            glaze::ParserVersion::V1,
-            &scene.vertices,
-            &scene.meshes,
-            &scene.transforms,
-            &scene.instances,
-            &scene.cameras,
-            &scene.textures,
-            &scene.materials
-        )
-        .is_ok());
+        assert!(
+            Serializer::new(file.to_str().unwrap(), glaze::ParserVersion::V1)
+                .with_vertices(&scene.vertices)
+                .with_meshes(&scene.meshes)
+                .with_transforms(&scene.transforms)
+                .with_instances(&scene.instances)
+                .with_cameras(&scene.cameras)
+                .with_textures(&scene.textures)
+                .with_materials(&scene.materials)
+                .serialize()
+                .is_ok()
+        );
         let parsed = parse(&file);
         assert!(parsed.is_ok());
         if let Ok(mut parsed) = parsed {
@@ -638,18 +636,18 @@ mod tests {
         let scene = super::convert_input(scene, path.to_str().unwrap()).unwrap();
         let dir = tempdir()?;
         let file = dir.path().join("instances.bin");
-        assert!(serialize(
-            &file,
-            glaze::ParserVersion::V1,
-            &scene.vertices,
-            &scene.meshes,
-            &scene.transforms,
-            &scene.instances,
-            &scene.cameras,
-            &scene.textures,
-            &scene.materials
-        )
-        .is_ok());
+        assert!(
+            Serializer::new(file.to_str().unwrap(), glaze::ParserVersion::V1)
+                .with_vertices(&scene.vertices)
+                .with_meshes(&scene.meshes)
+                .with_transforms(&scene.transforms)
+                .with_instances(&scene.instances)
+                .with_cameras(&scene.cameras)
+                .with_textures(&scene.textures)
+                .with_materials(&scene.materials)
+                .serialize()
+                .is_ok()
+        );
         let parsed = parse(&file);
         assert!(parsed.is_ok());
         if let Ok(mut parsed) = parsed {
