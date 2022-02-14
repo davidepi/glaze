@@ -363,13 +363,18 @@ impl ParsedScene for ContentV1 {
         cameras: Option<&[Camera]>,
         materials: Option<&[Material]>,
         lights: Option<&[Light]>,
+        meta: Option<&Meta>,
     ) -> Result<(), Error> {
         let vertices = self.read_chunk(ChunkID::Vertex)?;
         let meshes = self.read_chunk(ChunkID::Mesh)?;
         let textures = self.read_chunk(ChunkID::Texture)?;
         let transforms = self.read_chunk(ChunkID::Transform)?;
         let instances = self.read_chunk(ChunkID::Instance)?;
-        let meta = self.read_chunk(ChunkID::Meta)?;
+        let meta = if let Some(meta) = meta {
+            Chunk::encode_dynamic(from_ref(meta), meta_to_bytes)
+        } else {
+            self.read_chunk(ChunkID::Meta)?
+        };
         let cameras = if let Some(cameras) = cameras {
             Chunk::encode_fixed(cameras, camera_to_bytes)
         } else {
@@ -1908,7 +1913,7 @@ mod tests {
             .serialize()?;
         let mut read = parse(file.as_path())?;
         assert_eq!(read.vertices()?.len(), vertices.len());
-        read.update(None, None, None)?;
+        read.update(None, None, None, None)?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         // close file and reopen it
         let mut read = parse(file.as_path())?;
@@ -1929,7 +1934,13 @@ mod tests {
         let new_cameras = gen_cameras(100, 0xECD7D80A8A4C4C95);
         let new_materials = gen_materials(100, 0xAA9475DE05B6CE41);
         let new_lights = gen_lights(100, 0xEF2F6EF8FD11E92E);
-        read.update(Some(&new_cameras), Some(&new_materials), Some(&new_lights))?;
+        let new_meta = gen_meta(0x3A77182EE1A0747E);
+        read.update(
+            Some(&new_cameras),
+            Some(&new_materials),
+            Some(&new_lights),
+            Some(&new_meta),
+        )?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         assert_eq!(read.cameras()?.len(), new_cameras.len());
         assert_eq!(read.materials()?.len(), new_materials.len());
@@ -1975,7 +1986,13 @@ mod tests {
         let new_cameras = gen_cameras(100, 0x056F0B996A248BC4);
         let new_materials = gen_materials(100, 0x3ABE1A9BEB00DA7B);
         let new_lights = gen_lights(100, 0x5871F342932A7B6A);
-        read.update(Some(&new_cameras), Some(&new_materials), Some(&new_lights))?;
+        let new_meta = gen_meta(0xF4AF4CA42889AAD0);
+        read.update(
+            Some(&new_cameras),
+            Some(&new_materials),
+            Some(&new_lights),
+            Some(&new_meta),
+        )?;
         let read_vertices = read.vertices()?;
         let read_meshes = read.meshes()?;
         let read_cameras = read.cameras()?;
@@ -1984,6 +2001,7 @@ mod tests {
         let read_transforms = read.transforms()?;
         let read_instances = read.instances()?;
         let read_lights = read.lights()?;
+        let read_meta = read.meta()?;
         assert_eq!(read_vertices.len(), vertices.len());
         assert_eq!(read_meshes.len(), meshes.len());
         assert_eq!(read_cameras.len(), new_cameras.len());
@@ -1992,7 +2010,7 @@ mod tests {
         assert_eq!(read_transforms.len(), transforms.len());
         assert_eq!(read_instances.len(), instances.len());
         assert_eq!(read_lights.len(), new_lights.len());
-        assert_eq!(read.meta()?, meta);
+        assert_eq!(read_meta, new_meta);
         for i in 0..read_vertices.len() {
             let val = &read_vertices.get(i).unwrap();
             let expected = &vertices.get(i).unwrap();

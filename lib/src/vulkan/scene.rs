@@ -358,7 +358,7 @@ impl VulkanScene {
         let lights = self.lights().to_vec();
         let materials = self.materials().to_vec();
         self.file
-            .update(Some(&cameras), Some(&materials), Some(&lights))
+            .update(Some(&cameras), Some(&materials), Some(&lights), None)
     }
 }
 

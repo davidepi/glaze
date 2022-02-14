@@ -282,23 +282,23 @@ pub struct Meta {
 /// This trait is used to access the content of the parsed file. Various parser versions may
 /// implement this trait and return a `Box<dyn ParsedContent>`.
 pub trait ParsedScene {
-    /// Retrieve only the [Vertex]s contained in the file.
+    /// Retrieves only the [Vertex]s contained in the file.
     fn vertices(&mut self) -> Result<Vec<Vertex>, Error>;
-    /// Retrieve only the [Mesh]es contained in the file.
+    /// Retrieves only the [Mesh]es contained in the file.
     fn meshes(&mut self) -> Result<Vec<Mesh>, Error>;
-    /// Retrieve only the [Transform]s contained in the file.
+    /// Retrieves only the [Transform]s contained in the file.
     fn transforms(&mut self) -> Result<Vec<Transform>, Error>;
-    /// Retrieve only the [MeshInstance]s contained in the file.
+    /// Retrieves only the [MeshInstance]s contained in the file.
     fn instances(&mut self) -> Result<Vec<MeshInstance>, Error>;
-    /// Retrieve only the [Camera]s contained in the file.
+    /// Retrieves only the [Camera]s contained in the file.
     fn cameras(&mut self) -> Result<Vec<Camera>, Error>;
-    /// Retrieve only the [Texture]s contained in the file.
+    /// Retrieves only the [Texture]s contained in the file.
     fn textures(&mut self) -> Result<Vec<Texture>, Error>;
-    /// Retrieve only the [Material]s contained in the file.
+    /// Retrieves only the [Material]s contained in the file.
     fn materials(&mut self) -> Result<Vec<Material>, Error>;
-    /// Retrieve only the [Light]s contained in the file.
+    /// Retrieves only the [Light]s contained in the file.
     fn lights(&mut self) -> Result<Vec<Light>, Error>;
-    /// Retrieve additional data from the scene.
+    /// Retrieves additional data from the scene.
     fn meta(&mut self) -> Result<Meta, Error>;
     /// Updates an existing file.
     /// Requires all the cameras and materials as input.
@@ -307,6 +307,7 @@ pub trait ParsedScene {
         cameras: Option<&[Camera]>,
         materials: Option<&[Material]>,
         lights: Option<&[Light]>,
+        meta: Option<&Meta>,
     ) -> Result<(), Error>;
 }
 
