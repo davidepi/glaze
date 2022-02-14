@@ -10,9 +10,7 @@ use super::pipeline::Pipeline;
 use super::UnfinishedExecutions;
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
-use crate::{
-    Camera, Light, LightType, Material, Mesh, MeshInstance, ParsedScene, RayTraceInstance, Vertex,
-};
+use crate::{Camera, Light, Material, Mesh, MeshInstance, ParsedScene, RayTraceInstance, Vertex};
 #[cfg(feature = "vulkan-interactive")]
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
@@ -890,17 +888,19 @@ struct RTMaterial {
 #[repr(C, align(16))]
 #[derive(Debug, Copy, Clone)]
 struct RTLight {
-    // w is the type, xyz is either position or direction
-    typeposdir: [f32; 4],
     color0: [f32; 4],
     color1: [f32; 4],
     color2: [f32; 4],
     color3: [f32; 4],
+    pos: [f32; 4],
+    dir: [f32; 4],
+    shader: u32,
 }
 
 pub struct RayTraceScene<T: Instance + Send + Sync> {
     pub camera: Camera,
     pub descriptor: Descriptor,
+    radius: f32,
     sampler: vk::Sampler,
     vertex_buffer: Arc<AllocatedBuffer>,
     index_buffer: Arc<AllocatedBuffer>,
@@ -972,10 +972,12 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &textures,
             sampler,
         );
+        let radius = scene.meta()?.scene_radius;
         unf.wait_completion();
         Ok(RayTraceScene {
             camera,
             descriptor,
+            radius,
             sampler,
             vertex_buffer: Arc::new(vertex_buffer),
             index_buffer: Arc::new(index_buffer),
@@ -1040,8 +1042,10 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &textures,
             sampler,
         );
+        let radius = scene.file.meta()?.scene_radius;
         unf.wait_completion();
         Ok(RayTraceScene {
+            radius,
             camera: scene.current_cam.clone(),
             descriptor,
             sampler,
@@ -1059,7 +1063,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
     }
 
     #[cfg(feature = "vulkan-interactive")]
-    pub(super) fn update_materials(
+    pub fn update_materials(
         &mut self,
         materials: &[Material],
         tcmdm: &mut CommandManager,
@@ -1085,7 +1089,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
     }
 
     #[cfg(feature = "vulkan-interactive")]
-    pub(super) fn update_lights(
+    pub fn update_lights(
         &mut self,
         lights: &[Light],
         tcmdm: &mut CommandManager,
@@ -1109,6 +1113,10 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.textures,
             self.sampler,
         );
+    }
+
+    pub fn radius(&self) -> f32 {
+        self.radius
     }
 }
 
@@ -1196,21 +1204,16 @@ fn load_raytrace_lights_to_gpu(
         .iter()
         .map(|l| {
             let w = l.emission().wavelength;
+            let pos = l.position();
+            let dir = l.direction();
             RTLight {
-                typeposdir: match l.ltype() {
-                    LightType::OMNI => {
-                        let pos = l.position();
-                        [pos.x, pos.y, pos.z, 0.0]
-                    }
-                    LightType::SUN => {
-                        let dir = l.direction();
-                        [dir.x, dir.y, dir.z, 1.0]
-                    }
-                },
                 color0: [w[0], w[1], w[2], w[3]],
                 color1: [w[4], w[5], w[6], w[7]],
                 color2: [w[8], w[9], w[10], w[11]],
                 color3: [w[12], w[13], w[14], w[15]],
+                pos: [pos.x, pos.y, pos.z, 0.0],
+                dir: [dir.x, dir.y, dir.z, 0.0],
+                shader: l.ltype().sbt_callable_index(),
             }
         })
         .collect::<Vec<_>>();
@@ -1218,11 +1221,13 @@ fn load_raytrace_lights_to_gpu(
         // push an empty light to avoid having a zero sized buffer
         // since there is no "default" light
         data.push(RTLight {
-            typeposdir: [0.0; 4],
             color0: [0.0; 4],
             color1: [0.0; 4],
             color2: [0.0; 4],
             color3: [0.0; 4],
+            pos: [0.0, 0.0, 0.0, 0.0],
+            dir: [0.0, 0.0, 0.0, 0.0],
+            shader: 0,
         })
     }
     upload_buffer(
@@ -1322,22 +1327,21 @@ fn build_raytrace_descriptor(
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
-        // TODO: I will definitely use these, I just don't know in which shader stage yet
-        // .bind_buffer(
-        //     material_buffer,
-        //     vk::DescriptorType::STORAGE_BUFFER,
-        //     vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-        // )
-        // .bind_buffer(
-        //     light_buffer,
-        //     vk::DescriptorType::STORAGE_BUFFER,
-        //     vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-        // )
-        // .bind_image_array(
-        //     &textures_memory,
-        //     vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        //     sampler,
-        //     vk::ShaderStageFlags::CLOSEST_HIT_KHR,
-        // )
+        .bind_buffer(
+            material_buffer,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
+        .bind_buffer(
+            light_buffer,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CALLABLE_KHR,
+        )
+        .bind_image_array(
+            &textures_memory,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            sampler,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
         .build()
 }

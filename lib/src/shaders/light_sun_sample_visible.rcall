@@ -1,0 +1,27 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+#include "raytrace_commons.glsl"
+
+layout(location = 0)  callableDataInEXT SampledLight sam;
+
+layout(set=0, binding=0) uniform readonly frameData {
+  uint seed;
+  uint lights_no;
+  vec2 pixel_offset;
+  float scene_radius;
+  bool new_frame;
+}FrameData;
+
+layout(std430, set=1, binding=5) readonly buffer lightBuffer {
+  RTLight lights[];
+} LightBuffer;
+
+void main()
+{
+  RTLight light = LightBuffer.lights[sam.light_index];
+  sam.wiW = -light.dir.xyz;
+  sam.pdf = 1.0;
+  sam.distance = 2.0*FrameData.scene_radius+1;
+  sam.emission = Spectrum(light.col0, light.col1, light.col2, light.col3);
+}

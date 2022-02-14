@@ -10,7 +10,8 @@ use crate::PresentInstance;
 #[cfg(feature = "vulkan-interactive")]
 use crate::VulkanScene;
 use crate::{
-    Camera, ParsedScene, Pipeline, RayTraceInstance, TextureFormat, TextureInfo, TextureLoaded,
+    Camera, LightType, ParsedScene, Pipeline, RayTraceInstance, TextureFormat, TextureInfo,
+    TextureLoaded,
 };
 use ash::extensions::khr::{
     AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
@@ -30,6 +31,7 @@ struct RTFrameData {
     seed: u32,
     lights_no: u32,
     pixel_offset: Vec2<f32>,
+    scene_radius: f32,
     new_frame: bool,
 }
 
@@ -38,6 +40,7 @@ impl Default for RTFrameData {
         Self {
             seed: 0,
             lights_no: 0,
+            scene_radius: 0.0,
             pixel_offset: Vec2::new(0.0, 0.0),
             new_frame: true,
         }
@@ -277,6 +280,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             seed: self.rng.gen(),
             lights_no: self.scene.lights_no,
             pixel_offset: self.sample_scheduler.next().unwrap(),
+            scene_radius: self.scene.radius(),
             new_frame: self.request_new_frame,
         };
         self.request_new_frame = false;
@@ -370,6 +374,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             seed: self.rng.gen(),
             lights_no: self.scene.lights_no,
             pixel_offset: self.sample_scheduler.next().unwrap(),
+            scene_radius: self.scene.radius(),
             new_frame: self.request_new_frame,
         };
         self.request_new_frame = false;
@@ -631,7 +636,6 @@ fn init_rt<T: Instance + Send + Sync>(
         &rploader,
         &mut tcmdm,
         &pipeline,
-        1,
         &mut unf,
     );
     let rng = Xoshiro128PlusPlus::from_entropy();
@@ -673,7 +677,7 @@ fn build_descriptor(
                 .bind_buffer(
                     fd,
                     vk::DescriptorType::UNIFORM_BUFFER,
-                    vk::ShaderStageFlags::RAYGEN_KHR,
+                    vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
                 )
                 .bind_image(
                     cumulative_img,
@@ -757,7 +761,6 @@ fn build_sbt<T: Instance>(
     rploader: &RTPipelineLoader,
     tcmdm: &mut CommandManager,
     pipeline: &Pipeline,
-    hit_groups: u32,
     unf: &mut UnfinishedExecutions,
 ) -> ShaderBindingTable {
     let device = instance.device();
@@ -768,6 +771,7 @@ fn build_sbt<T: Instance>(
     let size_handle = properties.shader_group_handle_size as u64;
     let size_handle_aligned = roundup_alignment(size_handle, align_handle);
     let mut data = Vec::new();
+
     // load single raygen group
     let rgen_group = unsafe {
         rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 0, 1, size_handle as usize)
@@ -782,6 +786,7 @@ fn build_sbt<T: Instance>(
         stride: roundup_alignment(align_handle, align_group),
         size: roundup_alignment(align_handle, align_group),
     };
+
     // load single miss group
     let miss_offset = data.len() as u64;
     let miss_group = unsafe {
@@ -796,35 +801,62 @@ fn build_sbt<T: Instance>(
         stride: size_handle,
         size: size_handle_aligned,
     };
-    // load hit groups
+
+    // load single hit group
     let hit_group_base_index = 2; // 0 is raygen and 1 is miss
+    let hit_groups = 1; // additional care is needed in alignment for more than 1 entry
+                        // each entry has to be aligned with align_handle
+                        // check the inner loop with the callable shaders
     let hit_offset = data.len() as u64;
-    for hit_group in 0..hit_groups {
+    let shader_group = unsafe {
+        rploader.get_ray_tracing_shader_group_handles(
+            pipeline.pipeline,
+            hit_group_base_index,
+            1,
+            size_handle as usize,
+        )
+    }
+    .expect("Failed to retrieve shader handle");
+    data.extend_from_slice(&shader_group);
+    let missing_bytes = padding(data.len() as u64, align_group) as usize;
+    data.extend_from_slice(&vec![0; missing_bytes]);
+    let mut hit_addr = vk::StridedDeviceAddressRegionKHR {
+        device_address: hit_offset,
+        stride: size_handle,
+        size: (hit_groups as u64 * size_handle_aligned),
+    };
+
+    // load multiple callables. First the lights
+    let call_offset = data.len() as u64;
+    let light_group_base_index = hit_group_base_index + hit_groups;
+    let lights_call_groups = LightType::all().len();
+    for group_id in 0..lights_call_groups {
+        // group_id is the number to be used to call the shader from another one
+        // light_group_base_index + group_id is the ID of the shader in the pipeline
         let shader_group = unsafe {
             rploader.get_ray_tracing_shader_group_handles(
                 pipeline.pipeline,
-                hit_group_base_index + hit_group,
+                light_group_base_index + group_id as u32,
                 1,
                 size_handle as usize,
             )
         }
         .expect("Failed to retrieve shader handle");
         data.extend_from_slice(&shader_group);
+        // ensures every group member is aligned properly
         if align_handle != size_handle as u64 {
             let missing_bytes = padding(data.len() as u64, align_handle) as usize;
             data.extend_from_slice(&vec![0; missing_bytes]);
         }
     }
-    let mut hit_addr = vk::StridedDeviceAddressRegionKHR {
-        device_address: hit_offset,
+    let missing_bytes = padding(data.len() as u64, align_group) as usize;
+    data.extend_from_slice(&vec![0; missing_bytes]);
+    let mut call_addr = vk::StridedDeviceAddressRegionKHR {
+        device_address: call_offset,
         stride: size_handle,
-        size: (hit_groups as u64 * size_handle_aligned),
+        size: (lights_call_groups as u64 * size_handle_aligned),
     };
-    let call_addr = vk::StridedDeviceAddressRegionKHR {
-        device_address: 0,
-        stride: 0,
-        size: 0,
-    };
+
     // now upload everything to a buffer
     let mm = instance.allocator();
     let cpu_buf = mm.create_buffer(
@@ -872,6 +904,7 @@ fn build_sbt<T: Instance>(
     rgen_addr.device_address += base_addr;
     miss_addr.device_address += base_addr;
     hit_addr.device_address += base_addr;
+    call_addr.device_address += base_addr;
     ShaderBindingTable {
         rgen_addr,
         miss_addr,

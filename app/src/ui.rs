@@ -672,6 +672,9 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
                         }
                     }
                     LightType::SUN => {
+                        if imgui::InputFloat3::new(ui, "Position", new_pos.as_mut()).build() {
+                            edited = true;
+                        }
                         if imgui::InputFloat3::new(ui, "Direction", new_dir.as_mut()).build() {
                             edited = true;
                         }
@@ -682,7 +685,7 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
                 } else if edited {
                     let new_light = match new_type {
                         LightType::OMNI => Light::new_omni(new_name, new_color, new_pos),
-                        LightType::SUN => Light::new_sun(new_name, new_color, new_dir),
+                        LightType::SUN => Light::new_sun(new_name, new_color, new_pos, new_dir),
                     };
                     update = Some((selected, new_light));
                 }

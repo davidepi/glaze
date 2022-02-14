@@ -81,6 +81,16 @@ Spectrum mul(Spectrum sp0, Spectrum sp1)
   return res;
 }
 
+Spectrum div(Spectrum sp, float f)
+{
+  Spectrum res;
+  res.col0 = sp.col0 / f;
+  res.col1 = sp.col1 / f;
+  res.col2 = sp.col2 / f;
+  res.col3 = sp.col3 / f;
+  return res;
+}
+
 Spectrum from_surface_color(vec3 rgb)
 {
   Spectrum white = Spectrum(

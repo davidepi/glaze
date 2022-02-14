@@ -1,0 +1,24 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+#include "raytrace_commons.glsl"
+
+layout(location = 0)  callableDataInEXT SampledLight sam;
+
+layout(std430, set=1, binding=5) readonly buffer lightBuffer {
+  RTLight lights[];
+} LightBuffer;
+
+void main()
+{
+  RTLight light = LightBuffer.lights[sam.light_index];
+  sam.wiW = normalize(light.pos.xyz - sam.position);
+  float distance2 =
+    (light.pos.x-sam.position.x)*(light.pos.x-sam.position.x)+
+    (light.pos.y-sam.position.y)*(light.pos.y-sam.position.y)+
+    (light.pos.z-sam.position.z)*(light.pos.z-sam.position.z);
+  sam.distance = sqrt(distance2);
+  sam.pdf = 1.0;
+  Spectrum c = Spectrum(light.col0, light.col1, light.col2, light.col3);
+  sam.emission = div(c, distance2);
+}

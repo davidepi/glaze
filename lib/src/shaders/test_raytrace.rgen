@@ -4,6 +4,8 @@
 #include "raytrace_commons.glsl"
 
 layout(location=0) rayPayloadEXT HitPoint hit;
+layout(location=1) callableDataEXT SampledLight sam;
+
 layout(push_constant) uniform readonly pc {
   mat4 camera2world;
   mat4 screen2camera;
@@ -11,7 +13,8 @@ layout(push_constant) uniform readonly pc {
 layout(set=0, binding=0) uniform readonly frameData {
   uint seed;
   uint lights_no;
-  vec2 sample_shift;
+  vec2 pixel_offset;
+  float scene_radius;
   bool new_frame;
 }FrameData;
 layout(set=0, binding=1, rgba32f) uniform image2D accumulate_image;
@@ -47,7 +50,7 @@ void main()
     imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(0.0, 0.0, 0.0, 1.0));
     return;
   }
-  const vec2 pixel = gl_LaunchIDEXT.xy + FrameData.sample_shift;
+  const vec2 pixel = gl_LaunchIDEXT.xy + FrameData.pixel_offset;
   const vec2 uv = pixel / gl_LaunchSizeEXT.xy;
   const vec2 ndc = vec2(-1.0)+2.0*uv;
   vec3 origin = ray_origin();
@@ -67,8 +70,8 @@ void main()
   const uint sbtRecordOffset = 0;
   const uint sbtRecordStride = 0;
   const uint missIndex = 0;
-  const float tmin = 0.001f;
-  const float tmax = 10000.0f;
+  const float tmin = 0.0;
+  const float tmax = 1.0/0.0;
   const int payloadLocation = 0;
 
   traceRayEXT(scene,

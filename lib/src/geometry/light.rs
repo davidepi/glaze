@@ -26,6 +26,13 @@ impl LightType {
             LightType::SUN => "Sun",
         }
     }
+
+    pub fn sbt_callable_index(self) -> u32 {
+        match self {
+            LightType::OMNI => 0,
+            LightType::SUN => 1,
+        }
+    }
 }
 
 impl Light {
