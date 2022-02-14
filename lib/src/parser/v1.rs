@@ -269,7 +269,7 @@ impl ContentV1 {
         if let Some(meta) = meta {
             chunks.push((
                 ChunkID::Meta,
-                Chunk::encode_dynamic(from_ref(meta), meta_to_bytes),
+                Chunk::encode_fixed(from_ref(meta), meta_to_bytes),
             ));
         }
         ContentV1::write_chunks(&mut fout, &chunks)
@@ -351,7 +351,7 @@ impl ParsedScene for ContentV1 {
     fn meta(&mut self) -> Result<Meta, Error> {
         match self
             .read_chunk(ChunkID::Meta)?
-            .decode_dynamic(bytes_to_meta, "Meta")
+            .decode_fixed(bytes_to_meta, "Meta")
         {
             Ok(mut m) => Ok(m.pop().unwrap()),
             Err(e) => Err(e),
@@ -371,7 +371,7 @@ impl ParsedScene for ContentV1 {
         let transforms = self.read_chunk(ChunkID::Transform)?;
         let instances = self.read_chunk(ChunkID::Instance)?;
         let meta = if let Some(meta) = meta {
-            Chunk::encode_dynamic(from_ref(meta), meta_to_bytes)
+            Chunk::encode_fixed(from_ref(meta), meta_to_bytes)
         } else {
             self.read_chunk(ChunkID::Meta)?
         };
@@ -1010,33 +1010,14 @@ fn bytes_to_light(data: &[u8]) -> Light {
 }
 
 /// Converts a Light to a vector of bytes.
-fn meta_to_bytes(meta: &Meta) -> Vec<u8> {
-    let ints = meta.ints.len();
-    let floats = meta.floats.len();
-    let mut retval = Vec::with_capacity(8 + ints * 4 + floats * 4);
-    retval.extend(u32::to_le_bytes(ints as u32));
-    retval.extend(u32::to_le_bytes(floats as u32));
-    retval.extend(meta.ints.iter().copied().flat_map(u32::to_le_bytes));
-    retval.extend(meta.floats.iter().copied().flat_map(f32::to_le_bytes));
-    retval
+fn meta_to_bytes(meta: &Meta) -> [u8; 4] {
+    f32::to_le_bytes(meta.scene_radius)
 }
 
 /// Converts a vector of bytes to the Meta struct.
-fn bytes_to_meta(data: &[u8]) -> Meta {
-    let mut index = 0;
-    let ints_no = u32::from_le_bytes(data[index..index + 4].try_into().unwrap()) as usize;
-    let floats_no = u32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()) as usize;
-    index += 8;
-    let ints = data[index..index + ints_no * 4]
-        .chunks_exact(4)
-        .map(|x| u32::from_le_bytes(x.try_into().unwrap()))
-        .collect();
-    index += ints_no * 4;
-    let floats = data[index..index + floats_no * 4]
-        .chunks_exact(4)
-        .map(|x| f32::from_le_bytes(x.try_into().unwrap()))
-        .collect();
-    Meta { ints, floats }
+fn bytes_to_meta(data: [u8; 4]) -> Meta {
+    let scene_radius = f32::from_le_bytes(data);
+    Meta { scene_radius }
 }
 
 #[cfg(test)]
@@ -1285,11 +1266,8 @@ mod tests {
 
     fn gen_meta(seed: u64) -> Meta {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
-        let ints_no = rng.gen_range(0..1000);
-        let floats_no = rng.gen_range(0..1000);
-        let ints = (0..ints_no).map(|_| rng.gen()).collect();
-        let floats = (0..floats_no).map(|_| rng.gen()).collect();
-        Meta { ints, floats }
+        let scene_radius = rng.gen();
+        Meta { scene_radius }
     }
 
     #[test]
@@ -1376,7 +1354,7 @@ mod tests {
     fn encode_decode_meta() {
         let meta = gen_meta(0x546DB57AB5589A5A);
         let data = meta_to_bytes(&meta);
-        let decoded = bytes_to_meta(&data);
+        let decoded = bytes_to_meta(data);
         assert_eq!(decoded, meta);
     }
 
@@ -1864,31 +1842,6 @@ mod tests {
         let mut read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.lights().is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn corrupted_meta() -> Result<(), std::io::Error> {
-        let meta = gen_meta(0x0550B0A6D89B03E6);
-        let dir = tempdir()?;
-        let file = dir.path().join("corrupted_meta.bin");
-        Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
-            .with_metadata(&meta)
-            .serialize()?;
-        let mut read_ok = parse(file.as_path()).unwrap();
-        assert!(read_ok.lights().is_ok());
-        {
-            //corrupt file
-            let mut file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(file.as_path())?;
-            file.seek(SeekFrom::Start(1000))?;
-            file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
-        }
-        let mut read_corrupted = parse(file.as_path()).unwrap();
-        remove_file(file.as_path())?;
-        assert!(read_corrupted.meta().is_err());
         Ok(())
     }
 

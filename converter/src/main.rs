@@ -1,10 +1,14 @@
 #![allow(clippy::type_complexity)]
-use cgmath::{Matrix, Matrix4, Point2, Point3, SquareMatrix, Vector3 as Vec3};
+use cgmath::{
+    Matrix, Matrix4, MetricSpace, Point2, Point3, SquareMatrix, Transform as CgmathTransform,
+    Vector3 as Vec3,
+};
 use clap::{App, Arg};
 use console::style;
 use glaze::{
-    converted_file, parse, Camera, Material, Mesh, MeshInstance, ParserVersion, PerspectiveCam,
-    Serializer, Texture, TextureFormat, TextureInfo, Transform, Vertex, DEFAULT_TEXTURE_ID,
+    converted_file, parse, Camera, ColorRGB, Light, Material, Mesh, MeshInstance, Meta,
+    ParserVersion, PerspectiveCam, Serializer, Spectrum, Texture, TextureFormat, TextureInfo,
+    Transform, Vertex, DEFAULT_TEXTURE_ID,
 };
 use image::io::Reader as ImageReader;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -28,6 +32,8 @@ struct TempScene {
     materials: Vec<Material>,
     transforms: Vec<Transform>,
     instances: Vec<MeshInstance>,
+    lights: Vec<Light>,
+    meta: Meta,
 }
 
 macro_rules! error(
@@ -132,6 +138,9 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
     let camera_data = scene.cameras;
     let camera_pb = mpb.add(ProgressBar::new(1));
     camera_pb.set_style(style.clone());
+    let light_data = scene.lights;
+    let light_pb = mpb.add(ProgressBar::new(1));
+    light_pb.set_style(style.clone());
     let mesh_data = scene.meshes;
     let mesh_pb = mpb.add(ProgressBar::new(1));
     mesh_pb.set_style(style.clone());
@@ -140,9 +149,11 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
     mat_pb.set_style(style.clone());
     let path = original_path.to_string();
     let camera_thread = thread::spawn(move || convert_cameras(&camera_data, camera_pb));
+    let lights_thread = thread::spawn(move || convert_lights(&light_data, light_pb));
     let material_thread = thread::spawn(move || convert_materials(&material_data, mat_pb, &path));
     let mesh_thread = thread::spawn(move || convert_meshes(&mesh_data, mesh_pb));
     let cameras = camera_thread.join().unwrap();
+    let lights = lights_thread.join().unwrap();
     let (materials, textures) = material_thread.join().unwrap()?;
     let mm_pb = mpb.add(ProgressBar::new(1));
     mm_pb.set_style(style);
@@ -163,6 +174,8 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
             .collect();
         (vec![Transform::identity()], instances)
     };
+    let scene_radius = calc_scene_radius(&vertices, &meshes, &instances, &transforms);
+    let meta = Meta { scene_radius };
     mpb.clear().ok();
     Ok(TempScene {
         vertices,
@@ -172,7 +185,34 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
         materials,
         transforms,
         instances,
+        lights,
+        meta,
     })
+}
+
+fn calc_scene_radius(
+    verts: &[Vertex],
+    meshes: &[Mesh],
+    instns: &[MeshInstance],
+    trans: &[Transform],
+) -> f32 {
+    let mut pmin = Point3::new(f32::MAX, f32::MAX, f32::MAX);
+    let mut pmax = Point3::new(f32::MIN, f32::MIN, f32::MIN);
+    for instance in instns {
+        let mesh = &meshes[instance.mesh_id as usize];
+        let tran = &trans[instance.transform_id as usize];
+        for index in &mesh.indices {
+            let vert = &verts[*index as usize];
+            let vert_world = tran.inner().transform_point(vert.vv);
+            pmin.x = f32::min(pmin.x, vert_world.x);
+            pmin.y = f32::min(pmin.y, vert_world.y);
+            pmin.z = f32::min(pmin.z, vert_world.z);
+            pmax.x = f32::max(pmax.x, vert_world.x);
+            pmax.y = f32::max(pmax.y, vert_world.y);
+            pmax.z = f32::max(pmax.z, vert_world.z);
+        }
+    }
+    pmax.distance(pmin) / 2.0
 }
 
 fn russimp_to_cgmath_matrix(mat: russimp::Matrix4x4) -> Matrix4<f32> {
@@ -236,6 +276,46 @@ fn gen_mipmaps(mut textures: Vec<Texture>, pb: ProgressBar) -> Vec<Texture> {
         pb.inc(1);
     }
     textures
+}
+
+fn convert_lights(lights: &[russimp::light::Light], pb: ProgressBar) -> Vec<Light> {
+    let effort = lights.len();
+    pb.set_length(effort as u64);
+    pb.set_message("Converting lights");
+    let mut retval_lights = Vec::with_capacity(effort);
+    for light in lights {
+        let color = ColorRGB::new(
+            light.color_diffuse.r,
+            light.color_diffuse.g,
+            light.color_diffuse.b,
+        );
+        let spectrum = Spectrum::from_rgb(color, true);
+        let position = russimp_vec_to_point(light.pos);
+        retval_lights.push(match light.light_source_type {
+            russimp::light::LightSourceType::Point => {
+                Light::new_omni(light.name.clone(), spectrum, position)
+            }
+            russimp::light::LightSourceType::Directional => Light::new_sun(
+                light.name.clone(),
+                spectrum,
+                russimp_vec_to_point(light.pos),
+                russimp_vec_to_vec(light.direction),
+            ),
+            // TODO: more gentle error handling
+            _ => panic!("Unsupported light type"),
+        });
+        pb.inc(1);
+    }
+    pb.finish();
+    retval_lights
+}
+
+fn russimp_vec_to_vec(vec: russimp::Vector3D) -> Vec3<f32> {
+    Vec3::new(vec.x, vec.y, vec.z)
+}
+
+fn russimp_vec_to_point(vec: russimp::Vector3D) -> Point3<f32> {
+    Point3::new(vec.x, vec.y, vec.z)
 }
 
 fn convert_meshes(
@@ -503,6 +583,7 @@ fn write_output(
     version: ParserVersion,
     output: &str,
 ) -> Result<(), std::io::Error> {
+    println!("radius:{}", scene.meta.scene_radius);
     Serializer::new(output, version)
         .with_vertices(&scene.vertices)
         .with_meshes(&scene.meshes)
@@ -511,6 +592,8 @@ fn write_output(
         .with_cameras(&scene.cameras)
         .with_textures(&scene.textures)
         .with_materials(&scene.materials)
+        .with_lights(&scene.lights)
+        .with_metadata(&scene.meta)
         .serialize()
 }
 

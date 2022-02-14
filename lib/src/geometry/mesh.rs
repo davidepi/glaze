@@ -83,6 +83,10 @@ impl Transform {
         let matrix: [f32; 12] = floats[..12].try_into().unwrap();
         ash::vk::TransformMatrixKHR { matrix }
     }
+
+    pub fn inner(&self) -> &Matrix4<f32> {
+        &self.0
+    }
 }
 
 impl From<Matrix4<f32>> for Transform {

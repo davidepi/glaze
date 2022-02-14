@@ -269,12 +269,10 @@ pub fn converted_file<P: AsRef<Path>>(file: P) -> bool {
     }
 }
 
-/// Struct to store generic data inside the scene format.
-/// Handling the indices is responsibility of the user.
+/// Struct to store additional information for the scene that does not fit anywhere else.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Meta {
-    pub ints: Vec<u32>,
-    pub floats: Vec<f32>,
+    pub scene_radius: f32,
 }
 
 /// Trait used for accessing the content of the parsed file and updating them.
