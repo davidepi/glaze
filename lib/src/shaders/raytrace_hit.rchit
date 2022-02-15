@@ -60,6 +60,7 @@ void main()
   hit.normal = v0.normal * barycentric.x + v1.normal * barycentric.y + v2.normal * barycentric.z;
   hit.uv = v0.tcoord * barycentric.x + v1.tcoord * barycentric.y + v2.tcoord * barycentric.z;
   hit.distance = gl_HitTEXT;
+  hit.material_index = instance.mat_id;
 
   // partial derivatives dpdu and dpdv
   vec2 duv02 = v0.tcoord - v2.tcoord;
@@ -70,4 +71,5 @@ void main()
   vec3 dp12 = v1.position - v2.position;
   hit.dpdu = (+duv12.y * dp02 - duv02.y * dp12) * invdet;
   hit.dpdv = (-duv12.x * dp02 + duv02.x * dp12) * invdet;
+  hit.miss = false;
 }

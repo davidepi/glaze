@@ -11,7 +11,9 @@ struct HitPoint
   vec3 dpdu;
   vec3 dpdv;
   vec2 uv;
+  uint material_index;
   float distance;
+  bool miss;
 };
 
 struct SampledLight

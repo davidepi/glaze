@@ -96,7 +96,7 @@ impl Light {
 
     pub fn direction(&self) -> Vec3<f32> {
         match self {
-            Light::Omni(_) => Vec3::<f32>::new(0.0, 0.0, 0.0),
+            Light::Omni(_) => Vec3::<f32>::new(0.0, -1.0, 0.0),
             Light::Sun(l) => l.direction,
         }
     }

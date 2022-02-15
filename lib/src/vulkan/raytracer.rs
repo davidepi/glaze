@@ -792,7 +792,12 @@ fn build_sbt<T: Instance>(
     // load two miss groups: normal ray and shadow ray miss
     let miss_offset = data.len() as u64;
     let miss_groups = unsafe {
-        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 1, 2, size_handle as usize)
+        rploader.get_ray_tracing_shader_group_handles(
+            pipeline.pipeline,
+            1,
+            2,
+            2 * size_handle as usize,
+        )
     }
     .expect("Failed to retrieve shader handle");
     for miss_group in miss_groups.chunks_exact(size_handle as usize) {
@@ -829,12 +834,13 @@ fn build_sbt<T: Instance>(
     // load multiple callables. Retrieve them all at once
     let call_offset = data.len() as u64;
     let callables_base_index = 4;
+    let total_call = SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE + SBT_MATERIAL_TYPES * SBT_MATERIAL_STRIDE;
     let callables_group = unsafe {
         rploader.get_ray_tracing_shader_group_handles(
             pipeline.pipeline,
             callables_base_index,
-            (SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE + SBT_MATERIAL_TYPES * SBT_MATERIAL_STRIDE) as u32,
-            size_handle as usize,
+            total_call as u32,
+            total_call * size_handle as usize,
         )
     }
     .expect("Failed to retrieve shader handle");
@@ -850,9 +856,7 @@ fn build_sbt<T: Instance>(
     let mut call_addr = vk::StridedDeviceAddressRegionKHR {
         device_address: call_offset,
         stride: size_handle,
-        size: (SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE + SBT_MATERIAL_TYPES * SBT_MATERIAL_STRIDE)
-            as u64
-            * size_handle_aligned,
+        size: total_call as u64 * size_handle_aligned,
     };
 
     // now upload everything to a buffer

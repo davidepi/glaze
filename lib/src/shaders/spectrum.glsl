@@ -6,6 +6,15 @@ struct Spectrum
   vec4 col3;
 };
 
+bool is_black(Spectrum sp)
+{
+  vec4 black = vec4(0.0);
+  return sp.col0 == black &&
+    sp.col1 == black &&
+    sp.col2 == black &&
+    sp.col3 == black;
+}
+
 float luminance(Spectrum sp)
 {
   vec4 y0 = vec4(0.0013635, 0.0104404, 0.0335974, 0.0778085);
@@ -53,10 +62,10 @@ vec3 rgb(vec3 xyz)
 Spectrum add(Spectrum sp0, Spectrum sp1)
 {
   Spectrum res;
-  res.col0 = sp0.col0 * sp1.col0;
-  res.col1 = sp0.col1 * sp1.col1;
-  res.col2 = sp0.col2 * sp1.col2;
-  res.col3 = sp0.col3 * sp1.col3;
+  res.col0 = sp0.col0 + sp1.col0;
+  res.col1 = sp0.col1 + sp1.col1;
+  res.col2 = sp0.col2 + sp1.col2;
+  res.col3 = sp0.col3 + sp1.col3;
   return res;
 
 }
@@ -132,7 +141,7 @@ Spectrum from_surface_color(vec3 rgb)
   if(rgb.r <= rgb.g && rgb.r <= rgb.b)
   {
     res = mul(white, rgb.r);
-    if (rgb.g < rgb.b)
+    if (rgb.g <= rgb.b)
     {
       res = add(res, mul(cyan, (rgb.g - rgb.r)));
       res = add(res, mul(blue, (rgb.b - rgb.g)));
@@ -171,5 +180,5 @@ Spectrum from_surface_color(vec3 rgb)
       res = add(res, mul(red, (rgb.r - rgb.g)));
     }
   }
-  return res;
+  return mul(res, 0.94);
 }

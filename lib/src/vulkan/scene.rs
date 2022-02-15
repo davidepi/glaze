@@ -1208,7 +1208,11 @@ fn load_raytrace_lights_to_gpu(
         .map(|l| {
             let w = l.emission().wavelength;
             let pos = l.position();
-            let dir = l.direction();
+            let mut dir = l.direction();
+            if dir.x == 0.0 && dir.y == 0.0 && dir.z == 0.0 {
+                log::warn!("zero length vector was changed to (1.0, 0.0, 0.0)");
+                dir.y = 1.0;
+            }
             RTLight {
                 color0: [w[0], w[1], w[2], w[3]],
                 color1: [w[4], w[5], w[6], w[7]],
@@ -1333,12 +1337,12 @@ fn build_raytrace_descriptor(
         .bind_buffer(
             material_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CALLABLE_KHR,
+            vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .bind_buffer(
             light_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CALLABLE_KHR,
+            vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .bind_image_array(
             &textures_memory,

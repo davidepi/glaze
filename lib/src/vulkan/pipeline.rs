@@ -335,7 +335,7 @@ pub fn build_raytracing_pipeline(
     device: Arc<ash::Device>,
     set_layout: &[vk::DescriptorSetLayout],
 ) -> Pipeline {
-    let rgen = include_shader!("test_raytrace.rgen");
+    let rgen = include_shader!("path_trace.rgen");
     let miss = include_shader!("raytrace_miss.rmiss");
     let miss_shadow = include_shader!("occlusion_tester.rmiss");
     let main_cstr = CString::new("main".as_bytes()).unwrap();
