@@ -337,6 +337,7 @@ pub fn build_raytracing_pipeline(
 ) -> Pipeline {
     let rgen = include_shader!("test_raytrace.rgen");
     let miss = include_shader!("raytrace_miss.rmiss");
+    let miss_shadow = include_shader!("occlusion_tester.rmiss");
     let main_cstr = CString::new("main".as_bytes()).unwrap();
     let create_ci =
         |shader: &[u8], stage: vk::ShaderStageFlags| vk::PipelineShaderStageCreateInfo {
@@ -353,6 +354,7 @@ pub fn build_raytracing_pipeline(
     let mut shader_stages = vec![
         create_ci(rgen, vk::ShaderStageFlags::RAYGEN_KHR),
         create_ci(miss, vk::ShaderStageFlags::MISS_KHR),
+        create_ci(miss_shadow, vk::ShaderStageFlags::MISS_KHR),
     ];
     let mut shader_groups = vec![
         vk::RayTracingShaderGroupCreateInfoKHR {
@@ -375,6 +377,16 @@ pub fn build_raytracing_pipeline(
             intersection_shader: vk::SHADER_UNUSED_KHR,
             p_shader_group_capture_replay_handle: ptr::null(),
         },
+        vk::RayTracingShaderGroupCreateInfoKHR {
+            s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+            p_next: ptr::null(),
+            ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+            general_shader: 2,
+            closest_hit_shader: vk::SHADER_UNUSED_KHR,
+            any_hit_shader: vk::SHADER_UNUSED_KHR,
+            intersection_shader: vk::SHADER_UNUSED_KHR,
+            p_shader_group_capture_replay_handle: ptr::null(),
+        },
     ];
     let chit = include_shader!("raytrace_hit.rchit");
     shader_stages.push(create_ci(chit, vk::ShaderStageFlags::CLOSEST_HIT_KHR));
@@ -383,7 +395,7 @@ pub fn build_raytracing_pipeline(
         p_next: ptr::null(),
         ty: vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP,
         general_shader: vk::SHADER_UNUSED_KHR,
-        closest_hit_shader: (shader_stages.len() - 1) as u32,
+        closest_hit_shader: 3,
         any_hit_shader: vk::SHADER_UNUSED_KHR,
         intersection_shader: vk::SHADER_UNUSED_KHR,
         p_shader_group_capture_replay_handle: ptr::null(),

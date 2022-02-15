@@ -22,6 +22,7 @@ use cgmath::{SquareMatrix, Vector2 as Vec2};
 use gpu_allocator::MemoryLocation;
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro128PlusPlus;
+use std::iter::repeat;
 use std::ptr;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
@@ -780,7 +781,7 @@ fn build_sbt<T: Instance>(
     .expect("Failed to retrieve shader handle");
     data.extend_from_slice(&rgen_group);
     let missing_bytes = padding(data.len() as u64, align_group) as usize;
-    data.extend_from_slice(&vec![0; missing_bytes]);
+    data.extend(repeat(0).take(missing_bytes));
     // in the NVIDIA example it's written that stride and size for rgen must be the same
     let mut rgen_addr = vk::StridedDeviceAddressRegionKHR {
         device_address: 0,
@@ -788,48 +789,46 @@ fn build_sbt<T: Instance>(
         size: roundup_alignment(align_handle, align_group),
     };
 
-    // load single miss group
+    // load two miss groups: normal ray and shadow ray miss
     let miss_offset = data.len() as u64;
-    let miss_group = unsafe {
-        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 1, 1, size_handle as usize)
+    let miss_groups = unsafe {
+        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 1, 2, size_handle as usize)
     }
     .expect("Failed to retrieve shader handle");
-    data.extend_from_slice(&miss_group);
+    for miss_group in miss_groups.chunks_exact(size_handle as usize) {
+        data.extend_from_slice(miss_group);
+        // ensures every member is aligned properly
+        if align_handle != size_handle as u64 {
+            let missing_bytes = padding(data.len() as u64, align_handle) as usize;
+            data.extend(repeat(0).take(missing_bytes));
+        }
+    }
     let missing_bytes = padding(data.len() as u64, align_group) as usize;
-    data.extend_from_slice(&vec![0; missing_bytes]);
+    data.extend(repeat(0).take(missing_bytes));
     let mut miss_addr = vk::StridedDeviceAddressRegionKHR {
         device_address: miss_offset,
         stride: size_handle,
-        size: size_handle_aligned,
+        size: 2 * size_handle_aligned,
     };
 
     // load single hit group
-    let hit_group_base_index = 2; // 0 is raygen and 1 is miss
-    let hit_groups = 1; // additional care is needed in alignment for more than 1 entry
-                        // each entry has to be aligned with align_handle
-                        // check the inner loop with the callable shaders
     let hit_offset = data.len() as u64;
     let shader_group = unsafe {
-        rploader.get_ray_tracing_shader_group_handles(
-            pipeline.pipeline,
-            hit_group_base_index,
-            1,
-            size_handle as usize,
-        )
+        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 3, 1, size_handle as usize)
     }
     .expect("Failed to retrieve shader handle");
     data.extend_from_slice(&shader_group);
     let missing_bytes = padding(data.len() as u64, align_group) as usize;
-    data.extend_from_slice(&vec![0; missing_bytes]);
+    data.extend(repeat(0).take(missing_bytes));
     let mut hit_addr = vk::StridedDeviceAddressRegionKHR {
         device_address: hit_offset,
         stride: size_handle,
-        size: (hit_groups as u64 * size_handle_aligned),
+        size: size_handle_aligned,
     };
 
     // load multiple callables. Retrieve them all at once
     let call_offset = data.len() as u64;
-    let callables_base_index = hit_group_base_index + hit_groups;
+    let callables_base_index = 4;
     let callables_group = unsafe {
         rploader.get_ray_tracing_shader_group_handles(
             pipeline.pipeline,
@@ -841,14 +840,13 @@ fn build_sbt<T: Instance>(
     .expect("Failed to retrieve shader handle");
     for callable in callables_group.chunks_exact(size_handle as usize) {
         data.extend_from_slice(callable);
-        // ensures every member is aligned properly
         if align_handle != size_handle as u64 {
             let missing_bytes = padding(data.len() as u64, align_handle) as usize;
-            data.extend_from_slice(&vec![0; missing_bytes]);
+            data.extend(repeat(0).take(missing_bytes));
         }
     }
     let missing_bytes = padding(data.len() as u64, align_group) as usize;
-    data.extend_from_slice(&vec![0; missing_bytes]);
+    data.extend(repeat(0).take(missing_bytes));
     let mut call_addr = vk::StridedDeviceAddressRegionKHR {
         device_address: call_offset,
         stride: size_handle,
