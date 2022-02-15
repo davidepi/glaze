@@ -1,4 +1,8 @@
 #[cfg(feature = "vulkan")]
+use crate::geometry::{SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
+#[cfg(feature = "vulkan")]
+use crate::materials::{SBT_MATERIAL_STRIDE, SBT_MATERIAL_TYPES};
+#[cfg(feature = "vulkan")]
 use crate::vulkan::PipelineBuilder;
 use std::error::Error;
 
@@ -18,7 +22,10 @@ macro_rules! include_shader {
 pub enum ShaderMat {
     /// Flat shading.
     /// Light does not affect the material and the diffuse color is shown unaltered.
+    /// In raytrace mode, this has the same effect of "Lambert"
     FLAT = 0,
+    /// Lambert BRDF for raytracing.
+    LAMBERT = 1,
     /// Flat shading.
     /// Internal version, used for two-sided polygons and polygons with opacity maps.
     /// This version is automatically assigned by the engine and **SHOULD NOT** be used.
@@ -26,12 +33,13 @@ pub enum ShaderMat {
 }
 
 impl ShaderMat {
-    pub const DEFAULT_SHADER: Self = ShaderMat::FLAT;
+    pub const DEFAULT_SHADER: Self = ShaderMat::LAMBERT;
 
     /// Returns each shader's name as a string.
     pub fn name(&self) -> &'static str {
         match self {
             ShaderMat::FLAT | ShaderMat::INTERNAL_FLAT_2SIDED => "Flat",
+            ShaderMat::LAMBERT => "Lambert",
         }
     }
 
@@ -41,6 +49,7 @@ impl ShaderMat {
     pub fn from_id(id: u8) -> Result<Self, Box<dyn Error>> {
         match id {
             0 => Ok(ShaderMat::FLAT),
+            1 => Ok(ShaderMat::LAMBERT),
             _ => Err(format!("Unknown shader id: {}", id).into()),
         }
     }
@@ -49,31 +58,49 @@ impl ShaderMat {
     pub const fn id(&self) -> u8 {
         match self {
             ShaderMat::FLAT => 0,
+            ShaderMat::LAMBERT => 1,
             _ => panic!("Internal shaders have no ID assigned"),
         }
     }
 
     /// Iterates all the possible assignable shaders.
     /// Shaders used internally by the engine are skipped.
-    pub fn all_values() -> [ShaderMat; 1] {
-        [ShaderMat::FLAT]
+    pub fn all_values() -> [ShaderMat; 2] {
+        [ShaderMat::FLAT, ShaderMat::LAMBERT]
     }
 
     /// Returns the a builder useful to create the pipeline for the shader.
-    #[cfg(feature = "vulkan")]
-    pub fn build_pipeline(&self) -> PipelineBuilder {
+    #[cfg(feature = "vulkan-interactive")]
+    pub(crate) fn build_viewport_pipeline(&self) -> PipelineBuilder {
         match self {
-            ShaderMat::FLAT => pipelines::flat_pipeline(),
             ShaderMat::INTERNAL_FLAT_2SIDED => pipelines::flat_2s_pipeline(),
+            _ => pipelines::flat_pipeline(),
         }
     }
 
-    /// Consumes a shader and returns the its internal version supporting two-sided polygons.
-    pub fn two_sided(self) -> Self {
-        match self {
-            ShaderMat::FLAT => ShaderMat::INTERNAL_FLAT_2SIDED,
-            ShaderMat::INTERNAL_FLAT_2SIDED => ShaderMat::INTERNAL_FLAT_2SIDED,
-        }
+    /// Consumes a shader and returns its internal version supporting two-sided polygons.
+    #[cfg(feature = "vulkan-interactive")]
+    pub(crate) fn two_sided_viewport(self) -> Self {
+        ShaderMat::INTERNAL_FLAT_2SIDED
+    }
+
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn callable_shaders() -> [Vec<u8>; SBT_MATERIAL_TYPES * SBT_MATERIAL_STRIDE] {
+        [
+            include_shader!("mat_lambert_value.rcall").to_vec(),
+            include_shader!("mat_lambert_sample_value.rcall").to_vec(),
+            include_shader!("mat_lambert_pdf.rcall").to_vec(),
+        ]
+    }
+
+    #[cfg(feature = "vulkan")]
+    pub(crate) fn sbt_callable_index(&self) -> u32 {
+        let base_index = SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE; // lights before mats
+        let shader_index = match self {
+            ShaderMat::FLAT | ShaderMat::LAMBERT => 0,
+            ShaderMat::INTERNAL_FLAT_2SIDED => panic!("This shader should not appear in the sbt"),
+        };
+        (base_index + shader_index * SBT_MATERIAL_STRIDE) as u32
     }
 }
 
@@ -85,9 +112,10 @@ impl Default for ShaderMat {
 
 impl From<u8> for ShaderMat {
     fn from(num: u8) -> Self {
-        match num {
-            0 => ShaderMat::FLAT,
-            _ => Self::DEFAULT_SHADER, // use default shader
+        if let Ok(shader) = ShaderMat::from_id(num) {
+            shader
+        } else {
+            Self::DEFAULT_SHADER
         }
     }
 }
@@ -98,7 +126,7 @@ impl From<ShaderMat> for u8 {
     }
 }
 
-#[cfg(feature = "vulkan")]
+#[cfg(feature = "vulkan-interactive")]
 mod pipelines {
     use crate::PipelineBuilder;
     use ash::vk;

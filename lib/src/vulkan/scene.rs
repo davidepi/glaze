@@ -254,7 +254,7 @@ impl VulkanScene {
         );
         // build the new shader if not existing
         self.pipelines.entry(new_shader).or_insert_with(|| {
-            new.shader.build_pipeline().build(
+            new.shader.build_viewport_pipeline().build(
                 device.logical_clone(),
                 rpass,
                 render_size,
@@ -280,7 +280,7 @@ impl VulkanScene {
         for (shader, desc) in &self.materials_desc {
             let device = device.clone();
             self.pipelines.entry(*shader).or_insert_with(|| {
-                shader.build_pipeline().build(
+                shader.build_viewport_pipeline().build(
                     device,
                     renderpass,
                     render_size,
@@ -604,7 +604,7 @@ fn build_mat_desc_set(
             vk::ShaderStageFlags::FRAGMENT,
         );
     if material.opacity != 0 {
-        shader = material.shader.two_sided(); // use a two-sided shader
+        shader = material.shader.two_sided_viewport(); // use a two-sided shader
         let opacity = textures.get(material.opacity as usize).unwrap_or(dflt_tex);
         descriptor = descriptor.bind_image(
             &opacity.image,
@@ -883,6 +883,8 @@ struct RTMaterial {
     diffuse_mul: [f32; 4],
     diffuse: u32,
     opacity: u32,
+    // callable shader index for the bsdf_value
+    bsdf_index: u32,
 }
 
 #[repr(C, align(16))]
@@ -1181,6 +1183,7 @@ fn load_raytrace_materials_to_gpu(
             diffuse_mul: col_int_to_f32(mat.diffuse_mul),
             diffuse: mat.diffuse as u32,
             opacity: mat.opacity as u32,
+            bsdf_index: mat.shader.sbt_callable_index(),
         })
         .collect::<Vec<_>>();
     upload_buffer(
@@ -1330,7 +1333,7 @@ fn build_raytrace_descriptor(
         .bind_buffer(
             material_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+            vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .bind_buffer(
             light_buffer,
@@ -1341,7 +1344,7 @@ fn build_raytrace_descriptor(
             &textures_memory,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             sampler,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+            vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .build()
 }

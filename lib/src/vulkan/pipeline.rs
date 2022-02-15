@@ -1,5 +1,5 @@
 use crate::geometry::Vertex;
-use crate::{include_shader, LightType};
+use crate::{include_shader, LightType, ShaderMat};
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
 use cgmath::Matrix4;
@@ -388,12 +388,21 @@ pub fn build_raytracing_pipeline(
         intersection_shader: vk::SHADER_UNUSED_KHR,
         p_shader_group_capture_replay_handle: ptr::null(),
     });
-    for light in LightType::all() {
-        let light_rcall = match light {
-            LightType::OMNI => include_shader!("light_omni_sample_visible.rcall").to_vec(),
-            LightType::SUN => include_shader!("light_sun_sample_visible.rcall").to_vec(),
-        };
+    for light_rcall in LightType::callable_shaders() {
         shader_stages.push(create_ci(&light_rcall, vk::ShaderStageFlags::CALLABLE_KHR));
+        shader_groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
+            s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+            p_next: ptr::null(),
+            ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+            general_shader: (shader_stages.len() - 1) as u32,
+            closest_hit_shader: vk::SHADER_UNUSED_KHR,
+            any_hit_shader: vk::SHADER_UNUSED_KHR,
+            intersection_shader: vk::SHADER_UNUSED_KHR,
+            p_shader_group_capture_replay_handle: ptr::null(),
+        });
+    }
+    for mat_rcall in ShaderMat::callable_shaders() {
+        shader_stages.push(create_ci(&mat_rcall, vk::ShaderStageFlags::CALLABLE_KHR));
         shader_groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
             s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
             p_next: ptr::null(),

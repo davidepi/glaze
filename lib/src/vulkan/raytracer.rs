@@ -4,14 +4,15 @@ use super::instance::Instance;
 use super::memory::AllocatedBuffer;
 use super::scene::{padding, RayTraceScene};
 use super::{AllocatedImage, Descriptor, UnfinishedExecutions};
+use crate::geometry::{SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
+use crate::materials::{SBT_MATERIAL_STRIDE, SBT_MATERIAL_TYPES};
 use crate::vulkan::pipeline::build_raytracing_pipeline;
 #[cfg(feature = "vulkan-interactive")]
 use crate::PresentInstance;
 #[cfg(feature = "vulkan-interactive")]
 use crate::VulkanScene;
 use crate::{
-    Camera, LightType, ParsedScene, Pipeline, RayTraceInstance, TextureFormat, TextureInfo,
-    TextureLoaded,
+    Camera, ParsedScene, Pipeline, RayTraceInstance, TextureFormat, TextureInfo, TextureLoaded,
 };
 use ash::extensions::khr::{
     AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
@@ -826,24 +827,21 @@ fn build_sbt<T: Instance>(
         size: (hit_groups as u64 * size_handle_aligned),
     };
 
-    // load multiple callables. First the lights
+    // load multiple callables. Retrieve them all at once
     let call_offset = data.len() as u64;
-    let light_group_base_index = hit_group_base_index + hit_groups;
-    let lights_call_groups = LightType::all().len();
-    for group_id in 0..lights_call_groups {
-        // group_id is the number to be used to call the shader from another one
-        // light_group_base_index + group_id is the ID of the shader in the pipeline
-        let shader_group = unsafe {
-            rploader.get_ray_tracing_shader_group_handles(
-                pipeline.pipeline,
-                light_group_base_index + group_id as u32,
-                1,
-                size_handle as usize,
-            )
-        }
-        .expect("Failed to retrieve shader handle");
-        data.extend_from_slice(&shader_group);
-        // ensures every group member is aligned properly
+    let callables_base_index = hit_group_base_index + hit_groups;
+    let callables_group = unsafe {
+        rploader.get_ray_tracing_shader_group_handles(
+            pipeline.pipeline,
+            callables_base_index,
+            (SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE + SBT_MATERIAL_TYPES * SBT_MATERIAL_STRIDE) as u32,
+            size_handle as usize,
+        )
+    }
+    .expect("Failed to retrieve shader handle");
+    for callable in callables_group.chunks_exact(size_handle as usize) {
+        data.extend_from_slice(callable);
+        // ensures every member is aligned properly
         if align_handle != size_handle as u64 {
             let missing_bytes = padding(data.len() as u64, align_handle) as usize;
             data.extend_from_slice(&vec![0; missing_bytes]);
@@ -854,7 +852,9 @@ fn build_sbt<T: Instance>(
     let mut call_addr = vk::StridedDeviceAddressRegionKHR {
         device_address: call_offset,
         stride: size_handle,
-        size: (lights_call_groups as u64 * size_handle_aligned),
+        size: (SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE + SBT_MATERIAL_TYPES * SBT_MATERIAL_STRIDE)
+            as u64
+            * size_handle_aligned,
     };
 
     // now upload everything to a buffer

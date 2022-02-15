@@ -1,4 +1,5 @@
-use crate::Spectrum;
+use crate::geometry::{SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
+use crate::{include_shader, Spectrum};
 use cgmath::{Point3, Vector3 as Vec3};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,7 +17,7 @@ pub enum LightType {
 }
 
 impl LightType {
-    pub fn all() -> [Self; 2] {
+    pub fn all() -> [Self; SBT_LIGHT_TYPES] {
         [Self::OMNI, Self::SUN]
     }
 
@@ -25,6 +26,13 @@ impl LightType {
             LightType::OMNI => "Omni",
             LightType::SUN => "Sun",
         }
+    }
+
+    pub fn callable_shaders() -> [Vec<u8>; SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE] {
+        [
+            include_shader!("light_omni_sample_visible.rcall").to_vec(),
+            include_shader!("light_sun_sample_visible.rcall").to_vec(),
+        ]
     }
 
     pub fn sbt_callable_index(self) -> u32 {
