@@ -583,7 +583,6 @@ fn write_output(
     version: ParserVersion,
     output: &str,
 ) -> Result<(), std::io::Error> {
-    println!("radius:{}", scene.meta.scene_radius);
     Serializer::new(output, version)
         .with_vertices(&scene.vertices)
         .with_meshes(&scene.meshes)

@@ -28,6 +28,5 @@ struct RTLight
   vec4 col3;
   vec4 pos;
   vec4 dir;
-  float power;
   uint shader;
 };
