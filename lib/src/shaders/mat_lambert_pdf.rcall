@@ -9,7 +9,7 @@ layout(location = 0) callableDataInEXT BsdfPdf bsdf;
 float lambert_pdf(vec3 wo, vec3 wi)
 {
   float positive_or_zero = max(0.0, sign(wo.z * wi.z));
-  return positive_or_zero * abs(wi.z);
+  return positive_or_zero * abs(wi.z) * INV_PI;
 }
 
 void main()

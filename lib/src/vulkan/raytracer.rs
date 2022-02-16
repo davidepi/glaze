@@ -34,7 +34,6 @@ struct RTFrameData {
     lights_no: u32,
     pixel_offset: Vec2<f32>,
     scene_radius: f32,
-    new_frame: bool,
 }
 
 impl Default for RTFrameData {
@@ -44,7 +43,6 @@ impl Default for RTFrameData {
             lights_no: 0,
             scene_radius: 0.0,
             pixel_offset: Vec2::new(0.0, 0.0),
-            new_frame: true,
         }
     }
 }
@@ -140,12 +138,14 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             &mut self.tcmdm,
             self.extent,
             &mut unf,
+            false,
         );
         self.cumulative_img = create_storage_image(
             self.instance.as_ref(),
             &mut self.tcmdm,
             self.extent,
             &mut unf,
+            true,
         );
         self.frame_desc = build_descriptor(
             &mut self.dm,
@@ -283,15 +283,26 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             lights_no: self.scene.lights_no,
             pixel_offset: self.sample_scheduler.next().unwrap(),
             scene_radius: self.scene.radius(),
-            new_frame: self.request_new_frame,
         };
-        self.request_new_frame = false;
         update_frame_data(fd, &mut self.frame_data[frame_index]);
         let queue = device.compute_queue();
         unsafe {
             vkdevice
                 .begin_command_buffer(cmd, &cmd_begin)
                 .expect("Failed to begin command");
+            if self.request_new_frame {
+                self.request_new_frame = false;
+                let color = vk::ClearColorValue {
+                    float32: [0.0, 0.0, 0.0, 0.0],
+                };
+                vkdevice.cmd_clear_color_image(
+                    cmd,
+                    self.cumulative_img.image,
+                    vk::ImageLayout::GENERAL,
+                    &color,
+                    &[subresource_range],
+                );
+            }
             vkdevice.cmd_push_constants(
                 cmd,
                 self.pipeline.layout,
@@ -377,14 +388,34 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             lights_no: self.scene.lights_no,
             pixel_offset: self.sample_scheduler.next().unwrap(),
             scene_radius: self.scene.radius(),
-            new_frame: self.request_new_frame,
         };
         self.request_new_frame = false;
         update_frame_data(fd, &mut self.frame_data[0]);
         let cmd = self.ccmdm.get_cmd_buffer();
         let device = self.instance.device();
+        let new_frame = self.request_new_frame;
+        self.request_new_frame = false;
         let command = unsafe {
             |device: &ash::Device, cmd: vk::CommandBuffer| {
+                if new_frame {
+                    let subresource_range = vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        base_mip_level: 0,
+                        level_count: 1,
+                        base_array_layer: 0,
+                        layer_count: 1,
+                    };
+                    let color = vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 0.0],
+                    };
+                    device.cmd_clear_color_image(
+                        cmd,
+                        self.cumulative_img.image,
+                        vk::ImageLayout::GENERAL,
+                        &color,
+                        &[subresource_range],
+                    );
+                }
                 device.cmd_push_constants(
                     cmd,
                     self.pipeline.layout,
@@ -612,8 +643,9 @@ fn init_rt<T: Instance + Send + Sync>(
         &AVG_DESC,
         instance.desc_layout_cache(),
     );
-    let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
-    let cumulative_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf);
+    let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf, false);
+    let cumulative_img =
+        create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf, true);
     let camera = scene.camera.clone();
     let push_constants = build_push_constants(&camera, extent);
     let frame_data = (0..frames_in_flight)
@@ -705,14 +737,22 @@ fn create_storage_image<T: Instance>(
     tcmdm: &mut CommandManager,
     extent: vk::Extent2D,
     unf: &mut UnfinishedExecutions,
+    clearable: bool,
 ) -> AllocatedImage {
     let mm = instance.allocator();
     let device = instance.device();
+    let clearable_flags = if clearable {
+        // one of the two image (self.cumulative) requires clearing, which in turn requires
+        // transfer_dst
+        vk::ImageUsageFlags::TRANSFER_DST
+    } else {
+        vk::ImageUsageFlags::empty()
+    };
     let out_img = mm.create_image_gpu(
         "RT out image",
         vk::Format::R32G32B32A32_SFLOAT,
         extent,
-        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+        vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC | clearable_flags,
         vk::ImageAspectFlags::COLOR,
         1,
     );

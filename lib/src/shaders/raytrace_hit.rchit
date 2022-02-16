@@ -61,15 +61,7 @@ void main()
   hit.uv = v0.tcoord * barycentric.x + v1.tcoord * barycentric.y + v2.tcoord * barycentric.z;
   hit.distance = gl_HitTEXT;
   hit.material_index = instance.mat_id;
-
-  // partial derivatives dpdu and dpdv
-  vec2 duv02 = v0.tcoord - v2.tcoord;
-  vec2 duv12 = v1.tcoord - v2.tcoord;
-  // determinant is never 0 unless something is really wrong with the model
-  float invdet = 1.0/(duv02.x * duv12.y - duv02.y * duv12.x);
-  vec3 dp02 = v0.position - v2.position;
-  vec3 dp12 = v1.position - v2.position;
-  hit.dpdu = (+duv12.y * dp02 - duv02.y * dp12) * invdet;
-  hit.dpdv = (-duv12.x * dp02 + duv02.x * dp12) * invdet;
+  hit.dpdu = v0.position - v2.position;
+  hit.dpdv = v1.position - v2.position;
   hit.miss = false;
 }
