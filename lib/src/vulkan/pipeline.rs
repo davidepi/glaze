@@ -389,14 +389,16 @@ pub fn build_raytracing_pipeline(
         },
     ];
     let chit = include_shader!("raytrace_hit.rchit");
+    let ahit = include_shader!("raytrace_hit.rahit");
     shader_stages.push(create_ci(chit, vk::ShaderStageFlags::CLOSEST_HIT_KHR));
+    shader_stages.push(create_ci(ahit, vk::ShaderStageFlags::ANY_HIT_KHR));
     shader_groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
         s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
         p_next: ptr::null(),
         ty: vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP,
         general_shader: vk::SHADER_UNUSED_KHR,
         closest_hit_shader: 3,
-        any_hit_shader: vk::SHADER_UNUSED_KHR,
+        any_hit_shader: 4,
         intersection_shader: vk::SHADER_UNUSED_KHR,
         p_shader_group_capture_replay_handle: ptr::null(),
     });

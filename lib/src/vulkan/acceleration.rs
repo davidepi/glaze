@@ -2,7 +2,7 @@ use super::cmd::CommandManager;
 use super::device::Device;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::scene::VulkanMesh;
-use crate::{MeshInstance, Transform, Vertex};
+use crate::{Material, MeshInstance, Transform, Vertex};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use fnv::{FnvBuildHasher, FnvHashMap};
@@ -28,9 +28,10 @@ pub struct SceneAS {
 }
 
 pub struct SceneASBuilder<'scene, 'renderer> {
-    vkmeshes: Vec<&'scene VulkanMesh>,
-    instances: Vec<&'scene MeshInstance>,
-    transform: Vec<&'scene Transform>,
+    vkmeshes: &'scene [VulkanMesh],
+    instances: &'scene [MeshInstance],
+    transform: &'scene [Transform],
+    materials: &'scene [Material],
     vb: &'scene AllocatedBuffer,
     ib: &'scene AllocatedBuffer,
     mm: &'renderer MemoryManager,
@@ -49,9 +50,10 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         index_buffer: &'scene AllocatedBuffer,
     ) -> Self {
         SceneASBuilder {
-            vkmeshes: Vec::with_capacity(0),
-            instances: Vec::with_capacity(0),
-            transform: Vec::with_capacity(0),
+            vkmeshes: &[],
+            instances: &[],
+            transform: &[],
+            materials: &[],
             vb: vertex_buffer,
             ib: index_buffer,
             mm,
@@ -66,11 +68,12 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         meshes: &'scene [VulkanMesh],
         instances: &'scene [MeshInstance],
         transforms: &'scene [Transform],
+        materials: &'scene [Material],
     ) -> Self {
-        let meshes = meshes.iter().collect::<Vec<_>>();
         self.vkmeshes = meshes;
-        self.instances = instances.iter().collect();
-        self.transform = transforms.iter().collect();
+        self.instances = instances;
+        self.transform = transforms;
+        self.materials = materials;
         self
     }
 
@@ -87,7 +90,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             FnvHashMap::with_capacity_and_hasher(self.vkmeshes.len(), FnvBuildHasher::default());
         let mut scratch_size = 0;
         // first iteration: partial build and get the max memory usage
-        for &mesh in &self.vkmeshes {
+        for mesh in self.vkmeshes {
             let vb_addr_info = vk::BufferDeviceAddressInfo {
                 s_type: vk::StructureType::BUFFER_DEVICE_ADDRESS_INFO,
                 p_next: ptr::null(),
@@ -117,12 +120,18 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                     transform_data: vk::DeviceOrHostAddressConstKHR { device_address: 0 },
                 },
             };
+            let material = &self.materials[mesh.material as usize];
+            let flags = if material.opacity == 0 {
+                vk::GeometryFlagsKHR::OPAQUE
+            } else {
+                vk::GeometryFlagsKHR::empty()
+            };
             let geometry = [vk::AccelerationStructureGeometryKHR {
                 s_type: vk::StructureType::ACCELERATION_STRUCTURE_GEOMETRY_KHR,
                 p_next: ptr::null(),
                 geometry_type: vk::GeometryTypeKHR::TRIANGLES,
                 geometry,
-                flags: vk::GeometryFlagsKHR::OPAQUE,
+                flags,
             }];
             let primitive_count = (mesh.index_count / 3) as u32;
             let build_range = vk::AccelerationStructureBuildRangeInfoKHR {
@@ -299,10 +308,9 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
         let vkdevice = self.device.logical();
         let mut tlas_ci = Vec::with_capacity(self.instances.len());
         // populates the instances
-        // TODO: add shader binding
         for (instance_id, instance) in self.instances.iter().enumerate() {
             let blas = blases.get(&instance.mesh_id).unwrap();
-            let transform = self.transform[instance.transform_id as usize];
+            let transform = &self.transform[instance.transform_id as usize];
             let as_addr_info = vk::AccelerationStructureDeviceAddressInfoKHR {
                 s_type: vk::StructureType::ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR,
                 p_next: ptr::null(),

@@ -75,7 +75,6 @@ Spectrum direct_light(inout uint rng, in vec3 woW, in ShadingSpace mat, in RTMat
       // trace shadow ray
       shadow_ray_hit = true;
       traceRayEXT(scene,
-          gl_RayFlagsOpaqueEXT |
           gl_RayFlagsTerminateOnFirstHitEXT |
           gl_RayFlagsSkipClosestHitShaderEXT,
           0xFF,
@@ -125,7 +124,7 @@ void main()
   for(int i=0; i<5; i++)
   {
     traceRayEXT(scene,
-        gl_RayFlagsOpaqueEXT,
+        0,
         0xFF,
         0,
         0,

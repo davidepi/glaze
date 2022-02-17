@@ -873,16 +873,27 @@ fn build_sbt<T: Instance>(
     // load single hit group
     let hit_offset = data.len() as u64;
     let shader_group = unsafe {
-        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 3, 1, size_handle as usize)
+        rploader.get_ray_tracing_shader_group_handles(
+            pipeline.pipeline,
+            3,
+            1,
+            2 * size_handle as usize,
+        )
     }
     .expect("Failed to retrieve shader handle");
-    data.extend_from_slice(&shader_group);
+    for hit in shader_group.chunks_exact(size_handle as usize) {
+        data.extend_from_slice(hit);
+        if align_handle != size_handle as u64 {
+            let missing_bytes = padding(data.len() as u64, align_handle) as usize;
+            data.extend(repeat(0).take(missing_bytes));
+        }
+    }
     let missing_bytes = padding(data.len() as u64, align_group) as usize;
     data.extend(repeat(0).take(missing_bytes));
     let mut hit_addr = vk::StridedDeviceAddressRegionKHR {
         device_address: hit_offset,
         stride: size_handle,
-        size: size_handle_aligned,
+        size: 2 * size_handle_aligned,
     };
 
     // load multiple callables. Retrieve them all at once

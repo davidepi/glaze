@@ -161,7 +161,7 @@ impl VulkanScene {
                     &params_buffer,
                     sampler,
                     id as u16,
-                    &mat,
+                    mat,
                     &mut dm,
                 );
                 (shader, desc)
@@ -956,7 +956,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
                 .collect::<Vec<_>>(),
         );
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
-            .with_meshes(&meshes, &instances, &transforms);
+            .with_meshes(&meshes, &instances, &transforms, &materials);
         let acc = builder.build();
         let camera = scene.cameras()?[0].clone();
         let instance_buffer =
@@ -1015,12 +1015,12 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
 
         let instances = scene.file.instances()?;
         let transforms = scene.file.transforms()?;
-        let materials = scene.materials().into_iter().cloned().collect::<Vec<_>>();
+        let materials = scene.materials().to_vec();
         let vertex_buffer = Arc::clone(&scene.vertex_buffer);
         let index_buffer = Arc::clone(&scene.index_buffer);
         let textures = Arc::clone(&scene.textures);
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
-            .with_meshes(&scene.meshes, &instances, &transforms);
+            .with_meshes(&scene.meshes, &instances, &transforms, &materials);
         let acc = builder.build();
         let instance_buffer = load_raytrace_instances_to_gpu(
             device,
@@ -1325,22 +1325,24 @@ fn build_raytrace_descriptor(
         .bind_buffer(
             vertex_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::ANY_HIT_KHR,
         )
         .bind_buffer(
             index_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::ANY_HIT_KHR,
         )
         .bind_buffer(
             instance_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::ANY_HIT_KHR,
         )
         .bind_buffer(
             material_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
+            vk::ShaderStageFlags::RAYGEN_KHR
+                | vk::ShaderStageFlags::CALLABLE_KHR
+                | vk::ShaderStageFlags::ANY_HIT_KHR,
         )
         .bind_buffer(
             light_buffer,
@@ -1351,7 +1353,7 @@ fn build_raytrace_descriptor(
             &textures_memory,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             sampler,
-            vk::ShaderStageFlags::CALLABLE_KHR,
+            vk::ShaderStageFlags::ANY_HIT_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .build()
 }

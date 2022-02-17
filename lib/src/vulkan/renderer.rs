@@ -8,7 +8,7 @@ use super::renderpass::RenderPass;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
-use super::{raytracer, AllocatedImage, UnfinishedExecutions};
+use super::{AllocatedImage, UnfinishedExecutions};
 use crate::{include_shader, Camera, Light, Material, RayTraceRenderer};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};

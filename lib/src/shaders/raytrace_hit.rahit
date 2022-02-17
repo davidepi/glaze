@@ -1,0 +1,70 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier: require
+
+#include "raytrace_commons.glsl"
+
+struct RTInstance {
+  uint index_offset;
+  uint index_count;
+  uint mat_id;
+};
+
+struct VertexPacked {
+  vec4 pxyznx; //position xyz + normal x
+  vec4 nyztxy; //normal yz + tcoord xy
+};
+
+struct Vertex {
+  vec3 position;
+  vec3 normal;
+  vec2 tcoord;
+};
+
+struct Index {
+  uint x;
+  uint y;
+  uint z;
+};
+
+hitAttributeEXT vec2 attrib;
+
+layout(std430, set=1, binding=1) readonly buffer vertexBuffer {
+  VertexPacked vertices[];
+} VertexBuffer;
+
+layout(std430, set=1, binding=2) readonly buffer indexBuffer {
+  Index indices[];
+} IndexBuffer;
+
+layout(std430, set=1, binding=3) readonly buffer instanceBuffer {
+  RTInstance instances[];
+} InstanceBuffer;
+
+layout(std430, set=1, binding=4) readonly buffer materialBuffer {
+  RTMaterial materials[];
+} MaterialBuffer;
+
+layout(set=1, binding=6) uniform sampler2D textures[];
+
+Vertex from_packed(VertexPacked vp) {
+  vec3 normal = vec3(vp.pxyznx.w, vp.nyztxy.xy);
+  return Vertex(vp.pxyznx.xyz, normal, vp.nyztxy.zw);
+}
+
+void main()
+{
+  const vec3 barycentric = vec3(1.0 - attrib.x - attrib.y, attrib.x, attrib.y);
+  RTInstance instance = InstanceBuffer.instances[gl_InstanceCustomIndexEXT];
+  Index idx = IndexBuffer.indices[instance.index_offset/3+gl_PrimitiveID];
+  Vertex v0 = from_packed(VertexBuffer.vertices[idx.x]);
+  Vertex v1 = from_packed(VertexBuffer.vertices[idx.y]);
+  Vertex v2 = from_packed(VertexBuffer.vertices[idx.z]);
+  vec2 uv = v0.tcoord * barycentric.x + v1.tcoord * barycentric.y + v2.tcoord * barycentric.z;
+  RTMaterial mat = MaterialBuffer.materials[instance.mat_id];
+  float alpha = texture(textures[nonuniformEXT(mat.opacity)], uv).r;
+  if (alpha < 0.5)
+  {
+    ignoreIntersectionEXT;
+  }
+}
