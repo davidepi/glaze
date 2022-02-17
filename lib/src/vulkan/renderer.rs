@@ -8,7 +8,7 @@ use super::renderpass::RenderPass;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
-use super::{AllocatedImage, UnfinishedExecutions};
+use super::{raytracer, AllocatedImage, UnfinishedExecutions};
 use crate::{include_shader, Camera, Light, Material, RayTraceRenderer};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
@@ -239,6 +239,23 @@ impl RealtimeRenderer {
             self.clear_color[1],
             self.clear_color[2],
         ]
+    }
+
+    pub fn exposure(&self) -> f32 {
+        if let Some(scene) = &self.scene {
+            scene.meta.exposure
+        } else {
+            1.0
+        }
+    }
+
+    pub fn set_exposure(&mut self, exposure: f32) {
+        if let Some(scene) = &mut self.scene {
+            scene.meta.exposure = exposure;
+        }
+        if let Some(raytracer) = &mut self.raytracer {
+            raytracer.set_exposure(exposure);
+        }
     }
 
     /// Sets the background color.

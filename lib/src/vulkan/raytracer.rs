@@ -34,6 +34,7 @@ struct RTFrameData {
     lights_no: u32,
     pixel_offset: Vec2<f32>,
     scene_radius: f32,
+    exposure: f32,
 }
 
 impl Default for RTFrameData {
@@ -43,6 +44,7 @@ impl Default for RTFrameData {
             lights_no: 0,
             scene_radius: 0.0,
             pixel_offset: Vec2::new(0.0, 0.0),
+            exposure: 1.0,
         }
     }
 }
@@ -103,6 +105,14 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         Ok(init_rt(instance, loader, ccmdm, scene, extent, 1))
     }
 
+    pub fn set_exposure(&mut self, exposure: f32) {
+        if exposure >= 0.0 {
+            // the higher the value, the brighter the image.
+            self.scene.meta.exposure = exposure;
+        }
+        // no need to restart the frame, as only the weight for each sample is affected.
+    }
+
     #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn from_realtime(
         instance: Arc<PresentInstance>,
@@ -130,6 +140,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         ))
     }
 
+    #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn change_resolution(&mut self, width: u32, height: u32) {
         self.extent = vk::Extent2D { width, height };
         let mut unf = UnfinishedExecutions::new(self.instance.device());
@@ -157,6 +168,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         self.update_camera(&self.camera.clone());
     }
 
+    #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn update_camera(&mut self, camera: &Camera) {
         self.push_constants = build_push_constants(camera, self.extent);
         self.request_new_frame = true;
@@ -282,7 +294,8 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             seed: self.rng.gen(),
             lights_no: self.scene.lights_no,
             pixel_offset: self.sample_scheduler.next().unwrap(),
-            scene_radius: self.scene.radius(),
+            scene_radius: self.scene.meta.scene_radius,
+            exposure: self.scene.meta.exposure,
         };
         update_frame_data(fd, &mut self.frame_data[frame_index]);
         let queue = device.compute_queue();
@@ -387,7 +400,8 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             seed: self.rng.gen(),
             lights_no: self.scene.lights_no,
             pixel_offset: self.sample_scheduler.next().unwrap(),
-            scene_radius: self.scene.radius(),
+            scene_radius: self.scene.meta.scene_radius,
+            exposure: self.scene.meta.exposure,
         };
         self.request_new_frame = false;
         update_frame_data(fd, &mut self.frame_data[0]);

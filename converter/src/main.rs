@@ -148,11 +148,9 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
     let mat_pb = mpb.add(ProgressBar::new(1));
     mat_pb.set_style(style.clone());
     let path = original_path.to_string();
-    let camera_thread = thread::spawn(move || convert_cameras(&camera_data, camera_pb));
     let lights_thread = thread::spawn(move || convert_lights(&light_data, light_pb));
     let material_thread = thread::spawn(move || convert_materials(&material_data, mat_pb, &path));
     let mesh_thread = thread::spawn(move || convert_meshes(&mesh_data, mesh_pb));
-    let cameras = camera_thread.join().unwrap();
     let lights = lights_thread.join().unwrap();
     let (materials, textures) = material_thread.join().unwrap()?;
     let mm_pb = mpb.add(ProgressBar::new(1));
@@ -174,8 +172,13 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
             .collect();
         (vec![Transform::identity()], instances)
     };
-    let scene_radius = calc_scene_radius(&vertices, &meshes, &instances, &transforms);
-    let meta = Meta { scene_radius };
+    let radius = calc_scene_radius(&vertices, &meshes, &instances, &transforms);
+    let camera_thread = thread::spawn(move || convert_cameras(&camera_data, camera_pb, radius));
+    let cameras = camera_thread.join().unwrap();
+    let meta = Meta {
+        scene_radius: radius,
+        exposure: 1.0,
+    };
     mpb.clear().ok();
     Ok(TempScene {
         vertices,
@@ -376,12 +379,12 @@ fn convert_meshes(
     Ok((retval_vertices, retval_meshes))
 }
 
-fn convert_cameras(cameras: &[russimp::camera::Camera], pb: ProgressBar) -> Vec<Camera> {
-    let effort = std::cmp::max(cameras.len(), 1);
+fn convert_cameras(cams: &[russimp::camera::Camera], pb: ProgressBar, radius: f32) -> Vec<Camera> {
+    let effort = std::cmp::max(cams.len(), 1);
     pb.set_length(effort as u64);
     pb.set_message("Converting cameras");
     let mut retval_cameras = Vec::with_capacity(effort);
-    for camera in cameras {
+    for camera in cams {
         retval_cameras.push(Camera::Perspective(PerspectiveCam {
             position: Point3::new(camera.position.x, camera.position.y, camera.position.z),
             target: Point3::new(camera.look_at.x, camera.look_at.y, camera.look_at.z),
@@ -398,8 +401,8 @@ fn convert_cameras(cameras: &[russimp::camera::Camera], pb: ProgressBar) -> Vec<
             target: Point3::new(0.0, 0.0, 100.0),
             up: Vec3::new(0.0, 1.0, 0.0),
             fovx: f32::to_radians(90.0),
-            near: 0.1,
-            far: 250.0,
+            near: radius * 2.0 * 1E-5,
+            far: radius * 2.0,
         }));
         pb.inc(1);
     }

@@ -270,9 +270,10 @@ pub fn converted_file<P: AsRef<Path>>(file: P) -> bool {
 }
 
 /// Struct to store additional information for the scene that does not fit anywhere else.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Meta {
     pub scene_radius: f32,
+    pub exposure: f32,
 }
 
 /// Trait used for accessing the content of the parsed file and updating them.

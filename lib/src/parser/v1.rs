@@ -1010,14 +1010,25 @@ fn bytes_to_light(data: &[u8]) -> Light {
 }
 
 /// Converts a Light to a vector of bytes.
-fn meta_to_bytes(meta: &Meta) -> [u8; 4] {
-    f32::to_le_bytes(meta.scene_radius)
+fn meta_to_bytes(meta: &Meta) -> [u8; 8] {
+    let mut retval = [0; 8];
+    let mut index = 0;
+    retval[index..index + 4].copy_from_slice(&f32::to_le_bytes(meta.scene_radius));
+    index += 4;
+    retval[index..index + 4].copy_from_slice(&f32::to_le_bytes(meta.exposure));
+    retval
 }
 
 /// Converts a vector of bytes to the Meta struct.
-fn bytes_to_meta(data: [u8; 4]) -> Meta {
-    let scene_radius = f32::from_le_bytes(data);
-    Meta { scene_radius }
+fn bytes_to_meta(data: [u8; 8]) -> Meta {
+    let mut index = 0;
+    let scene_radius = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let exposure = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    Meta {
+        scene_radius,
+        exposure,
+    }
 }
 
 #[cfg(test)]
@@ -1267,7 +1278,11 @@ mod tests {
     fn gen_meta(seed: u64) -> Meta {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
         let scene_radius = rng.gen();
-        Meta { scene_radius }
+        let exposure = rng.gen_range(1E-3..1E3);
+        Meta {
+            scene_radius,
+            exposure,
+        }
     }
 
     #[test]

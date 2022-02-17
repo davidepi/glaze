@@ -10,7 +10,9 @@ use super::pipeline::Pipeline;
 use super::UnfinishedExecutions;
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
-use crate::{Camera, Light, Material, Mesh, MeshInstance, ParsedScene, RayTraceInstance, Vertex};
+use crate::{
+    Camera, Light, Material, Mesh, MeshInstance, Meta, ParsedScene, RayTraceInstance, Vertex,
+};
 #[cfg(feature = "vulkan-interactive")]
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
@@ -34,6 +36,8 @@ use std::sync::Arc;
 pub struct VulkanScene {
     /// The scene on disk.
     file: Box<dyn ParsedScene + Send>,
+    /// Not used in this scene, but required in case of updates.
+    pub(super) meta: Meta,
     /// The camera for the current scene.
     pub current_cam: Camera,
     /// The buffer containing all vertices for the current scene.
@@ -173,6 +177,7 @@ impl VulkanScene {
             MemoryLocation::CpuToGpu,
         );
         sort_meshes(&mut meshes, &materials_desc);
+        let meta = parsed.meta()?;
         Ok(VulkanScene {
             file: parsed,
             current_cam,
@@ -191,6 +196,7 @@ impl VulkanScene {
             instances,
             lights,
             instance,
+            meta,
         })
     }
 
@@ -355,8 +361,9 @@ impl VulkanScene {
         let cameras = [self.current_cam.clone()];
         let lights = self.lights().to_vec();
         let materials = self.materials().to_vec();
+        let meta = &self.meta;
         self.file
-            .update(Some(&cameras), Some(&materials), Some(&lights), None)
+            .update(Some(&cameras), Some(&materials), Some(&lights), Some(meta))
     }
 }
 
@@ -902,7 +909,6 @@ struct RTLight {
 pub struct RayTraceScene<T: Instance + Send + Sync> {
     pub camera: Camera,
     pub descriptor: Descriptor,
-    radius: f32,
     sampler: vk::Sampler,
     vertex_buffer: Arc<AllocatedBuffer>,
     index_buffer: Arc<AllocatedBuffer>,
@@ -910,6 +916,7 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     material_buffer: AllocatedBuffer,
     light_buffer: AllocatedBuffer,
     pub lights_no: u32,
+    pub meta: Meta,
     textures: Arc<Vec<TextureLoaded>>,
     acc: SceneAS,
     dm: DescriptorSetManager,
@@ -974,12 +981,11 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &textures,
             sampler,
         );
-        let radius = scene.meta()?.scene_radius;
+        let meta = scene.meta()?;
         unf.wait_completion();
         Ok(RayTraceScene {
             camera,
             descriptor,
-            radius,
             sampler,
             vertex_buffer: Arc::new(vertex_buffer),
             index_buffer: Arc::new(index_buffer),
@@ -987,6 +993,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             material_buffer,
             light_buffer,
             lights_no: lights.len() as u32,
+            meta,
             textures,
             acc,
             dm,
@@ -1044,10 +1051,9 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &textures,
             sampler,
         );
-        let radius = scene.file.meta()?.scene_radius;
+        let meta = scene.meta;
         unf.wait_completion();
         Ok(RayTraceScene {
-            radius,
             camera: scene.current_cam.clone(),
             descriptor,
             sampler,
@@ -1057,6 +1063,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             material_buffer,
             light_buffer,
             lights_no: scene.lights.len() as u32,
+            meta,
             textures,
             acc,
             dm,
@@ -1115,10 +1122,6 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.textures,
             self.sampler,
         );
-    }
-
-    pub fn radius(&self) -> f32 {
-        self.radius
     }
 }
 

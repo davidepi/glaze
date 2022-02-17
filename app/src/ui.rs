@@ -571,6 +571,8 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
     let mut add = None;
     let mut update = None;
     let mut remove = None;
+    let mut exposure = renderer.exposure();
+    let mut update_exposure = false;
     if let Some(window) = imgui::Window::new("Lights")
         .opened(closed)
         .size([400.0, 400.0], Condition::Appearing)
@@ -578,6 +580,12 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
         .begin(ui)
     {
         if let Some(scene) = renderer.scene_mut() {
+            if imgui::Slider::new("Exposure", 1E-3, 1E3)
+                .flags(SliderFlags::ALWAYS_CLAMP | SliderFlags::LOGARITHMIC)
+                .build(ui, &mut exposure)
+            {
+                update_exposure = true;
+            }
             if ui.button("Add") {
                 let dflt_light = Light::new_omni(
                     format!("Light{}", scene.lights().len()),
@@ -689,6 +697,9 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
                     };
                     update = Some((selected, new_light));
                 }
+            }
+            if update_exposure {
+                renderer.set_exposure(exposure);
             }
         }
         window.end();
