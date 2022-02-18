@@ -5,13 +5,15 @@ use super::descriptor::{Descriptor, DescriptorSetManager};
 use super::device::Device;
 use super::instance::Instance;
 use super::memory::{AllocatedBuffer, MemoryManager};
+use super::pipeline::build_compute_pipeline;
 #[cfg(feature = "vulkan-interactive")]
 use super::pipeline::Pipeline;
 use super::UnfinishedExecutions;
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{
-    Camera, Light, Material, Mesh, MeshInstance, Meta, ParsedScene, RayTraceInstance, Vertex,
+    include_shader, Camera, Light, Material, Mesh, MeshInstance, Meta, ParsedScene,
+    RayTraceInstance, Vertex,
 };
 #[cfg(feature = "vulkan-interactive")]
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
@@ -915,6 +917,7 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     instance_buffer: AllocatedBuffer,
     material_buffer: AllocatedBuffer,
     light_buffer: AllocatedBuffer,
+    derivative_buffer: AllocatedBuffer,
     pub lights_no: u32,
     pub meta: Meta,
     textures: Arc<Vec<TextureLoaded>>,
@@ -939,15 +942,28 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         let device = instance.device();
         let mut unf = UnfinishedExecutions::new(instance.device());
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
-
         let instances = scene.instances()?;
         let transforms = scene.transforms()?;
         let materials = scene.materials()?;
+        let mut dm = DescriptorSetManager::new(
+            instance.device().logical_clone(),
+            &Self::AVG_DESC,
+            instance.desc_layout_cache(),
+        );
         let lights = scene.lights()?;
         let vertex_buffer =
             load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?, true);
         let (meshes, index_buffer) =
             load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?, true);
+        let derivative_buffer = calculate_geometric_derivatives(
+            instance.as_ref(),
+            &mut dm,
+            ccmdm,
+            &meshes,
+            &index_buffer,
+            &vertex_buffer,
+            &mut unf,
+        );
         let textures = Arc::new(
             scene
                 .textures()?
@@ -963,11 +979,6 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             load_raytrace_instances_to_gpu(device, mm, &mut tcmdm, &mut unf, &meshes, &instances);
         let material_buffer =
             load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
-        let mut dm = DescriptorSetManager::new(
-            instance.device().logical_clone(),
-            &Self::AVG_DESC,
-            instance.desc_layout_cache(),
-        );
         let light_buffer = load_raytrace_lights_to_gpu(device, mm, &mut tcmdm, &mut unf, &lights);
         let sampler = create_sampler(device);
         let descriptor = build_raytrace_descriptor(
@@ -978,6 +989,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &instance_buffer,
             &material_buffer,
             &light_buffer,
+            &derivative_buffer,
             &textures,
             sampler,
         );
@@ -992,6 +1004,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             instance_buffer,
             material_buffer,
             light_buffer,
+            derivative_buffer,
             lights_no: lights.len() as u32,
             meta,
             textures,
@@ -1012,13 +1025,26 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         let device = instance.device();
         let mut unf = UnfinishedExecutions::new(instance.device());
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
-
+        let mut dm = DescriptorSetManager::new(
+            instance.device().logical_clone(),
+            &Self::AVG_DESC,
+            instance.desc_layout_cache(),
+        );
         let instances = scene.file.instances()?;
         let transforms = scene.file.transforms()?;
         let materials = scene.materials().to_vec();
         let vertex_buffer = Arc::clone(&scene.vertex_buffer);
         let index_buffer = Arc::clone(&scene.index_buffer);
         let textures = Arc::clone(&scene.textures);
+        let derivative_buffer = calculate_geometric_derivatives(
+            instance.as_ref(),
+            &mut dm,
+            ccmdm,
+            &scene.meshes,
+            &index_buffer,
+            &vertex_buffer,
+            &mut unf,
+        );
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
             .with_meshes(&scene.meshes, &instances, &transforms, &materials);
         let acc = builder.build();
@@ -1034,11 +1060,6 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
         let light_buffer =
             load_raytrace_lights_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.lights);
-        let mut dm = DescriptorSetManager::new(
-            instance.device().logical_clone(),
-            &Self::AVG_DESC,
-            instance.desc_layout_cache(),
-        );
         let sampler = create_sampler(device);
         let descriptor = build_raytrace_descriptor(
             &mut dm,
@@ -1048,6 +1069,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &instance_buffer,
             &material_buffer,
             &light_buffer,
+            &derivative_buffer,
             &textures,
             sampler,
         );
@@ -1062,6 +1084,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             instance_buffer,
             material_buffer,
             light_buffer,
+            derivative_buffer,
             lights_no: scene.lights.len() as u32,
             meta,
             textures,
@@ -1092,6 +1115,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.instance_buffer,
             &self.material_buffer,
             &self.light_buffer,
+            &self.derivative_buffer,
             &self.textures,
             self.sampler,
         );
@@ -1119,6 +1143,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.instance_buffer,
             &self.material_buffer,
             &self.light_buffer,
+            &self.derivative_buffer,
             &self.textures,
             self.sampler,
         );
@@ -1305,6 +1330,82 @@ fn upload_buffer<T: Sized + 'static>(
     gpu_buffer
 }
 
+fn calculate_geometric_derivatives<T: Instance>(
+    instance: &T,
+    dm: &mut DescriptorSetManager,
+    ccmdm: &mut CommandManager,
+    meshes: &[VulkanMesh],
+    index_buffer: &AllocatedBuffer,
+    vertex_buffer: &AllocatedBuffer,
+    unf: &mut UnfinishedExecutions,
+) -> AllocatedBuffer {
+    let mm = instance.allocator();
+    let triangles = meshes
+        .iter()
+        .map(|m| m.index_offset + m.index_count)
+        .max()
+        .unwrap_or(0)
+        / 3;
+    let device = instance.device();
+    let size = triangles as u64 * 48; // 3*vec4(normal, dpdu and dpdv)
+    let buffer = mm.create_buffer(
+        "Derivatives",
+        size,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        MemoryLocation::GpuOnly,
+    );
+    let desc = dm
+        .new_set()
+        .bind_buffer(
+            vertex_buffer,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::COMPUTE,
+        )
+        .bind_buffer(
+            index_buffer,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::COMPUTE,
+        )
+        .bind_buffer(
+            &buffer,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::COMPUTE,
+        )
+        .build();
+    let pipeline = build_compute_pipeline(
+        device.logical_clone(),
+        include_shader!("generate_derivatives.comp").to_vec(),
+        4,
+        &[desc.layout],
+    );
+    let cmd = ccmdm.get_cmd_buffer();
+    let group_count = (triangles / 256) + 1;
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::COMPUTE,
+                pipeline.layout,
+                0,
+                &[desc.set],
+                &[],
+            );
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.pipeline);
+            device.cmd_push_constants(
+                cmd,
+                pipeline.layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                &u32::to_ne_bytes(triangles),
+            );
+            device.cmd_dispatch(cmd, group_count, 1, 1);
+        }
+    };
+    let fence = device.immediate_execute(cmd, device.compute_queue(), command);
+    unf.add_pipeline_execution(fence, pipeline);
+    buffer
+}
+
 fn build_raytrace_descriptor(
     dm: &mut DescriptorSetManager,
     acc: &SceneAS,
@@ -1313,6 +1414,7 @@ fn build_raytrace_descriptor(
     instance_buffer: &AllocatedBuffer,
     material_buffer: &AllocatedBuffer,
     light_buffer: &AllocatedBuffer,
+    derivative_buffer: &AllocatedBuffer,
     textures: &[TextureLoaded],
     sampler: vk::Sampler,
 ) -> Descriptor {
@@ -1354,6 +1456,11 @@ fn build_raytrace_descriptor(
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             sampler,
             vk::ShaderStageFlags::ANY_HIT_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
+        )
+        .bind_buffer(
+            derivative_buffer,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
         )
         .build()
 }

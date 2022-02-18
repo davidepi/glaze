@@ -1,6 +1,7 @@
 use super::debug::{cchars_to_string, ValidationLayers};
 use super::memory::AllocatedBuffer;
 use super::surface::Surface;
+use crate::Pipeline;
 use ash::vk;
 use fnv::FnvHashMap;
 use std::collections::hash_map::Entry;
@@ -288,6 +289,8 @@ pub struct UnfinishedExecutions<'device> {
     fences: Vec<vk::Fence>,
     /// Buffers that are to be freed after waiting on the fences.
     buffers_to_free: Vec<AllocatedBuffer>,
+    /// Pipelines that will be freed after waiting on the fences.
+    pipelines: Vec<Pipeline>,
     /// device to be waited on.
     device: &'device Device,
 }
@@ -298,6 +301,7 @@ impl<'device> UnfinishedExecutions<'device> {
         UnfinishedExecutions {
             fences: Vec::new(),
             buffers_to_free: Vec::new(),
+            pipelines: Vec::new(),
             device,
         }
     }
@@ -310,6 +314,12 @@ impl<'device> UnfinishedExecutions<'device> {
     /// Adds a buffer only, without any fence.
     pub fn add_buffer(&mut self, buffer: AllocatedBuffer) {
         self.buffers_to_free.push(buffer);
+    }
+
+    /// Add the fence and corresponding pipeline executing.
+    pub fn add_pipeline_execution(&mut self, fence: vk::Fence, pipeline: Pipeline) {
+        self.fences.push(fence);
+        self.pipelines.push(pipeline);
     }
 
     /// Add a fence and the corresponding buffer.

@@ -65,7 +65,7 @@ Spectrum direct_light(inout uint rng, in vec3 woW, in ShadingSpace mat, in RTMat
   {
     bsdfval.woW = woW;
     bsdfval.wiW = sam.wiW;
-    bsdfval.normal = hit.normal;
+    bsdfval.geometric_normal = hit.geometric_normal;
     bsdfval.uv = hit.uv;
     bsdfval.shading = mat;
     bsdfval.material_index = hit.material_index;
@@ -94,7 +94,7 @@ Spectrum direct_light(inout uint rng, in vec3 woW, in ShadingSpace mat, in RTMat
         executeCallableEXT(material.bsdf_index+2, 5);
         if(bsdfpdf.pdf > 0)
         {
-          float adot = abs(dot(bsdfval.wiW, hit.normal))/sam.pdf;
+          float adot = abs(dot(bsdfval.wiW, hit.shading_normal))/sam.pdf;
           L = mul(mul(bsdfval.value, sam.emission), adot);
         }
       }
@@ -139,7 +139,7 @@ void main()
       break;
     }
     vec3 woW = -direction;
-    ShadingSpace matrix = new_shading_space(hit.dpdu, hit.normal);
+    ShadingSpace matrix = new_shading_space(hit.dpdu, hit.shading_normal);
     RTMaterial material = MaterialBuffer.materials[hit.material_index];
     Spectrum direct = direct_light(rng, woW, matrix, material);
     L = add(L, mul(direct, power));
@@ -156,7 +156,6 @@ void main()
       }
     }
     bsdfsampleval.uv = hit.uv;
-    bsdfsampleval.normal = hit.normal;
     bsdfsampleval.woW = woW;
     bsdfsampleval.rand_sample = rand2(rng);
     bsdfsampleval.shading = matrix;
@@ -166,7 +165,7 @@ void main()
     {
       break;
     }
-    float adot = abs(dot(bsdfsampleval.wiW, hit.normal));
+    float adot = abs(dot(bsdfsampleval.wiW, hit.shading_normal));
     float inv = adot/bsdfsampleval.pdf*rrprob;
     power = mul(power, mul(bsdfsampleval.value, inv));
     origin = hit.point;

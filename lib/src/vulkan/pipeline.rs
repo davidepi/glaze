@@ -330,6 +330,62 @@ impl Default for PipelineBuilder {
     }
 }
 
+pub fn build_compute_pipeline(
+    device: Arc<ash::Device>,
+    shader: Vec<u8>,
+    pc: u32,
+    set_layout: &[vk::DescriptorSetLayout],
+) -> Pipeline {
+    let main_cstr = CString::new("main".as_bytes()).unwrap();
+    let stage = vk::PipelineShaderStageCreateInfo {
+        s_type: vk::StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+        p_next: ptr::null(),
+        flags: vk::PipelineShaderStageCreateFlags::empty(),
+        stage: vk::ShaderStageFlags::COMPUTE,
+        module: create_shader_module(&device, &shader),
+        p_name: main_cstr.as_c_str().as_ptr(),
+        p_specialization_info: ptr::null(),
+    };
+    let push_constants = if pc > 0 {
+        vec![vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::COMPUTE,
+            offset: 0,
+            size: pc,
+        }]
+    } else {
+        Vec::new()
+    };
+    let pipeline_layout = vk::PipelineLayoutCreateInfo {
+        s_type: vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,
+        p_next: ptr::null(),
+        flags: vk::PipelineLayoutCreateFlags::empty(),
+        set_layout_count: set_layout.len() as u32,
+        p_set_layouts: set_layout.as_ptr(),
+        push_constant_range_count: push_constants.len() as u32,
+        p_push_constant_ranges: push_constants.as_ptr(),
+    };
+    let layout = unsafe { device.create_pipeline_layout(&pipeline_layout, None) }
+        .expect("Failed to create Pipeline Layout");
+    let pipeline_ci = vk::ComputePipelineCreateInfo {
+        s_type: vk::StructureType::COMPUTE_PIPELINE_CREATE_INFO,
+        p_next: ptr::null(),
+        flags: vk::PipelineCreateFlags::empty(),
+        stage,
+        layout,
+        base_pipeline_handle: vk::Pipeline::null(),
+        base_pipeline_index: 0,
+    };
+    let pipeline =
+        unsafe { device.create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_ci], None) }
+            .expect("Failed to create compute pipeline")[0];
+    destroy_shader_module(&device, stage.module);
+    Pipeline {
+        pipeline,
+        layout,
+        device,
+    }
+}
+
 pub fn build_raytracing_pipeline(
     loader: &RTPipelineLoader,
     device: Arc<ash::Device>,
@@ -350,7 +406,7 @@ pub fn build_raytracing_pipeline(
             p_specialization_info: ptr::null(),
         };
     // raygen is always index 0
-    // miss is always index 1
+    // miss is always index 1 (direct rays) and 2 (shadow rays)
     let mut shader_stages = vec![
         create_ci(rgen, vk::ShaderStageFlags::RAYGEN_KHR),
         create_ci(miss, vk::ShaderStageFlags::MISS_KHR),
@@ -390,6 +446,8 @@ pub fn build_raytracing_pipeline(
     ];
     let chit = include_shader!("raytrace_hit.rchit");
     let ahit = include_shader!("raytrace_hit.rahit");
+    // chit is shader stage 3, ahit is shader stage 4, but they are both in group 3
+    // the sbt building requires the group, not the stage
     shader_stages.push(create_ci(chit, vk::ShaderStageFlags::CLOSEST_HIT_KHR));
     shader_stages.push(create_ci(ahit, vk::ShaderStageFlags::ANY_HIT_KHR));
     shader_groups.push(vk::RayTracingShaderGroupCreateInfoKHR {

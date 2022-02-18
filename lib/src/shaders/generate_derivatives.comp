@@ -1,0 +1,65 @@
+#version 460
+
+#include "raytrace_commons.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(push_constant) uniform readonly pc {
+  uint triangles_no;
+} PushConstant;
+
+layout(std430, set=0, binding=0) readonly buffer vertexBuffer {
+  VertexPacked vertices[];
+} VertexBuffer;
+
+layout(std430, set=0, binding=1) readonly buffer indexBuffer {
+  Triangle indices[];
+} IndexBuffer;
+
+layout(std430, set=0, binding=2) writeonly buffer derivativeBuffer {
+  Derivatives d[];
+} DerivativeBuffer;
+
+void main()
+{
+  uint triangle_id = gl_GlobalInvocationID.x;
+  if(triangle_id < PushConstant.triangles_no)
+  {
+    Triangle tris = IndexBuffer.indices[triangle_id];
+    Vertex v0 = from_packed(VertexBuffer.vertices[tris.x]);
+    Vertex v1 = from_packed(VertexBuffer.vertices[tris.y]);
+    Vertex v2 = from_packed(VertexBuffer.vertices[tris.z]);
+    vec2 duv02 = v0.tcoord - v2.tcoord;
+    vec2 duv12 = v1.tcoord - v2.tcoord;
+    float det = (duv02.x * duv12.y - duv02.y * duv12.x);
+    vec3 dp20 = v2.position - v0.position;
+    vec3 dp10 = v1.position - v0.position;
+    vec3 n = normalize(cross(dp10, dp20));
+    vec3 dpdu;
+    vec3 dpdv;
+    if(det == 0.0)
+    {
+      // UV coords are probably degenerate, use generic coords
+      if (abs(n.x)>abs(n.y))
+      {
+        dpdu = vec3(-n.z, 0.0, n.x)/sqrt(n.x * n.x + n.z * n.z);
+      }
+      else
+      {
+        dpdu = vec3(0.0, n.z, -n.y) / sqrt(n.y * n.y + n.z * n.z);
+      }
+      dpdv = cross(n, dpdu);
+    }
+    else
+    {
+    vec3 dp02 = v0.position - v2.position;
+    vec3 dp12 = v1.position - v2.position;
+      float invdet = 1.0/det;
+      dpdu = (+duv12.y * dp02 - duv02.y * dp12) * invdet;
+      dpdv = (-duv12.x * dp02 + duv02.x * dp12) * invdet;
+    }
+    DerivativeBuffer.d[triangle_id].dpdu = vec4(dpdu, 0.0);
+    DerivativeBuffer.d[triangle_id].dpdv = vec4(dpdv, 0.0);
+    DerivativeBuffer.d[triangle_id].normal = vec4(n, 0.0);
+  }
+}

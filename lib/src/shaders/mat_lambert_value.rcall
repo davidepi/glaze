@@ -19,7 +19,7 @@ Spectrum lambert_value()
 
 void main()
 {
-  if (dot(bsdf.normal, bsdf.wiW)*dot(bsdf.normal, bsdf.woW) > 0)
+  if (dot(bsdf.geometric_normal, bsdf.wiW)*dot(bsdf.geometric_normal, bsdf.woW) > 0)
   {
     RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
     Spectrum value = lambert_value();
