@@ -422,7 +422,7 @@ impl ImguiRenderer {
                                 let tex_id = texture_id.id();
                                 let tex_info = &self.scene_textures.as_ref().unwrap()[tex_id].info;
                                 let desc = &self.tex_descs[tex_id];
-                                if tex_info.format == TextureFormat::Rgba && pipeline_bw {
+                                if tex_info.format == TextureFormat::RgbaSrgb && pipeline_bw {
                                     // set default pipeline
                                     pipeline_bw = false;
                                     unsafe {

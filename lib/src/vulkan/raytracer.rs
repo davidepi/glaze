@@ -475,7 +475,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         );
         let out_info = TextureInfo {
             name: "RT out image".to_string(),
-            format: TextureFormat::Rgba,
+            format: TextureFormat::RgbaSrgb,
             width: self.extent.width as u16,
             height: self.extent.height as u16,
         };

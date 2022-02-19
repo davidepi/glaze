@@ -422,7 +422,8 @@ fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
 fn channels_to_string(colortype: TextureFormat) -> &'static str {
     match colortype {
         TextureFormat::Gray => "Grayscale",
-        TextureFormat::Rgba => "RGBA",
+        TextureFormat::RgbaSrgb => "RGBA (sRGB)",
+        TextureFormat::RgbaNorm => "RGBA (linear)",
     }
 }
 
@@ -448,15 +449,11 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
             .begin(ui)
         {
             if let Some(scene) = scene {
-                scene
-                    .materials()
-                    .into_iter()
-                    .enumerate()
-                    .for_each(|(id, mat)| {
-                        if Selectable::new(&mat.name).build(ui) {
-                            *selected = Some(id as u16);
-                        }
-                    });
+                scene.materials().iter().enumerate().for_each(|(id, mat)| {
+                    if Selectable::new(&mat.name).build(ui) {
+                        *selected = Some(id as u16);
+                    }
+                });
             }
             mat_combo.end();
         }
@@ -466,6 +463,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
             let mut new_diffuse = None;
             let mut new_diff_mul = None;
             let mut new_opacity = None;
+            let mut new_normal = None;
             ui.separator();
             let current = scene.single_material(*selected).unwrap();
             if let Some(shader_combo) = ComboBox::new("Type")
@@ -516,6 +514,15 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                 state.textures_selected = Some(opac);
                 state.textures_window = true;
             }
+            let (norm, norm_clicked) = texture_selector(ui, "Normal", current.normal, scene);
+            if norm != current.normal {
+                changed = true;
+                new_normal = Some(norm);
+            }
+            if norm_clicked {
+                state.textures_selected = Some(norm);
+                state.textures_window = true;
+            }
             if changed {
                 let mut new_mat = current.clone();
                 if let Some(shader) = new_shader {
@@ -526,6 +533,8 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                     new_mat.diffuse_mul = new_diff_mul;
                 } else if let Some(new_opacity) = new_opacity {
                     new_mat.opacity = new_opacity;
+                } else if let Some(new_normal) = new_normal {
+                    new_mat.normal = new_normal;
                 }
                 renderer.change_material(*selected, new_mat);
             }
@@ -538,7 +547,7 @@ fn texture_selector(ui: &Ui, text: &str, mut selected: u16, scene: &VulkanScene)
     let mut clicked_on_preview = false;
     let name = &scene.single_texture(selected).unwrap().info.name;
     if let Some(cb) = ComboBox::new(text).preview_value(name).begin(ui) {
-        for (id, texture) in scene.textures().into_iter().enumerate() {
+        for (id, texture) in scene.textures().iter().enumerate() {
             if Selectable::new(&texture.info.name).build(ui) {
                 selected = id as u16;
             }

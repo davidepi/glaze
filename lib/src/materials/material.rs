@@ -15,6 +15,9 @@ pub struct Material {
     /// Index of the texture used to determine the opacity mask of the material.
     /// 0 if no opacity.
     pub opacity: u16,
+    /// Index of the texture used to determine the normal mapping of the material.
+    /// 0 if no normal map.
+    pub normal: u16,
 }
 
 impl Default for Material {
@@ -26,6 +29,7 @@ impl Default for Material {
             diffuse: 0,
             diffuse_mul: [255, 255, 255, 255],
             opacity: 0,
+            normal: 0,
         }
     }
 }

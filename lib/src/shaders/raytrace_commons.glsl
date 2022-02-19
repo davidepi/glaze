@@ -78,6 +78,7 @@ struct RTMaterial
   vec4 diffuse_mul;
   uint diffuse;
   uint opacity;
+  uint normal;
   uint bsdf_index;
 };
 

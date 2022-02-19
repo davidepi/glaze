@@ -75,10 +75,16 @@ pub enum TextureFormat {
     /// A grayscale texture.
     /// 8 bit per channel, single channel.
     Gray,
+    /// A color texture with an alpha channel.
+    /// 8 bit per channel, 4 channels.
+    /// The channels are ordered as Red, Green, Blue, Alpha.
+    /// The image is encoded linearly.
+    RgbaNorm,
     /// A color texture with alpha channel.
     /// 8 bit per channel, 4 channels.
     /// The channels are ordered as Red, Green, Blue, Alpha.
-    Rgba,
+    /// The image is encoded in the sRGB color space.
+    RgbaSrgb,
 }
 
 impl TextureFormat {
@@ -86,7 +92,8 @@ impl TextureFormat {
     pub fn to_color_type(self) -> image::ColorType {
         match self {
             TextureFormat::Gray => image::ColorType::L8,
-            TextureFormat::Rgba => image::ColorType::Rgba8,
+            TextureFormat::RgbaSrgb => image::ColorType::Rgba8,
+            TextureFormat::RgbaNorm => image::ColorType::Rgba8,
         }
     }
 }
@@ -101,6 +108,7 @@ pub enum Texture {
 impl Texture {
     /// Creates a new grayscale texture from the given info and image.
     pub fn new_gray(info: TextureInfo, data: image::GrayImage) -> Self {
+        assert!(info.format == TextureFormat::Gray);
         Texture::Gray(TextureGray {
             info,
             data: vec![data],
@@ -109,11 +117,13 @@ impl Texture {
 
     /// Creates a new grayscale texture from the given info and MIP maps chain.
     pub fn new_gray_with_mipmaps(info: TextureInfo, data: Vec<image::GrayImage>) -> Self {
+        assert!(info.format == TextureFormat::Gray);
         Texture::Gray(TextureGray { info, data })
     }
 
     /// Creates a new color texture from the given ingo and image.
     pub fn new_rgba(info: TextureInfo, data: image::RgbaImage) -> Self {
+        assert!(info.format == TextureFormat::RgbaSrgb || info.format == TextureFormat::RgbaNorm);
         Texture::Rgba(TextureRGBA {
             info,
             data: vec![data],
@@ -122,6 +132,7 @@ impl Texture {
 
     /// Creates a new color texture from the given ingo and MIP maps chain.
     pub fn new_rgba_with_mipmaps(info: TextureInfo, data: Vec<image::RgbaImage>) -> Self {
+        assert!(info.format == TextureFormat::RgbaSrgb || info.format == TextureFormat::RgbaNorm);
         Texture::Rgba(TextureRGBA { info, data })
     }
 
@@ -171,7 +182,7 @@ impl Texture {
     /// Returns the format of the texture.
     pub const fn format(&self) -> TextureFormat {
         match self {
-            Texture::Rgba(_) => TextureFormat::Rgba,
+            Texture::Rgba(t) => t.info.format,
             Texture::Gray(_) => TextureFormat::Gray,
         }
     }
@@ -235,7 +246,7 @@ impl Default for Texture {
             name: "default".to_string(),
             width: WIDTH as u16,
             height: HEIGHT as u16,
-            format: TextureFormat::Rgba,
+            format: TextureFormat::RgbaSrgb,
         };
         Texture::Rgba(TextureRGBA {
             info,

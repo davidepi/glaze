@@ -798,14 +798,16 @@ fn texture_to_bytes(texture: &Texture) -> Vec<u8> {
 fn format_to_u8(format: TextureFormat) -> u8 {
     match format {
         TextureFormat::Gray => 1,
-        TextureFormat::Rgba => 2,
+        TextureFormat::RgbaSrgb => 2,
+        TextureFormat::RgbaNorm => 3,
     }
 }
 
 fn u8_to_format(format: u8) -> Result<TextureFormat, Error> {
     match format {
         1 => Ok(TextureFormat::Gray),
-        2 => Ok(TextureFormat::Rgba),
+        2 => Ok(TextureFormat::RgbaSrgb),
+        3 => Ok(TextureFormat::RgbaNorm),
         _ => panic!("Texture format unexpected"),
     }
 }
@@ -852,7 +854,7 @@ fn bytes_to_texture(data: &[u8]) -> Result<Texture, Error> {
             }
             Texture::new_gray_with_mipmaps(info, data)
         }
-        TextureFormat::Rgba => {
+        TextureFormat::RgbaSrgb | TextureFormat::RgbaNorm => {
             let mut data = Vec::with_capacity(miplvls);
             for (mip, (w, h)) in mipmaps.into_iter().zip(dimensions.into_iter()) {
                 let conversion_error = Error::new(
@@ -877,7 +879,7 @@ fn material_to_bytes(material: &Material) -> Vec<u8> {
         + std::mem::size_of::<u8>() // shader id
         + std::mem::size_of::<u16>() // diffuse texture id
         + 4 * std::mem::size_of::<u8>() // diffuse multiplier
-        + std::mem::size_of::<u16>(); // opacity texture id
+        + 2 * std::mem::size_of::<u16>(); // opacity + normal texture id
     let mut retval = Vec::with_capacity(total_len);
     retval.push(str_len as u8);
     retval.extend(material.name.bytes());
@@ -885,6 +887,7 @@ fn material_to_bytes(material: &Material) -> Vec<u8> {
     retval.extend(material.diffuse.to_le_bytes());
     retval.extend(&material.diffuse_mul[0..4]);
     retval.extend(material.opacity.to_le_bytes());
+    retval.extend(material.normal.to_le_bytes());
     retval
 }
 
@@ -906,12 +909,15 @@ fn bytes_to_material(data: &[u8]) -> Material {
     ];
     index += 4;
     let opacity = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+    index += 2;
+    let normal = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
     Material {
         name,
         shader: shader_id.into(),
         diffuse,
         diffuse_mul,
         opacity,
+        normal,
     }
 }
 
@@ -1146,10 +1152,12 @@ mod tests {
             if rng.gen_bool(0.5) {
                 cur_img.rotate90();
             }
-            let format = if rng.gen_bool(0.5) {
+            let format = if rng.gen_bool(0.33) {
                 TextureFormat::Gray
+            } else if rng.gen_bool(0.5) {
+                TextureFormat::RgbaSrgb
             } else {
-                TextureFormat::Rgba
+                TextureFormat::RgbaNorm
             };
             let name = Xoshiro128StarStar::seed_from_u64(rng.gen())
                 .sample_iter(&Alphanumeric)
@@ -1164,7 +1172,8 @@ mod tests {
             };
             let texture = match format {
                 TextureFormat::Gray => Texture::new_gray(info, cur_img.into_luma8()),
-                TextureFormat::Rgba => Texture::new_rgba(info, cur_img.into_rgba8()),
+                TextureFormat::RgbaSrgb => Texture::new_rgba(info, cur_img.into_rgba8()),
+                TextureFormat::RgbaNorm => Texture::new_rgba(info, cur_img.into_rgba8()),
             };
             data.push(texture);
         }
@@ -1198,12 +1207,18 @@ mod tests {
             } else {
                 0
             };
+            let normal = if rng.gen_bool(0.1) {
+                rng.gen_range(0..u16::MAX - 1)
+            } else {
+                0
+            };
             let material = Material {
                 name,
                 shader,
                 diffuse,
                 diffuse_mul,
                 opacity,
+                normal,
             };
             data.push(material);
         }

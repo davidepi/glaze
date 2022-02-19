@@ -707,7 +707,8 @@ fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
     };
     let vkformat = match texture.format() {
         TextureFormat::Gray => vk::Format::R8_UNORM,
-        TextureFormat::Rgba => vk::Format::R8G8B8A8_SRGB,
+        TextureFormat::RgbaSrgb => vk::Format::R8G8B8A8_SRGB,
+        TextureFormat::RgbaNorm => vk::Format::R8G8B8A8_UNORM,
     };
     let cpu_buf = mm.create_buffer(
         "Texture Buffer",
@@ -892,6 +893,7 @@ struct RTMaterial {
     diffuse_mul: [f32; 4],
     diffuse: u32,
     opacity: u32,
+    normal: u32,
     // callable shader index for the bsdf_value
     bsdf_index: u32,
 }
@@ -1211,6 +1213,7 @@ fn load_raytrace_materials_to_gpu(
             diffuse_mul: col_int_to_f32(mat.diffuse_mul),
             diffuse: mat.diffuse as u32,
             opacity: mat.opacity as u32,
+            normal: mat.normal as u32,
             bsdf_index: mat.shader.sbt_callable_index(),
         })
         .collect::<Vec<_>>();
@@ -1444,6 +1447,7 @@ fn build_raytrace_descriptor(
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::RAYGEN_KHR
                 | vk::ShaderStageFlags::CALLABLE_KHR
+                | vk::ShaderStageFlags::CLOSEST_HIT_KHR
                 | vk::ShaderStageFlags::ANY_HIT_KHR,
         )
         .bind_buffer(
@@ -1455,7 +1459,9 @@ fn build_raytrace_descriptor(
             &textures_memory,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             sampler,
-            vk::ShaderStageFlags::ANY_HIT_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR
+                | vk::ShaderStageFlags::ANY_HIT_KHR
+                | vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .bind_buffer(
             derivative_buffer,

@@ -11,6 +11,7 @@ use glaze::{
     Transform, Vertex, DEFAULT_TEXTURE_ID,
 };
 use image::io::Reader as ImageReader;
+use image::GenericImageView;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use russimp::material::{MaterialProperty, PropertyTypeInfo};
 use russimp::scene::{PostProcess, Scene as RussimpScene};
@@ -440,7 +441,16 @@ fn convert_materials(
                         tex_name,
                         path,
                         &mut used_textures,
-                        TextureFormat::Rgba,
+                        TextureFormat::RgbaSrgb,
+                        &mut retval_textures,
+                    )?;
+                }
+                russimp::texture::TextureType::Normals => {
+                    convert_texture(
+                        tex_name,
+                        path,
+                        &mut used_textures,
+                        TextureFormat::RgbaNorm,
                         &mut retval_textures,
                     )?;
                 }
@@ -477,27 +487,27 @@ fn convert_texture(
     if !used.contains_key(&used_name) {
         let data = ImageReader::open(path)?.decode();
         if let Ok(data) = data {
+            let mut info = TextureInfo {
+                // this is the displayed name, I want to retain this the same as the one on the file
+                name: name.to_string(),
+                width: data.width() as u16,
+                height: data.height() as u16,
+                format: TextureFormat::RgbaSrgb,
+            };
             let texture = match format {
                 TextureFormat::Gray => {
                     let img_raw = data.to_luma8();
-                    let info = TextureInfo {
-                        // this is the displayed name, I want to retain this the same as the one on the file
-                        name: name.to_string(),
-                        width: img_raw.width() as u16,
-                        height: img_raw.height() as u16,
-                        format: TextureFormat::Gray,
-                    };
+                    info.format = TextureFormat::Gray;
                     Texture::new_gray(info, img_raw)
                 }
-                TextureFormat::Rgba => {
+                TextureFormat::RgbaSrgb => {
                     let img_raw = data.to_rgba8();
-                    let info = TextureInfo {
-                        // this is the displayed name, I want to retain this the same as the one on the file
-                        name: name.to_string(),
-                        width: img_raw.width() as u16,
-                        height: img_raw.height() as u16,
-                        format: TextureFormat::Rgba,
-                    };
+                    info.format = TextureFormat::RgbaSrgb;
+                    Texture::new_rgba(info, img_raw)
+                }
+                TextureFormat::RgbaNorm => {
+                    let img_raw = data.to_rgba8();
+                    info.format = TextureFormat::RgbaNorm;
                     Texture::new_rgba(info, img_raw)
                 }
             };
@@ -526,9 +536,10 @@ fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, 
             "$tex.file" => {
                 let prop_name = matprop_to_str(property);
                 let format = match property.semantic {
-                    russimp::texture::TextureType::Diffuse => TextureFormat::Rgba,
+                    russimp::texture::TextureType::Diffuse => TextureFormat::RgbaSrgb,
+                    russimp::texture::TextureType::Normals => TextureFormat::RgbaNorm,
                     russimp::texture::TextureType::Opacity => TextureFormat::Gray,
-                    _ => TextureFormat::Rgba,
+                    _ => TextureFormat::RgbaSrgb,
                 };
                 let tex_name = used_name(&prop_name, format);
                 let texture = if let Some(texture_id) = used_textures.get(&tex_name) {
@@ -538,6 +549,7 @@ fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, 
                 };
                 match property.semantic {
                     russimp::texture::TextureType::Diffuse => retval.diffuse = texture,
+                    russimp::texture::TextureType::Normals => retval.normal = texture,
                     russimp::texture::TextureType::Opacity => retval.opacity = texture,
                     _ => {}
                 }
@@ -553,7 +565,8 @@ fn used_name(name: &str, format: TextureFormat) -> String {
     // used with different formats
     let format_str = match format {
         TextureFormat::Gray => "(R)",
-        TextureFormat::Rgba => "(RGBA)",
+        TextureFormat::RgbaSrgb => "(sRGBA)",
+        TextureFormat::RgbaNorm => "(lRGBA)",
     };
     format!("{}{}", name, format_str)
 }

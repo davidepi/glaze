@@ -5,11 +5,11 @@ struct ShadingSpace
   vec3 n;
 };
 
-ShadingSpace new_shading_space(in vec3 dpdu, in vec3 normal)
+ShadingSpace new_shading_space(in vec3 dpdu, in vec3 shad_normal)
 {
-  vec3 s = normalize(dpdu);
-  vec3 t = cross(normal, s);
-  return ShadingSpace(s, t, normal);
+  vec3 s = normalize(dpdu - shad_normal*dot(shad_normal, dpdu));
+  vec3 t = cross(shad_normal, s);
+  return ShadingSpace(s, t, shad_normal);
 }
 
 vec3 to_world_space(in vec3 vector, in ShadingSpace matrix)
