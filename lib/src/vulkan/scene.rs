@@ -266,7 +266,11 @@ impl VulkanScene {
                 device.logical_clone(),
                 rpass,
                 render_size,
-                &[frame_desc_layout, new_desc.layout],
+                &[
+                    frame_desc_layout,
+                    new_desc.layout,
+                    self.transforms[0].1.layout,
+                ],
             )
         });
         // replace the old material
