@@ -206,6 +206,12 @@ impl Spectrum {
     }
 }
 
+impl From<[f32; Spectrum::SAMPLES]> for Spectrum {
+    fn from(wavelength: [f32; Spectrum::SAMPLES]) -> Self {
+        Spectrum { wavelength }
+    }
+}
+
 impl Default for Spectrum {
     fn default() -> Self {
         Self {

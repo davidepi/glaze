@@ -14,7 +14,7 @@ pub use geometry::{
 #[cfg(feature = "vulkan")]
 pub use materials::TextureLoaded;
 pub use materials::{
-    Material, ShaderMat, Texture, TextureFormat, TextureGray, TextureInfo, TextureRGBA,
+    Material, Metal, ShaderMat, Texture, TextureFormat, TextureGray, TextureInfo, TextureRGBA,
     DEFAULT_MATERIAL_ID, DEFAULT_TEXTURE_ID,
 };
 pub use parser::{converted_file, parse, Meta, ParsedScene, ParserVersion, Serializer};
