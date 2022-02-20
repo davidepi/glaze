@@ -904,10 +904,11 @@ struct RTMaterial {
     metal_ior1: [f32; 4],
     metal_ior2: [f32; 4],
     metal_ior3: [f32; 4],
-    metal_k0: [f32; 4],
-    metal_k1: [f32; 4],
-    metal_k2: [f32; 4],
-    metal_k3: [f32; 4],
+    metal_fresnel0: [f32; 4],
+    metal_fresnel1: [f32; 4],
+    metal_fresnel2: [f32; 4],
+    metal_fresnel3: [f32; 4],
+    is_specular: u32,
 }
 
 #[repr(C, align(16))]
@@ -1225,6 +1226,12 @@ fn load_raytrace_materials_to_gpu(
             let metal: Metal = mat.metal;
             let ior = metal.index_of_refraction();
             let k = metal.absorption();
+            let fresnel = (ior * ior) + (k * k);
+            let is_specular = if mat.shader.is_specular() {
+                0xFFFFFF
+            } else {
+                0x0
+            };
             RTMaterial {
                 diffuse_mul: col_int_to_f32(mat.diffuse_mul),
                 diffuse: mat.diffuse as u32,
@@ -1235,10 +1242,11 @@ fn load_raytrace_materials_to_gpu(
                 metal_ior1: ior.wavelength[4..8].try_into().unwrap(),
                 metal_ior2: ior.wavelength[8..12].try_into().unwrap(),
                 metal_ior3: ior.wavelength[12..16].try_into().unwrap(),
-                metal_k0: k.wavelength[0..4].try_into().unwrap(),
-                metal_k1: k.wavelength[4..8].try_into().unwrap(),
-                metal_k2: k.wavelength[8..12].try_into().unwrap(),
-                metal_k3: k.wavelength[12..16].try_into().unwrap(),
+                metal_fresnel0: fresnel.wavelength[0..4].try_into().unwrap(),
+                metal_fresnel1: fresnel.wavelength[4..8].try_into().unwrap(),
+                metal_fresnel2: fresnel.wavelength[8..12].try_into().unwrap(),
+                metal_fresnel3: fresnel.wavelength[12..16].try_into().unwrap(),
+                is_specular,
             }
         })
         .collect::<Vec<_>>();

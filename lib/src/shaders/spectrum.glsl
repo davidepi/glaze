@@ -59,6 +59,16 @@ vec3 rgb(vec3 xyz)
   return rgb;
 }
 
+Spectrum add(Spectrum sp, float f)
+{
+  Spectrum res;
+  res.col0 = sp.col0+f;
+  res.col1 = sp.col1+f;
+  res.col2 = sp.col2+f;
+  res.col3 = sp.col3+f;
+  return res;
+}
+
 Spectrum add(Spectrum sp0, Spectrum sp1)
 {
   Spectrum res;
@@ -67,7 +77,16 @@ Spectrum add(Spectrum sp0, Spectrum sp1)
   res.col2 = sp0.col2 + sp1.col2;
   res.col3 = sp0.col3 + sp1.col3;
   return res;
+}
 
+Spectrum sub(Spectrum sp0, Spectrum sp1)
+{
+  Spectrum res;
+  res.col0 = sp0.col0 - sp1.col0;
+  res.col1 = sp0.col1 - sp1.col1;
+  res.col2 = sp0.col2 - sp1.col2;
+  res.col3 = sp0.col3 - sp1.col3;
+  return res;
 }
 
 Spectrum mul(Spectrum sp, float f)
@@ -97,6 +116,16 @@ Spectrum div(Spectrum sp, float f)
   res.col1 = sp.col1 / f;
   res.col2 = sp.col2 / f;
   res.col3 = sp.col3 / f;
+  return res;
+}
+
+Spectrum div(Spectrum sp0, Spectrum sp1)
+{
+  Spectrum res;
+  res.col0 = sp0.col0 / sp1.col0;
+  res.col1 = sp0.col1 / sp1.col1;
+  res.col2 = sp0.col2 / sp1.col2;
+  res.col3 = sp0.col3 / sp1.col3;
   return res;
 }
 

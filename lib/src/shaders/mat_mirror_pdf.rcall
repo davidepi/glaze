@@ -7,4 +7,5 @@ layout(location = 0) callableDataInEXT BsdfPdf bsdf;
 
 void main()
 {
+  bsdf.pdf = 0.0;
 }

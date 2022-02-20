@@ -10,8 +10,32 @@ layout(std430, set=1, binding=4) readonly buffer materialBuffer {
   RTMaterial materials[];
 } MaterialBuffer;
 
-layout(set=1, binding=6) uniform sampler2D textures[];
+Spectrum mirror_sample_value(in vec3 wo, out vec3 wi, out float pdf)
+{
+  wi.x = -wo.x;
+  wi.y = -wo.y;
+  wi.z = wo.z;
+  RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
+  Spectrum ior = Spectrum(mat.metal_ior0, mat.metal_ior1, mat.metal_ior2, mat.metal_ior3);
+  Spectrum fresnel = Spectrum(mat.metal_fresnel0, mat.metal_fresnel1, mat.metal_fresnel2, mat.metal_fresnel3);
+  float cosinsq = wo.z*wo.z;
+  Spectrum etacosin2 = mul(ior, wo.z*2.0);
+  Spectrum etacosin2plus = add(etacosin2, cosinsq);
+  Spectrum etacosin2plusplus = add(etacosin2, 1.0);
+  Spectrum rperpsq = div(sub(fresnel,etacosin2plus),add(fresnel,etacosin2plus));
+  Spectrum tmp = mul(fresnel, cosinsq);
+  Spectrum rparsq = div(sub(tmp, etacosin2plusplus),add(tmp, etacosin2plusplus));
+  Spectrum eval = div(add(rperpsq, rparsq), 2.0);
+  pdf = 1.0;
+  bsdf.was_spec = true;
+  return div(eval, abs(wo.z));
+}
 
 void main()
 {
+  vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
+  vec3 wi;
+  Spectrum value = mirror_sample_value(wo, wi, bsdf.pdf);
+  bsdf.wiW = normalize(to_world_space(wi, bsdf.shading));
+  bsdf.value = value;
 }

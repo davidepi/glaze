@@ -84,6 +84,16 @@ impl ShaderMat {
         }
     }
 
+    /// Returns true if the shader is specular (mirror or clean glass).
+    pub fn is_specular(&self) -> bool {
+        match self {
+            ShaderMat::FLAT => false,
+            ShaderMat::LAMBERT => false,
+            ShaderMat::MIRROR => true,
+            ShaderMat::INTERNAL_FLAT_2SIDED => false,
+        }
+    }
+
     /// Returns a builder useful to create the pipeline for the shader.
     #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn build_viewport_pipeline(&self) -> PipelineBuilder {
