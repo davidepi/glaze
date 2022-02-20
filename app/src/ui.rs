@@ -1,7 +1,8 @@
 use cgmath::Point3;
 use glaze::{
-    parse, Camera, ColorRGB, Light, LightType, OrthographicCam, PerspectiveCam, PresentInstance,
-    RealtimeRenderer, ShaderMat, Spectrum, TextureFormat, TextureLoaded, VulkanScene,
+    parse, Camera, ColorRGB, Light, LightType, Metal, OrthographicCam, PerspectiveCam,
+    PresentInstance, RealtimeRenderer, ShaderMat, Spectrum, TextureFormat, TextureLoaded,
+    VulkanScene,
 };
 use imgui::{
     CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
@@ -461,6 +462,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
             let mut changed = false;
             let mut new_shader = None;
             let mut new_diffuse = None;
+            let mut new_metal = None;
             let mut new_diff_mul = None;
             let mut new_opacity = None;
             let mut new_normal = None;
@@ -471,12 +473,27 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                 .begin(ui)
             {
                 for shader in ShaderMat::all_values() {
-                    if Selectable::new(shader.name()).build(ui) {
+                    if Selectable::new(shader.name()).build(ui) && current.shader != shader {
                         changed = true;
                         new_shader = Some(shader);
                     }
                 }
                 shader_combo.end();
+            }
+            if current.shader.is_metallic() {
+                let current_metal: Metal = current.metal;
+                if let Some(metal_combo) = ComboBox::new("Metal")
+                    .preview_value(current_metal.name())
+                    .begin(ui)
+                {
+                    for metal in Metal::all_types() {
+                        if Selectable::new(metal.name()).build(ui) && current_metal != metal {
+                            changed = true;
+                            new_metal = Some(metal);
+                        }
+                    }
+                    metal_combo.end()
+                }
             }
             let (diff, diff_clicked) = texture_selector(ui, "Diffuse", current.diffuse, scene);
             if diff != current.diffuse {
@@ -527,6 +544,8 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                 let mut new_mat = current.clone();
                 if let Some(shader) = new_shader {
                     new_mat.shader = shader;
+                } else if let Some(new_metal) = new_metal {
+                    new_mat.metal = new_metal;
                 } else if let Some(new_diffuse) = new_diffuse {
                     new_mat.diffuse = new_diffuse;
                 } else if let Some(new_diff_mul) = new_diff_mul {

@@ -26,6 +26,8 @@ pub enum ShaderMat {
     FLAT = 0,
     /// Lambert BRDF for raytracing.
     LAMBERT = 1,
+    /// Mirror like material fo raytracing.
+    MIRROR = 2,
     /// Flat shading.
     /// Internal version, used for two-sided polygons and polygons with opacity maps.
     /// This version is automatically assigned by the engine and **SHOULD NOT** be used.
@@ -40,6 +42,7 @@ impl ShaderMat {
         match self {
             ShaderMat::FLAT | ShaderMat::INTERNAL_FLAT_2SIDED => "Flat",
             ShaderMat::LAMBERT => "Lambert",
+            ShaderMat::MIRROR => "Mirror",
         }
     }
 
@@ -50,6 +53,7 @@ impl ShaderMat {
         match id {
             0 => Ok(ShaderMat::FLAT),
             1 => Ok(ShaderMat::LAMBERT),
+            2 => Ok(ShaderMat::MIRROR),
             _ => Err(format!("Unknown shader id: {}", id).into()),
         }
     }
@@ -59,17 +63,28 @@ impl ShaderMat {
         match self {
             ShaderMat::FLAT => 0,
             ShaderMat::LAMBERT => 1,
+            ShaderMat::MIRROR => 2,
             _ => panic!("Internal shaders have no ID assigned"),
         }
     }
 
     /// Iterates all the possible assignable shaders.
     /// Shaders used internally by the engine are skipped.
-    pub fn all_values() -> [ShaderMat; 2] {
-        [ShaderMat::FLAT, ShaderMat::LAMBERT]
+    pub fn all_values() -> [ShaderMat; 3] {
+        [ShaderMat::FLAT, ShaderMat::LAMBERT, ShaderMat::MIRROR]
     }
 
-    /// Returns the a builder useful to create the pipeline for the shader.
+    /// Returns true if the shader exhibit metallicness.
+    pub fn is_metallic(&self) -> bool {
+        match self {
+            ShaderMat::FLAT => false,
+            ShaderMat::LAMBERT => false,
+            ShaderMat::MIRROR => true,
+            ShaderMat::INTERNAL_FLAT_2SIDED => false,
+        }
+    }
+
+    /// Returns a builder useful to create the pipeline for the shader.
     #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn build_viewport_pipeline(&self) -> PipelineBuilder {
         match self {
@@ -90,6 +105,9 @@ impl ShaderMat {
             include_shader!("mat_lambert_value.rcall").to_vec(),
             include_shader!("mat_lambert_sample_value.rcall").to_vec(),
             include_shader!("mat_lambert_pdf.rcall").to_vec(),
+            include_shader!("mat_mirror_value.rcall").to_vec(),
+            include_shader!("mat_mirror_sample_value.rcall").to_vec(),
+            include_shader!("mat_mirror_pdf.rcall").to_vec(),
         ]
     }
 
@@ -98,6 +116,7 @@ impl ShaderMat {
         let base_index = SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE; // lights before mats
         let shader_index = match self {
             ShaderMat::FLAT | ShaderMat::LAMBERT => 0,
+            ShaderMat::MIRROR => 1,
             ShaderMat::INTERNAL_FLAT_2SIDED => panic!("This shader should not appear in the sbt"),
         };
         (base_index + shader_index * SBT_MATERIAL_STRIDE) as u32

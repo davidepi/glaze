@@ -80,6 +80,14 @@ struct RTMaterial
   uint opacity;
   uint normal;
   uint bsdf_index;
+  vec4 metal_ior0;
+  vec4 metal_ior1;
+  vec4 metal_ior2;
+  vec4 metal_ior3;
+  vec4 metal_k0;
+  vec4 metal_k1;
+  vec4 metal_k2;
+  vec4 metal_k3;
 };
 
 struct BsdfValue

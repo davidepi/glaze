@@ -13,4 +13,4 @@ pub const DEFAULT_TEXTURE_ID: u16 = 0;
 pub const DEFAULT_MATERIAL_ID: u16 = 0;
 
 pub(crate) const SBT_MATERIAL_STRIDE: usize = 3;
-pub(crate) const SBT_MATERIAL_TYPES: usize = 1;
+pub(crate) const SBT_MATERIAL_TYPES: usize = 2;

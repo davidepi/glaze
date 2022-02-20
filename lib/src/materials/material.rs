@@ -1,4 +1,4 @@
-use crate::ShaderMat;
+use crate::{Metal, ShaderMat};
 
 /// A material used to determine the surface of a [Mesh][crate::Mesh].
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -7,6 +7,8 @@ pub struct Material {
     pub name: String,
     /// Type of material. Determines how the light behaves on the surface.
     pub shader: ShaderMat,
+    /// If the material exhibits metallicness, this value contains the metal reference.
+    pub metal: Metal,
     /// Index of the texture used to determine the diffuse color of the material.
     /// 0 if no diffuse.
     pub diffuse: u16,
@@ -26,6 +28,7 @@ impl Default for Material {
         Self {
             name: "default".to_string(),
             shader: ShaderMat::DEFAULT_SHADER,
+            metal: Metal::SILVER,
             diffuse: 0,
             diffuse_mul: [255, 255, 255, 255],
             opacity: 0,

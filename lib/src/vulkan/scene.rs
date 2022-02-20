@@ -12,7 +12,7 @@ use super::UnfinishedExecutions;
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{
-    include_shader, Camera, Light, Material, Mesh, MeshInstance, Meta, ParsedScene,
+    include_shader, Camera, Light, Material, Mesh, MeshInstance, Meta, Metal, ParsedScene,
     RayTraceInstance, Vertex,
 };
 #[cfg(feature = "vulkan-interactive")]
@@ -900,6 +900,14 @@ struct RTMaterial {
     normal: u32,
     // callable shader index for the bsdf_value
     bsdf_index: u32,
+    metal_ior0: [f32; 4],
+    metal_ior1: [f32; 4],
+    metal_ior2: [f32; 4],
+    metal_ior3: [f32; 4],
+    metal_k0: [f32; 4],
+    metal_k1: [f32; 4],
+    metal_k2: [f32; 4],
+    metal_k3: [f32; 4],
 }
 
 #[repr(C, align(16))]
@@ -1213,12 +1221,25 @@ fn load_raytrace_materials_to_gpu(
 ) -> AllocatedBuffer {
     let data = materials
         .iter()
-        .map(|mat| RTMaterial {
-            diffuse_mul: col_int_to_f32(mat.diffuse_mul),
-            diffuse: mat.diffuse as u32,
-            opacity: mat.opacity as u32,
-            normal: mat.normal as u32,
-            bsdf_index: mat.shader.sbt_callable_index(),
+        .map(|mat| {
+            let metal: Metal = mat.metal;
+            let ior = metal.index_of_refraction();
+            let k = metal.absorption();
+            RTMaterial {
+                diffuse_mul: col_int_to_f32(mat.diffuse_mul),
+                diffuse: mat.diffuse as u32,
+                opacity: mat.opacity as u32,
+                normal: mat.normal as u32,
+                bsdf_index: mat.shader.sbt_callable_index(),
+                metal_ior0: ior.wavelength[0..4].try_into().unwrap(),
+                metal_ior1: ior.wavelength[4..8].try_into().unwrap(),
+                metal_ior2: ior.wavelength[8..12].try_into().unwrap(),
+                metal_ior3: ior.wavelength[12..16].try_into().unwrap(),
+                metal_k0: k.wavelength[0..4].try_into().unwrap(),
+                metal_k1: k.wavelength[4..8].try_into().unwrap(),
+                metal_k2: k.wavelength[8..12].try_into().unwrap(),
+                metal_k3: k.wavelength[12..16].try_into().unwrap(),
+            }
         })
         .collect::<Vec<_>>();
     upload_buffer(

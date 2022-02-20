@@ -1,7 +1,7 @@
 use super::{write_header, Meta, ParsedScene, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
 use crate::materials::{TextureFormat, TextureInfo};
-use crate::{Light, Material, MeshInstance, Spectrum, Texture, Transform};
+use crate::{Light, Material, MeshInstance, Metal, ShaderMat, Spectrum, Texture, Transform};
 use cgmath::{Point2, Point3, Vector3 as Vec3};
 use fnv::FnvHashMap;
 use image::png::{CompressionType, FilterType, PngDecoder, PngEncoder};
@@ -874,12 +874,15 @@ fn bytes_to_texture(data: &[u8]) -> Result<Texture, Error> {
 fn material_to_bytes(material: &Material) -> Vec<u8> {
     let str_len = material.name.bytes().len();
     assert!(str_len < 256);
-    let total_len = std::mem::size_of::<u8>() // str_len
+    let mut total_len = std::mem::size_of::<u8>() // str_len
         + str_len //actual string
         + std::mem::size_of::<u8>() // shader id
         + std::mem::size_of::<u16>() // diffuse texture id
         + 4 * std::mem::size_of::<u8>() // diffuse multiplier
         + 2 * std::mem::size_of::<u16>(); // opacity + normal texture id
+    if material.shader.is_metallic() {
+        total_len += 1; //need to store the metallic data
+    }
     let mut retval = Vec::with_capacity(total_len);
     retval.push(str_len as u8);
     retval.extend(material.name.bytes());
@@ -888,6 +891,9 @@ fn material_to_bytes(material: &Material) -> Vec<u8> {
     retval.extend(&material.diffuse_mul[0..4]);
     retval.extend(material.opacity.to_le_bytes());
     retval.extend(material.normal.to_le_bytes());
+    if material.shader.is_metallic() {
+        retval.push(material.metal.into());
+    }
     retval
 }
 
@@ -897,7 +903,7 @@ fn bytes_to_material(data: &[u8]) -> Material {
     let mut index = 1;
     let name = String::from_utf8(data[index..index + str_len].to_vec()).unwrap();
     index += str_len;
-    let shader_id = data[index];
+    let shader: ShaderMat = data[index].into();
     index += 1;
     let diffuse = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
     index += 2;
@@ -911,9 +917,16 @@ fn bytes_to_material(data: &[u8]) -> Material {
     let opacity = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
     index += 2;
     let normal = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+    index += 2;
+    let metal = if shader.is_metallic() {
+        Metal::from(data[index])
+    } else {
+        Metal::default()
+    };
     Material {
         name,
-        shader: shader_id.into(),
+        shader,
+        metal,
         diffuse,
         diffuse_mul,
         opacity,
@@ -1052,7 +1065,7 @@ mod tests {
     };
     use crate::parser::{parse, Meta, ParserVersion, HEADER_LEN};
     use crate::{
-        Light, Material, MeshInstance, Serializer, ShaderMat, Spectrum, Texture, Transform,
+        Light, Material, MeshInstance, Metal, Serializer, ShaderMat, Spectrum, Texture, Transform,
     };
     use cgmath::{Matrix4, Point2, Point3, Vector3 as Vec3};
     use image::GenericImageView;
@@ -1186,6 +1199,12 @@ mod tests {
         for _ in 0..count {
             let shaders = ShaderMat::all_values();
             let shader = shaders[rng.gen_range(0..shaders.len())];
+            let metal = if shader.is_metallic() {
+                let metal_id = rng.gen_range(0..Metal::all_types().len());
+                Metal::from(metal_id as u8)
+            } else {
+                Metal::default()
+            };
             let diffuse = if rng.gen_bool(0.5) {
                 rng.gen_range(0..u16::MAX - 1)
             } else {
@@ -1215,6 +1234,7 @@ mod tests {
             let material = Material {
                 name,
                 shader,
+                metal,
                 diffuse,
                 diffuse_mul,
                 opacity,
