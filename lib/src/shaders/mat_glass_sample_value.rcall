@@ -1,0 +1,74 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier: require
+
+#include "raytrace_commons.glsl"
+
+layout(location = 0) callableDataInEXT BsdfSampleValue bsdf;
+
+layout(std430, set=1, binding=4) readonly buffer materialBuffer {
+  RTMaterial materials[];
+} MaterialBuffer;
+
+float fresnel_dielectric(in float costi, in float eta, out float etai, out float etat)
+{
+  costi = clamp(costi, -1.0, 1.0);
+  if(costi>0.0)
+  {
+    etai = DEFAULT_IOR;
+    etat = eta;
+  }
+  else
+  {
+    etai = eta;
+    etat = DEFAULT_IOR;
+    costi = abs(costi);
+  }
+  float sinti = sqrt(max(0.0, 1.0-costi*costi));
+  float sintt = etai/etat * sinti;
+  if(sintt >= 1.0)
+  {
+    return 1.0;
+  }
+  float costt = sqrt(max(0.0, 1.0-sintt*sintt));
+  float rparl = ((etat * costi) - (etai * costt)) / ((etat * costi) + (etai * costt));
+  float rperp = ((etai * costi) - (etat * costt)) / ((etai * costi) + (etat * costt));
+  return (rparl*rparl+rperp*rperp)/2.0;
+}
+
+Spectrum glass_reflective_sample_value(in vec3 wo, out vec3 wi, in float fresnel)
+{
+  wi = vec3(-wo.x, -wo.y, wo.z);
+  float eval = fresnel/abs(wi.z);
+  Spectrum reflective_component = SPECTRUM_ONE;
+  return mul(reflective_component, eval);
+}
+
+Spectrum glass_refractive_sample_value(in vec3 wo, out vec3 wi, in float fresnel, in float etai, in float etat)
+{
+  wi = refract(wo, vec3(0.0, 0.0, sign(wo.z)), etai/etat);
+  float eval = (1.0-fresnel)*(etai*etai)/(etat*etat*abs(wi.z));
+  Spectrum refractive_component = SPECTRUM_ONE;
+  return mul(refractive_component, eval);
+}
+
+void main()
+{
+  vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
+  RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
+  float etai;
+  float etat;
+  float fresnel = fresnel_dielectric(wo.z, mat.ior0.x, etai, etat);
+  vec3 wi;
+  if(bsdf.rand_sample.x < fresnel)
+  {
+    bsdf.value = glass_reflective_sample_value(wo, wi, fresnel);
+    bsdf.pdf = fresnel;
+  }
+  else
+  {
+    bsdf.value = glass_refractive_sample_value(wo, wi, fresnel, etai, etat);
+    bsdf.pdf = 1.0 - fresnel;
+  }
+  bsdf.wiW = to_world_space(wi, bsdf.shading);
+}

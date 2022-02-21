@@ -14,7 +14,7 @@ layout(set=1, binding=6) uniform sampler2D textures[];
 
 Spectrum lambert_value()
 {
-  return mul(Spectrum(vec4(1), vec4(1), vec4(1), vec4(1)), INV_PI);
+  return mul(SPECTRUM_ONE, INV_PI);
 }
 
 void main()
@@ -29,6 +29,6 @@ void main()
   }
   else
   {
-    bsdf.value = Spectrum(vec4(0), vec4(0), vec4(0), vec4(0));
+    bsdf.value = SPECTRUM_ZERO;
   }
 }

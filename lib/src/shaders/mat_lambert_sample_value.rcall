@@ -22,7 +22,7 @@ Spectrum lambert_sample_value(in vec2 rand_sample, in vec3 wo, out vec3 wi, out 
   wi.z *= sign(wo.z);
   pdf = abs(wi.z) * INV_PI;
   bsdf.was_spec = false;
-  return mul(Spectrum(vec4(1), vec4(1), vec4(1), vec4(1)), INV_PI);
+  return mul(SPECTRUM_ONE, INV_PI);
 }
 
 void main()

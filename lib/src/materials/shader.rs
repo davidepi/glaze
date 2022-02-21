@@ -28,6 +28,8 @@ pub enum ShaderMat {
     LAMBERT = 1,
     /// Mirror like material fo raytracing.
     MIRROR = 2,
+    //Perfectly flat transmittent surface.
+    GLASS = 3,
     /// Flat shading.
     /// Internal version, used for two-sided polygons and polygons with opacity maps.
     /// This version is automatically assigned by the engine and **SHOULD NOT** be used.
@@ -43,6 +45,7 @@ impl ShaderMat {
             ShaderMat::FLAT | ShaderMat::INTERNAL_FLAT_2SIDED => "Flat",
             ShaderMat::LAMBERT => "Lambert",
             ShaderMat::MIRROR => "Mirror",
+            ShaderMat::GLASS => "Glass",
         }
     }
 
@@ -54,6 +57,7 @@ impl ShaderMat {
             0 => Ok(ShaderMat::FLAT),
             1 => Ok(ShaderMat::LAMBERT),
             2 => Ok(ShaderMat::MIRROR),
+            3 => Ok(ShaderMat::GLASS),
             _ => Err(format!("Unknown shader id: {}", id).into()),
         }
     }
@@ -64,24 +68,20 @@ impl ShaderMat {
             ShaderMat::FLAT => 0,
             ShaderMat::LAMBERT => 1,
             ShaderMat::MIRROR => 2,
+            ShaderMat::GLASS => 3,
             _ => panic!("Internal shaders have no ID assigned"),
         }
     }
 
     /// Iterates all the possible assignable shaders.
     /// Shaders used internally by the engine are skipped.
-    pub fn all_values() -> [ShaderMat; 3] {
-        [ShaderMat::FLAT, ShaderMat::LAMBERT, ShaderMat::MIRROR]
-    }
-
-    /// Returns true if the shader exhibit metallicness.
-    pub fn is_metallic(&self) -> bool {
-        match self {
-            ShaderMat::FLAT => false,
-            ShaderMat::LAMBERT => false,
-            ShaderMat::MIRROR => true,
-            ShaderMat::INTERNAL_FLAT_2SIDED => false,
-        }
+    pub fn all_values() -> [ShaderMat; 4] {
+        [
+            ShaderMat::FLAT,
+            ShaderMat::LAMBERT,
+            ShaderMat::MIRROR,
+            ShaderMat::GLASS,
+        ]
     }
 
     /// Returns true if the shader is specular (mirror or clean glass).
@@ -90,6 +90,31 @@ impl ShaderMat {
             ShaderMat::FLAT => false,
             ShaderMat::LAMBERT => false,
             ShaderMat::MIRROR => true,
+            ShaderMat::GLASS => true,
+            ShaderMat::INTERNAL_FLAT_2SIDED => false,
+        }
+    }
+
+    /// Returns true if the shader exhibit is described by Fresnel's law for conductors and thus
+    /// requires a complex index of refraction.
+    pub fn is_conductor(&self) -> bool {
+        match self {
+            ShaderMat::FLAT => false,
+            ShaderMat::LAMBERT => false,
+            ShaderMat::MIRROR => true,
+            ShaderMat::GLASS => false,
+            ShaderMat::INTERNAL_FLAT_2SIDED => false,
+        }
+    }
+
+    /// Returns true if the shader is described by Fresnel's law for dielectrics and thus requires
+    /// an index of refraction.
+    pub fn is_dielectric(&self) -> bool {
+        match self {
+            ShaderMat::FLAT => false,
+            ShaderMat::LAMBERT => false,
+            ShaderMat::MIRROR => false,
+            ShaderMat::GLASS => true,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
     }
@@ -118,6 +143,9 @@ impl ShaderMat {
             include_shader!("mat_mirror_value.rcall").to_vec(),
             include_shader!("mat_mirror_sample_value.rcall").to_vec(),
             include_shader!("mat_mirror_pdf.rcall").to_vec(),
+            include_shader!("mat_glass_value.rcall").to_vec(),
+            include_shader!("mat_glass_sample_value.rcall").to_vec(),
+            include_shader!("mat_glass_pdf.rcall").to_vec(),
         ]
     }
 
@@ -127,6 +155,7 @@ impl ShaderMat {
         let shader_index = match self {
             ShaderMat::FLAT | ShaderMat::LAMBERT => 0,
             ShaderMat::MIRROR => 1,
+            ShaderMat::GLASS => 2,
             ShaderMat::INTERNAL_FLAT_2SIDED => panic!("This shader should not appear in the sbt"),
         };
         (base_index + shader_index * SBT_MATERIAL_STRIDE) as u32

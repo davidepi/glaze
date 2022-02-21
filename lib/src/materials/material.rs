@@ -1,7 +1,7 @@
 use crate::{Metal, ShaderMat};
 
 /// A material used to determine the surface of a [Mesh][crate::Mesh].
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Material {
     /// Name used to refer to a material. The name is not unique and used only to aid the user.
     pub name: String,
@@ -9,6 +9,8 @@ pub struct Material {
     pub shader: ShaderMat,
     /// If the material exhibits metallicness, this value contains the metal reference.
     pub metal: Metal,
+    /// If the material is a dielectric, this value stores the index of refraction.
+    pub ior: f32,
     /// Index of the texture used to determine the diffuse color of the material.
     /// 0 if no diffuse.
     pub diffuse: u16,
@@ -29,6 +31,7 @@ impl Default for Material {
             name: "default".to_string(),
             shader: ShaderMat::DEFAULT_SHADER,
             metal: Metal::SILVER,
+            ior: 1.0,
             diffuse: 0,
             diffuse_mul: [255, 255, 255, 255],
             opacity: 0,

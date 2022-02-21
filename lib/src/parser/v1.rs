@@ -880,8 +880,11 @@ fn material_to_bytes(material: &Material) -> Vec<u8> {
         + std::mem::size_of::<u16>() // diffuse texture id
         + 4 * std::mem::size_of::<u8>() // diffuse multiplier
         + 2 * std::mem::size_of::<u16>(); // opacity + normal texture id
-    if material.shader.is_metallic() {
-        total_len += 1; //need to store the metallic data
+    if material.shader.is_conductor() {
+        total_len += 1; // need to store the metal type
+    }
+    if material.shader.is_dielectric() {
+        total_len += 4; // need to store the ior
     }
     let mut retval = Vec::with_capacity(total_len);
     retval.push(str_len as u8);
@@ -891,8 +894,11 @@ fn material_to_bytes(material: &Material) -> Vec<u8> {
     retval.extend(&material.diffuse_mul[0..4]);
     retval.extend(material.opacity.to_le_bytes());
     retval.extend(material.normal.to_le_bytes());
-    if material.shader.is_metallic() {
+    if material.shader.is_conductor() {
         retval.push(material.metal.into());
+    }
+    if material.shader.is_dielectric() {
+        retval.extend(f32::to_le_bytes(material.ior));
     }
     retval
 }
@@ -918,15 +924,23 @@ fn bytes_to_material(data: &[u8]) -> Material {
     index += 2;
     let normal = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
     index += 2;
-    let metal = if shader.is_metallic() {
-        Metal::from(data[index])
+    let metal = if shader.is_conductor() {
+        let m = Metal::from(data[index]);
+        index += 1;
+        m
     } else {
         Metal::default()
+    };
+    let ior = if shader.is_dielectric() {
+        f32::from_le_bytes(data[index..index + 4].try_into().unwrap())
+    } else {
+        1.0
     };
     Material {
         name,
         shader,
         metal,
+        ior,
         diffuse,
         diffuse_mul,
         opacity,
@@ -1199,11 +1213,16 @@ mod tests {
         for _ in 0..count {
             let shaders = ShaderMat::all_values();
             let shader = shaders[rng.gen_range(0..shaders.len())];
-            let metal = if shader.is_metallic() {
+            let metal = if shader.is_conductor() {
                 let metal_id = rng.gen_range(0..Metal::all_types().len());
                 Metal::from(metal_id as u8)
             } else {
                 Metal::default()
+            };
+            let ior = if shader.is_dielectric() {
+                rng.gen_range(1.0..3.0)
+            } else {
+                0.0
             };
             let diffuse = if rng.gen_bool(0.5) {
                 rng.gen_range(0..u16::MAX - 1)
@@ -1235,6 +1254,7 @@ mod tests {
                 name,
                 shader,
                 metal,
+                ior,
                 diffuse,
                 diffuse_mul,
                 opacity,

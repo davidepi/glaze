@@ -459,13 +459,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
             mat_combo.end();
         }
         if let (Some(selected), Some(scene)) = (selected, scene) {
-            let mut changed = false;
-            let mut new_shader = None;
-            let mut new_diffuse = None;
-            let mut new_metal = None;
-            let mut new_diff_mul = None;
-            let mut new_opacity = None;
-            let mut new_normal = None;
+            let mut new_mat = None;
             ui.separator();
             let current = scene.single_material(*selected).unwrap();
             if let Some(shader_combo) = ComboBox::new("Type")
@@ -474,13 +468,14 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
             {
                 for shader in ShaderMat::all_values() {
                     if Selectable::new(shader.name()).build(ui) && current.shader != shader {
-                        changed = true;
-                        new_shader = Some(shader);
+                        let mut new = current.clone();
+                        new.shader = shader;
+                        new_mat = Some(new);
                     }
                 }
                 shader_combo.end();
             }
-            if current.shader.is_metallic() {
+            if current.shader.is_conductor() {
                 let current_metal: Metal = current.metal;
                 if let Some(metal_combo) = ComboBox::new("Metal")
                     .preview_value(current_metal.name())
@@ -488,17 +483,30 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                 {
                     for metal in Metal::all_types() {
                         if Selectable::new(metal.name()).build(ui) && current_metal != metal {
-                            changed = true;
-                            new_metal = Some(metal);
+                            let mut new = current.clone();
+                            new.metal = metal;
+                            new_mat = Some(new);
                         }
                     }
                     metal_combo.end()
                 }
             }
+            if current.shader.is_dielectric() {
+                let mut ior = current.ior;
+                if imgui::Slider::new("Index of refraction", 1.0, 3.0)
+                    .flags(SliderFlags::ALWAYS_CLAMP)
+                    .build(ui, &mut ior)
+                {
+                    let mut new = current.clone();
+                    new.ior = ior;
+                    new_mat = Some(new);
+                }
+            }
             let (diff, diff_clicked) = texture_selector(ui, "Diffuse", current.diffuse, scene);
             if diff != current.diffuse {
-                changed = true;
-                new_diffuse = Some(diff);
+                let mut new = current.clone();
+                new.diffuse = diff;
+                new_mat = Some(new);
             }
             if diff_clicked {
                 state.textures_selected = Some(diff);
@@ -514,18 +522,20 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                 .inputs(false)
                 .build(ui)
             {
-                changed = true;
-                new_diff_mul = Some([
+                let mut new = current.clone();
+                new.diffuse_mul = [
                     (color[0] * 255.0) as u8,
                     (color[1] * 255.0) as u8,
                     (color[2] * 255.0) as u8,
                     (color[3] * 255.0) as u8,
-                ]);
+                ];
+                new_mat = Some(new);
             }
             let (opac, opac_clicked) = texture_selector(ui, "Opacity", current.opacity, scene);
             if opac != current.opacity {
-                changed = true;
-                new_opacity = Some(opac);
+                let mut new = current.clone();
+                new.opacity = opac;
+                new_mat = Some(new);
             }
             if opac_clicked {
                 state.textures_selected = Some(opac);
@@ -533,28 +543,15 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
             }
             let (norm, norm_clicked) = texture_selector(ui, "Normal", current.normal, scene);
             if norm != current.normal {
-                changed = true;
-                new_normal = Some(norm);
+                let mut new = current.clone();
+                new.normal = norm;
+                new_mat = Some(new);
             }
             if norm_clicked {
                 state.textures_selected = Some(norm);
                 state.textures_window = true;
             }
-            if changed {
-                let mut new_mat = current.clone();
-                if let Some(shader) = new_shader {
-                    new_mat.shader = shader;
-                } else if let Some(new_metal) = new_metal {
-                    new_mat.metal = new_metal;
-                } else if let Some(new_diffuse) = new_diffuse {
-                    new_mat.diffuse = new_diffuse;
-                } else if let Some(new_diff_mul) = new_diff_mul {
-                    new_mat.diffuse_mul = new_diff_mul;
-                } else if let Some(new_opacity) = new_opacity {
-                    new_mat.opacity = new_opacity;
-                } else if let Some(new_normal) = new_normal {
-                    new_mat.normal = new_normal;
-                }
+            if let Some(new_mat) = new_mat {
                 renderer.change_material(*selected, new_mat);
             }
         }

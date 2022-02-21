@@ -892,7 +892,7 @@ struct RTInstance {
 }
 
 #[repr(C, align(16))]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone)]
 struct RTMaterial {
     diffuse_mul: [f32; 4],
     diffuse: u32,
@@ -900,10 +900,10 @@ struct RTMaterial {
     normal: u32,
     // callable shader index for the bsdf_value
     bsdf_index: u32,
-    metal_ior0: [f32; 4],
-    metal_ior1: [f32; 4],
-    metal_ior2: [f32; 4],
-    metal_ior3: [f32; 4],
+    ior0: [f32; 4],
+    ior1: [f32; 4],
+    ior2: [f32; 4],
+    ior3: [f32; 4],
     metal_fresnel0: [f32; 4],
     metal_fresnel1: [f32; 4],
     metal_fresnel2: [f32; 4],
@@ -1223,31 +1223,37 @@ fn load_raytrace_materials_to_gpu(
     let data = materials
         .iter()
         .map(|mat| {
-            let metal: Metal = mat.metal;
-            let ior = metal.index_of_refraction();
-            let k = metal.absorption();
-            let fresnel = (ior * ior) + (k * k);
-            let is_specular = if mat.shader.is_specular() {
-                0xFFFFFF
-            } else {
-                0x0
-            };
-            RTMaterial {
+            let mut rtmat = RTMaterial {
                 diffuse_mul: col_int_to_f32(mat.diffuse_mul),
                 diffuse: mat.diffuse as u32,
                 opacity: mat.opacity as u32,
                 normal: mat.normal as u32,
                 bsdf_index: mat.shader.sbt_callable_index(),
-                metal_ior0: ior.wavelength[0..4].try_into().unwrap(),
-                metal_ior1: ior.wavelength[4..8].try_into().unwrap(),
-                metal_ior2: ior.wavelength[8..12].try_into().unwrap(),
-                metal_ior3: ior.wavelength[12..16].try_into().unwrap(),
-                metal_fresnel0: fresnel.wavelength[0..4].try_into().unwrap(),
-                metal_fresnel1: fresnel.wavelength[4..8].try_into().unwrap(),
-                metal_fresnel2: fresnel.wavelength[8..12].try_into().unwrap(),
-                metal_fresnel3: fresnel.wavelength[12..16].try_into().unwrap(),
-                is_specular,
+                ..Default::default()
+            };
+            if mat.shader.is_conductor() {
+                let metal: Metal = mat.metal;
+                let ior = metal.index_of_refraction();
+                let k = metal.absorption();
+                let fresnel = (ior * ior) + (k * k);
+                rtmat.ior0 = ior.wavelength[0..4].try_into().unwrap();
+                rtmat.ior1 = ior.wavelength[4..8].try_into().unwrap();
+                rtmat.ior2 = ior.wavelength[8..12].try_into().unwrap();
+                rtmat.ior3 = ior.wavelength[12..16].try_into().unwrap();
+                rtmat.metal_fresnel0 = fresnel.wavelength[0..4].try_into().unwrap();
+                rtmat.metal_fresnel1 = fresnel.wavelength[4..8].try_into().unwrap();
+                rtmat.metal_fresnel2 = fresnel.wavelength[8..12].try_into().unwrap();
+                rtmat.metal_fresnel3 = fresnel.wavelength[12..16].try_into().unwrap();
             }
+            if mat.shader.is_dielectric() {
+                rtmat.ior0 = [mat.ior, 0.0, 0.0, 0.0];
+            }
+            if mat.shader.is_specular() {
+                rtmat.is_specular = 0xFFFFFFFF;
+            } else {
+                rtmat.is_specular = 0x00000000;
+            };
+            rtmat
         })
         .collect::<Vec<_>>();
     upload_buffer(
