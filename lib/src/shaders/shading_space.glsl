@@ -1,3 +1,6 @@
+#ifndef _SHADING_SPACE_GLSL_
+#define _SHADING_SPACE_GLSL_
+
 struct ShadingSpace
 {
   vec3 s;
@@ -25,3 +28,5 @@ vec3 to_shading_space(in vec3 w, in ShadingSpace matrix)
   vec3 ret = vec3(dot(w, matrix.s), dot(w, matrix.t), dot(w, matrix.n));
   return normalize(ret);
 }
+
+#endif

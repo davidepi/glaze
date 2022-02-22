@@ -2,6 +2,10 @@
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_nonuniform_qualifier: require
 
+#include "fresnel.glsl"
+#include "constants.glsl"
+#include "spectrum.glsl"
+#include "shading_space.glsl"
 #include "raytrace_commons.glsl"
 
 layout(location = 0) callableDataInEXT BsdfSampleValue bsdf;
@@ -9,32 +13,6 @@ layout(location = 0) callableDataInEXT BsdfSampleValue bsdf;
 layout(std430, set=1, binding=4) readonly buffer materialBuffer {
   RTMaterial materials[];
 } MaterialBuffer;
-
-float fresnel_dielectric(in float costi, in float eta, out float etai, out float etat)
-{
-  costi = clamp(costi, -1.0, 1.0);
-  if(costi>0.0)
-  {
-    etai = DEFAULT_IOR;
-    etat = eta;
-  }
-  else
-  {
-    etai = eta;
-    etat = DEFAULT_IOR;
-    costi = abs(costi);
-  }
-  float sinti = sqrt(max(0.0, 1.0-costi*costi));
-  float sintt = etai/etat * sinti;
-  if(sintt >= 1.0)
-  {
-    return 1.0;
-  }
-  float costt = sqrt(max(0.0, 1.0-sintt*sintt));
-  float rparl = ((etat * costi) - (etai * costt)) / ((etat * costi) + (etai * costt));
-  float rperp = ((etai * costi) - (etat * costt)) / ((etai * costi) + (etat * costt));
-  return (rparl*rparl+rperp*rperp)/2.0;
-}
 
 Spectrum glass_reflective_sample_value(in vec3 wo, out vec3 wi, in float fresnel)
 {
@@ -58,7 +36,19 @@ void main()
   RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
   float etai;
   float etat;
-  float fresnel = fresnel_dielectric(wo.z, mat.ior0.x, etai, etat);
+  float costi = wo.z;
+  if(costi>0.0)
+  {
+    etai = DEFAULT_IOR;
+    etat = mat.ior0.x;
+  }
+  else
+  {
+    etai = mat.ior0.x;
+    etat = DEFAULT_IOR;
+    costi = abs(costi);
+  }
+  float fresnel = fresnel_dielectric(costi, etai, etat);
   vec3 wi;
   if(bsdf.rand_sample.x < fresnel)
   {

@@ -1,7 +1,9 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
-#extension GL_EXT_nonuniform_qualifier: require
 
+#include "spectrum.glsl"
+#include "shading_space.glsl"
+#include "fresnel.glsl"
 #include "raytrace_commons.glsl"
 
 layout(location = 0) callableDataInEXT BsdfSampleValue bsdf;
@@ -17,18 +19,11 @@ Spectrum mirror_sample_value(in vec3 wo, out vec3 wi, out float pdf)
   wi.z = wo.z;
   RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
   Spectrum ior = Spectrum(mat.ior0, mat.ior1, mat.ior2, mat.ior3);
-  Spectrum fresnel = Spectrum(mat.metal_fresnel0, mat.metal_fresnel1, mat.metal_fresnel2, mat.metal_fresnel3);
-  float cosinsq = wo.z*wo.z;
-  Spectrum etacosin2 = mul(ior, wo.z*2.0);
-  Spectrum etacosin2plus = add(etacosin2, cosinsq);
-  Spectrum etacosin2plusplus = add(etacosin2, 1.0);
-  Spectrum rperpsq = div(sub(fresnel,etacosin2plus),add(fresnel,etacosin2plus));
-  Spectrum tmp = mul(fresnel, cosinsq);
-  Spectrum rparsq = div(sub(tmp, etacosin2plusplus),add(tmp, etacosin2plusplus));
-  Spectrum eval = div(add(rperpsq, rparsq), 2.0);
+  Spectrum ior2abs2 = Spectrum(mat.metal_fresnel0, mat.metal_fresnel1, mat.metal_fresnel2, mat.metal_fresnel3);
+  Spectrum fresnel = fresnel_conductor(wo.z, ior, ior2abs2);
   pdf = 1.0;
   bsdf.was_spec = true;
-  return div(eval, abs(wo.z));
+  return div(fresnel, abs(wo.z));
 }
 
 void main()

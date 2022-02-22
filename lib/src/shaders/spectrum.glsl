@@ -1,3 +1,6 @@
+#ifndef _SPECTRUM_GLSL_
+#define _SPECTRUM_GLSL_
+
 struct Spectrum
 {
   vec4 col0;
@@ -5,6 +8,9 @@ struct Spectrum
   vec4 col2;
   vec4 col3;
 };
+
+#define SPECTRUM_ONE Spectrum(vec4(1.0),vec4(1.0),vec4(1.0),vec4(1.0))
+#define SPECTRUM_ZERO Spectrum(vec4(0.0),vec4(0.0),vec4(0.0),vec4(0.0))
 
 bool is_black(Spectrum sp)
 {
@@ -211,3 +217,5 @@ Spectrum from_surface_color(vec3 rgb)
   }
   return mul(res, 0.94);
 }
+
+#endif

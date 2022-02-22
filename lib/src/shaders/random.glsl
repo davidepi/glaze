@@ -1,3 +1,6 @@
+#ifndef _RANDOM_GLSL_
+#define _RANDOM_GLSL_
+
 const uint MANTISSA_MASK = 0x007FFFFFu;
 const uint FLOAT_ONE = 0x3F800000u;
 
@@ -52,3 +55,5 @@ vec3 rand3(inout uint state)
 {
   return vec3(rand(state), rand(state), rand(state));
 }
+
+#endif

@@ -1,12 +1,9 @@
+#ifndef _COMMONS_GLSL_
+#define _COMMONS_GLSL_
+
 #include "spectrum.glsl"
 #include "shading_space.glsl"
 
-#define INV_PI 0.3183099
-#define TWO_PI 6.2831853
-#define DEFAULT_IOR 1.000293
-#define SPECTRUM_ONE Spectrum(vec4(1.0),vec4(1.0),vec4(1.0),vec4(1.0))
-#define SPECTRUM_ZERO Spectrum(vec4(0.0),vec4(0.0),vec4(0.0),vec4(0.0))
-#define INFINITY 1.0/0.0
 
 struct RTInstance {
   uint index_offset;
@@ -126,3 +123,5 @@ struct BsdfPdf
   ShadingSpace shading;
   float pdf;
 };
+
+#endif
