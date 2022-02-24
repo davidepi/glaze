@@ -16,6 +16,19 @@ pub struct Material {
     pub diffuse: u16,
     /// Multiplier for the diffuse color.
     pub diffuse_mul: [u8; 4],
+    /// Index of the texture used to specify the roughness of the material.
+    /// 0 if no roughness map.
+    pub roughness: u16,
+    /// Multiplier for the roughess of a material, between 0.0 and 1.0.
+    pub roughness_mul: f32,
+    /// Index of the texture used to specify the metallicness of the material.
+    /// 0 if no metallic map.
+    pub metalness: u16,
+    /// Multiplier for the metallicness of a material, either 0 or 1.
+    pub metalness_mul: f32,
+    /// Anisotropy of a material, between -1.0 and 1.0.
+    /// The negative sign specifies the direction.
+    pub anisotropy: f32,
     /// Index of the texture used to determine the opacity mask of the material.
     /// 0 if no opacity.
     pub opacity: u16,
@@ -31,11 +44,16 @@ impl Default for Material {
             name: "default".to_string(),
             shader: ShaderMat::DEFAULT_SHADER,
             metal: Metal::SILVER,
-            ior: 1.0,
+            ior: 1.46,
             diffuse: 0,
             diffuse_mul: [255, 255, 255, 255],
             opacity: 0,
             normal: 0,
+            roughness: 0,
+            roughness_mul: 1.0,
+            metalness: 0,
+            metalness_mul: 0.0,
+            anisotropy: 0.0,
         }
     }
 }

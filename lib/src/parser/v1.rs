@@ -873,69 +873,42 @@ fn bytes_to_texture(data: &[u8]) -> Result<Texture, Error> {
 /// Converts a Material to a vector of bytes.
 fn material_to_bytes(material: &Material) -> Vec<u8> {
     let str_len = material.name.bytes().len();
-    assert!(str_len < 256);
-    let mut total_len = std::mem::size_of::<u8>() // str_len
-        + str_len //actual string
-        + std::mem::size_of::<u8>() // shader id
-        + std::mem::size_of::<u16>() // diffuse texture id
-        + 4 * std::mem::size_of::<u8>() // diffuse multiplier
-        + 2 * std::mem::size_of::<u16>(); // opacity + normal texture id
-    if material.shader.is_conductor() {
-        total_len += 1; // need to store the metal type
-    }
-    if material.shader.is_dielectric() {
-        total_len += 4; // need to store the ior
-    }
+    let total_len = 6 * std::mem::size_of::<u8>() // shader id, metal id, diffuse mul
+        + 4 * std::mem::size_of::<f32>() // ior, roughness mul, metal mul, anisotropy
+        + 5 * std::mem::size_of::<u16>() // diff, rough, metal, normal, opacity textures
+        + str_len; // material name
     let mut retval = Vec::with_capacity(total_len);
-    retval.push(str_len as u8);
-    retval.extend(material.name.bytes());
     retval.push(material.shader.into());
-    retval.extend(material.diffuse.to_le_bytes());
-    retval.extend(&material.diffuse_mul[0..4]);
-    retval.extend(material.opacity.to_le_bytes());
-    retval.extend(material.normal.to_le_bytes());
-    if material.shader.is_conductor() {
-        retval.push(material.metal.into());
-    }
-    if material.shader.is_dielectric() {
-        retval.extend(f32::to_le_bytes(material.ior));
-    }
+    retval.push(material.metal.into());
+    retval.extend(material.diffuse_mul);
+    retval.extend(f32::to_le_bytes(material.ior));
+    retval.extend(f32::to_le_bytes(material.roughness_mul));
+    retval.extend(f32::to_le_bytes(material.metalness_mul));
+    retval.extend(f32::to_le_bytes(material.anisotropy));
+    retval.extend(u16::to_le_bytes(material.diffuse));
+    retval.extend(u16::to_le_bytes(material.roughness));
+    retval.extend(u16::to_le_bytes(material.metalness));
+    retval.extend(u16::to_le_bytes(material.normal));
+    retval.extend(u16::to_le_bytes(material.opacity));
+    retval.extend(material.name.bytes());
     retval
 }
 
 /// Converts a vector of bytes to a Material.
 fn bytes_to_material(data: &[u8]) -> Material {
-    let str_len = data[0] as usize;
-    let mut index = 1;
-    let name = String::from_utf8(data[index..index + str_len].to_vec()).unwrap();
-    index += str_len;
-    let shader: ShaderMat = data[index].into();
-    index += 1;
-    let diffuse = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
-    index += 2;
-    let diffuse_mul = [
-        data[index],
-        data[index + 1],
-        data[index + 2],
-        data[index + 3],
-    ];
-    index += 4;
-    let opacity = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
-    index += 2;
-    let normal = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
-    index += 2;
-    let metal = if shader.is_conductor() {
-        let m = Metal::from(data[index]);
-        index += 1;
-        m
-    } else {
-        Metal::default()
-    };
-    let ior = if shader.is_dielectric() {
-        f32::from_le_bytes(data[index..index + 4].try_into().unwrap())
-    } else {
-        1.0
-    };
+    let shader = ShaderMat::from(data[0]);
+    let metal = Metal::from(data[1]);
+    let diffuse_mul = data[2..6].try_into().unwrap();
+    let ior = f32::from_le_bytes(data[6..10].try_into().unwrap());
+    let roughness_mul = f32::from_le_bytes(data[10..14].try_into().unwrap());
+    let metalness_mul = f32::from_le_bytes(data[14..18].try_into().unwrap());
+    let anisotropy = f32::from_le_bytes(data[18..22].try_into().unwrap());
+    let diffuse = u16::from_le_bytes(data[22..24].try_into().unwrap());
+    let roughness = u16::from_le_bytes(data[24..26].try_into().unwrap());
+    let metalness = u16::from_le_bytes(data[26..28].try_into().unwrap());
+    let normal = u16::from_le_bytes(data[28..30].try_into().unwrap());
+    let opacity = u16::from_le_bytes(data[30..32].try_into().unwrap());
+    let name = String::from_utf8(data[32..].to_vec()).unwrap();
     Material {
         name,
         shader,
@@ -943,6 +916,11 @@ fn bytes_to_material(data: &[u8]) -> Material {
         ior,
         diffuse,
         diffuse_mul,
+        roughness,
+        roughness_mul,
+        metalness,
+        metalness_mul,
+        anisotropy,
         opacity,
         normal,
     }
@@ -1213,22 +1191,14 @@ mod tests {
         for _ in 0..count {
             let shaders = ShaderMat::all_values();
             let shader = shaders[rng.gen_range(0..shaders.len())];
-            let metal = if shader.is_conductor() {
-                let metal_id = rng.gen_range(0..Metal::all_types().len());
-                Metal::from(metal_id as u8)
-            } else {
-                Metal::default()
-            };
-            let ior = if shader.is_dielectric() {
-                rng.gen_range(1.0..3.0)
-            } else {
-                0.0
-            };
-            let diffuse = if rng.gen_bool(0.5) {
-                rng.gen_range(0..u16::MAX - 1)
-            } else {
-                0
-            };
+            let ior = rng.gen_range(1.0..3.0);
+            let diffuse = rng.gen_range(0..u16::MAX - 1);
+            let roughness = rng.gen_range(0..u16::MAX - 1);
+            let roughness_mul = rng.gen_range(0.0..1.0);
+            let metalness = rng.gen_range(0..u16::MAX - 1);
+            let metalness_mul = rng.gen_range(0.0..1.0);
+            let metal = Metal::from(rng.gen_range(0..Metal::all_types().len()) as u8);
+            let anisotropy = rng.gen_range(-1.0..1.0);
             let name = Xoshiro128StarStar::seed_from_u64(rng.gen())
                 .sample_iter(&Alphanumeric)
                 .take(rng.gen_range(0..255))
@@ -1259,6 +1229,11 @@ mod tests {
                 diffuse_mul,
                 opacity,
                 normal,
+                roughness,
+                roughness_mul,
+                metalness,
+                metalness_mul,
+                anisotropy,
             };
             data.push(material);
         }

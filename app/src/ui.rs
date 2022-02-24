@@ -11,7 +11,7 @@ use imgui::{
 use native_dialog::FileDialog;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{mpsc, Arc};
-use std::thread::JoinHandle;
+use std::thread::{current, JoinHandle};
 use std::time::Instant;
 use winit::window::Window;
 
@@ -441,7 +441,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
     };
     if let Some(window) = imgui::Window::new("Materials")
         .opened(closed)
-        .size([400.0, 400.0], Condition::Appearing)
+        .size([500.0, 500.0], Condition::Appearing)
         .save_settings(false)
         .begin(ui)
     {
@@ -475,7 +475,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                 }
                 shader_combo.end();
             }
-            if current.shader.is_conductor() {
+            if current.shader.is_fresnel_conductor() {
                 let current_metal: Metal = current.metal;
                 if let Some(metal_combo) = ComboBox::new("Metal")
                     .preview_value(current_metal.name())
@@ -491,9 +491,9 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                     metal_combo.end()
                 }
             }
-            if current.shader.is_dielectric() {
+            if current.shader.is_fresnel_dielectric() {
                 let mut ior = current.ior;
-                if imgui::Slider::new("Index of refraction", 1.0, 3.0)
+                if imgui::Slider::new("Dielectric index of refraction", 1.0, 3.0)
                     .flags(SliderFlags::ALWAYS_CLAMP)
                     .build(ui, &mut ior)
                 {
@@ -502,54 +502,115 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                     new_mat = Some(new);
                 }
             }
-            let (diff, diff_clicked) = texture_selector(ui, "Diffuse", current.diffuse, scene);
-            if diff != current.diffuse {
-                let mut new = current.clone();
-                new.diffuse = diff;
-                new_mat = Some(new);
-            }
-            if diff_clicked {
-                state.textures_selected = Some(diff);
-                state.textures_window = true;
-            }
-            let mut color = [
-                current.diffuse_mul[0] as f32 / 255.0,
-                current.diffuse_mul[1] as f32 / 255.0,
-                current.diffuse_mul[2] as f32 / 255.0,
-                current.diffuse_mul[3] as f32 / 255.0,
-            ];
-            if ColorEdit::new("Diffuse multiplier", &mut color)
-                .inputs(false)
-                .build(ui)
-            {
-                let mut new = current.clone();
-                new.diffuse_mul = [
-                    (color[0] * 255.0) as u8,
-                    (color[1] * 255.0) as u8,
-                    (color[2] * 255.0) as u8,
-                    (color[3] * 255.0) as u8,
+            if current.shader.use_diffuse() {
+                let (diff, diff_clicked) = texture_selector(ui, "Diffuse", current.diffuse, scene);
+                if diff != current.diffuse {
+                    let mut new = current.clone();
+                    new.diffuse = diff;
+                    new_mat = Some(new);
+                }
+                if diff_clicked {
+                    state.textures_selected = Some(diff);
+                    state.textures_window = true;
+                }
+                let mut color = [
+                    current.diffuse_mul[0] as f32 / 255.0,
+                    current.diffuse_mul[1] as f32 / 255.0,
+                    current.diffuse_mul[2] as f32 / 255.0,
+                    current.diffuse_mul[3] as f32 / 255.0,
                 ];
-                new_mat = Some(new);
+                if ColorEdit::new("Diffuse multiplier", &mut color)
+                    .inputs(false)
+                    .build(ui)
+                {
+                    let mut new = current.clone();
+                    new.diffuse_mul = [
+                        (color[0] * 255.0) as u8,
+                        (color[1] * 255.0) as u8,
+                        (color[2] * 255.0) as u8,
+                        (color[3] * 255.0) as u8,
+                    ];
+                    new_mat = Some(new);
+                }
             }
-            let (opac, opac_clicked) = texture_selector(ui, "Opacity", current.opacity, scene);
-            if opac != current.opacity {
-                let mut new = current.clone();
-                new.opacity = opac;
-                new_mat = Some(new);
+            if current.shader.use_roughness() {
+                let (rough, rough_clicked) =
+                    texture_selector(ui, "Roughness map", current.roughness, scene);
+                if rough != current.roughness {
+                    let mut new = current.clone();
+                    new.roughness = rough;
+                    new_mat = Some(new);
+                }
+                if rough_clicked {
+                    state.textures_selected = Some(rough);
+                    state.textures_window = true;
+                }
+                let mut rmul = current.roughness_mul;
+                if imgui::Slider::new("Roughness multiplier", 0.0, 1.0)
+                    .flags(imgui::SliderFlags::ALWAYS_CLAMP)
+                    .build(ui, &mut rmul)
+                {
+                    let mut new = current.clone();
+                    new.roughness_mul = rmul;
+                    new_mat = Some(new);
+                }
             }
-            if opac_clicked {
-                state.textures_selected = Some(opac);
-                state.textures_window = true;
+            if current.shader.use_metalness() {
+                let (rough, rough_clicked) =
+                    texture_selector(ui, "Metalness map", current.metalness, scene);
+                if rough != current.metalness {
+                    let mut new = current.clone();
+                    new.metalness = rough;
+                    new_mat = Some(new);
+                }
+                if rough_clicked {
+                    state.textures_selected = Some(rough);
+                    state.textures_window = true;
+                }
+                let mut mmul = current.metalness_mul;
+                if imgui::Slider::new("Metalness multiplier", 0.0, 1.0)
+                    .flags(imgui::SliderFlags::ALWAYS_CLAMP)
+                    .build(ui, &mut mmul)
+                {
+                    let mut new = current.clone();
+                    new.metalness_mul = mmul;
+                    new_mat = Some(new);
+                }
             }
-            let (norm, norm_clicked) = texture_selector(ui, "Normal", current.normal, scene);
-            if norm != current.normal {
-                let mut new = current.clone();
-                new.normal = norm;
-                new_mat = Some(new);
+            if current.shader.use_anisotropy() {
+                let mut ani = current.anisotropy;
+                if imgui::Slider::new("Anisotropy", -1.0, 1.0)
+                    .flags(imgui::SliderFlags::ALWAYS_CLAMP)
+                    .build(ui, &mut ani)
+                {
+                    let mut new = current.clone();
+                    new.anisotropy = ani;
+                    new_mat = Some(new);
+                }
             }
-            if norm_clicked {
-                state.textures_selected = Some(norm);
-                state.textures_window = true;
+            if current.shader.use_normal() {
+                let (norm, norm_clicked) = texture_selector(ui, "Normal", current.normal, scene);
+                if norm != current.normal {
+                    let mut new = current.clone();
+                    new.normal = norm;
+                    new_mat = Some(new);
+                }
+                if norm_clicked {
+                    state.textures_selected = Some(norm);
+                    state.textures_window = true;
+                }
+            }
+            if current.shader.use_opacity() {
+                let (opac, opac_clicked) = texture_selector(ui, "Opacity", current.opacity, scene);
+                if opac != current.opacity {
+                    let mut new = current.clone();
+                    new.opacity = opac;
+                    new_mat = Some(new);
+                }
+                if opac_clicked {
+                    state.textures_selected = Some(opac);
+                    state.textures_window = true;
+                }
             }
             if let Some(new_mat) = new_mat {
                 renderer.change_material(*selected, new_mat);

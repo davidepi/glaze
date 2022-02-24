@@ -23,13 +23,17 @@ pub enum ShaderMat {
     /// Flat shading.
     /// Light does not affect the material and the diffuse color is shown unaltered.
     /// In raytrace mode, this has the same effect of "Lambert"
-    FLAT = 0,
+    FLAT,
     /// Lambert BRDF for raytracing.
-    LAMBERT = 1,
+    LAMBERT,
     /// Mirror like material fo raytracing.
-    MIRROR = 2,
-    //Perfectly flat transmittent surface.
-    GLASS = 3,
+    MIRROR,
+    /// Perfectly flat transmittent surface.
+    GLASS,
+    /// Purely metallic material.
+    METAL,
+    /// Generic physically based material.
+    UBER,
     /// Flat shading.
     /// Internal version, used for two-sided polygons and polygons with opacity maps.
     /// This version is automatically assigned by the engine and **SHOULD NOT** be used.
@@ -46,6 +50,8 @@ impl ShaderMat {
             ShaderMat::LAMBERT => "Lambert",
             ShaderMat::MIRROR => "Mirror",
             ShaderMat::GLASS => "Glass",
+            ShaderMat::METAL => "Metal",
+            ShaderMat::UBER => "Generic (GGX)",
         }
     }
 
@@ -58,6 +64,8 @@ impl ShaderMat {
             1 => Ok(ShaderMat::LAMBERT),
             2 => Ok(ShaderMat::MIRROR),
             3 => Ok(ShaderMat::GLASS),
+            4 => Ok(ShaderMat::METAL),
+            5 => Ok(ShaderMat::UBER),
             _ => Err(format!("Unknown shader id: {}", id).into()),
         }
     }
@@ -69,52 +77,126 @@ impl ShaderMat {
             ShaderMat::LAMBERT => 1,
             ShaderMat::MIRROR => 2,
             ShaderMat::GLASS => 3,
+            ShaderMat::METAL => 4,
+            ShaderMat::UBER => 5,
             _ => panic!("Internal shaders have no ID assigned"),
         }
     }
 
     /// Iterates all the possible assignable shaders.
     /// Shaders used internally by the engine are skipped.
-    pub fn all_values() -> [ShaderMat; 4] {
+    pub fn all_values() -> [ShaderMat; 6] {
         [
             ShaderMat::FLAT,
             ShaderMat::LAMBERT,
             ShaderMat::MIRROR,
             ShaderMat::GLASS,
+            ShaderMat::METAL,
+            ShaderMat::UBER,
         ]
     }
 
-    /// Returns true if the shader is specular (mirror or clean glass).
+    /// Returns true if the shader is perfecly specular in any case (mirror or clean glass).
+    ///
+    /// [ShaderMat::METAL] and [ShaderMat::UBER] *may* be specular, with this method returning
+    /// false even if they are. This method is used for some optimizations at render time that
+    /// apply only if the shader is always specular.
     pub fn is_specular(&self) -> bool {
         match self {
             ShaderMat::FLAT => false,
             ShaderMat::LAMBERT => false,
             ShaderMat::MIRROR => true,
             ShaderMat::GLASS => true,
+            ShaderMat::METAL => false,
+            ShaderMat::UBER => false,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
     }
 
-    /// Returns true if the shader exhibit is described by Fresnel's law for conductors and thus
-    /// requires a complex index of refraction.
-    pub fn is_conductor(&self) -> bool {
+    /// Returns true if the shader can use a diffuse map.
+    pub fn use_diffuse(&self) -> bool {
+        match self {
+            ShaderMat::FLAT => true,
+            ShaderMat::LAMBERT => true,
+            ShaderMat::MIRROR => false,
+            ShaderMat::GLASS => false,
+            ShaderMat::METAL => false,
+            ShaderMat::UBER => true,
+            ShaderMat::INTERNAL_FLAT_2SIDED => true,
+        }
+    }
+
+    /// Returns true if the shader can use a roughness map.
+    pub fn use_roughness(&self) -> bool {
+        match self {
+            ShaderMat::FLAT => false,
+            ShaderMat::LAMBERT => false,
+            ShaderMat::MIRROR => false,
+            ShaderMat::GLASS => false,
+            ShaderMat::METAL => true,
+            ShaderMat::UBER => true,
+            ShaderMat::INTERNAL_FLAT_2SIDED => false,
+        }
+    }
+
+    /// Returns true if the shader can use a metalness map.
+    pub fn use_metalness(&self) -> bool {
+        match self {
+            ShaderMat::FLAT => false,
+            ShaderMat::LAMBERT => false,
+            ShaderMat::MIRROR => false,
+            ShaderMat::GLASS => false,
+            ShaderMat::METAL => false,
+            ShaderMat::UBER => true,
+            ShaderMat::INTERNAL_FLAT_2SIDED => false,
+        }
+    }
+
+    /// Returns true if the shader can use an anisotropy map.
+    pub fn use_anisotropy(&self) -> bool {
+        match self {
+            ShaderMat::FLAT => false,
+            ShaderMat::LAMBERT => false,
+            ShaderMat::MIRROR => false,
+            ShaderMat::GLASS => false,
+            ShaderMat::METAL => true,
+            ShaderMat::UBER => true,
+            ShaderMat::INTERNAL_FLAT_2SIDED => false,
+        }
+    }
+
+    /// Returns true if the shader can use a normal map.
+    pub fn use_normal(&self) -> bool {
+        true
+    }
+
+    /// Returns true if the shader can use an opacity map.
+    pub fn use_opacity(&self) -> bool {
+        true
+    }
+
+    /// Returns true if the shader can model a Fresnel conductor.
+    pub fn is_fresnel_conductor(&self) -> bool {
         match self {
             ShaderMat::FLAT => false,
             ShaderMat::LAMBERT => false,
             ShaderMat::MIRROR => true,
             ShaderMat::GLASS => false,
+            ShaderMat::METAL => true,
+            ShaderMat::UBER => true,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
     }
 
-    /// Returns true if the shader is described by Fresnel's law for dielectrics and thus requires
-    /// an index of refraction.
-    pub fn is_dielectric(&self) -> bool {
+    /// Returns true if the shader can model a Fresnel dielectric.
+    pub fn is_fresnel_dielectric(&self) -> bool {
         match self {
             ShaderMat::FLAT => false,
             ShaderMat::LAMBERT => false,
             ShaderMat::MIRROR => false,
             ShaderMat::GLASS => true,
+            ShaderMat::METAL => false,
+            ShaderMat::UBER => true,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
     }
@@ -153,6 +235,8 @@ impl ShaderMat {
             ShaderMat::FLAT | ShaderMat::LAMBERT => 0,
             ShaderMat::MIRROR => 1,
             ShaderMat::GLASS => 2,
+            ShaderMat::METAL => 3,
+            ShaderMat::UBER => 4,
             ShaderMat::INTERNAL_FLAT_2SIDED => panic!("This shader should not appear in the sbt"),
         };
         (base_index + shader_index * SBT_MATERIAL_STRIDE) as u32

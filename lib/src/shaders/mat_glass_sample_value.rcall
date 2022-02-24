@@ -40,11 +40,11 @@ void main()
   if(costi>0.0)
   {
     etai = DEFAULT_IOR;
-    etat = mat.ior0.x;
+    etat = mat.ior_dielectric;
   }
   else
   {
-    etai = mat.ior0.x;
+    etai = mat.ior_dielectric;
     etat = DEFAULT_IOR;
     costi = abs(costi);
   }
