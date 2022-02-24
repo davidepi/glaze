@@ -9,4 +9,5 @@ layout(location = 0) callableDataInEXT BsdfValue bsdf;
 void main()
 {
   bsdf.value = SPECTRUM_ZERO;
+  bsdf.pdf = 0.0;
 }

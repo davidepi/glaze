@@ -101,6 +101,7 @@ struct BsdfValue
   ShadingSpace shading;
   Spectrum value;
   uint material_index;
+  float pdf;
 };
 
 struct BsdfSampleValue
@@ -114,14 +115,6 @@ struct BsdfSampleValue
   vec2 rand_sample;
   float pdf;
   bool was_spec;
-};
-
-struct BsdfPdf
-{
-  vec3 woW;
-  vec3 wiW;
-  ShadingSpace shading;
-  float pdf;
 };
 
 #endif

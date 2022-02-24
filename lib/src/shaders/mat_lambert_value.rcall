@@ -19,18 +19,21 @@ Spectrum lambert_value()
   return mul(SPECTRUM_ONE, INV_PI);
 }
 
+float lambert_pdf(in vec3 wo, in vec3 wi)
+{
+  return abs(wi.z) * INV_PI;
+}
+
 void main()
 {
-  if (dot(bsdf.geometric_normal, bsdf.wiW)*dot(bsdf.geometric_normal, bsdf.woW) > 0)
-  {
-    RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
-    Spectrum value = lambert_value();
-    vec3 sampled_texel = texture(textures[nonuniformEXT(mat.diffuse)], bsdf.uv).rgb;
-    Spectrum sampled_spectrum = from_surface_color(sampled_texel);
-    bsdf.value = mul(value, sampled_spectrum);
-  }
-  else
-  {
-    bsdf.value = SPECTRUM_ZERO;
-  }
+  float same_hemisphere = dot(bsdf.geometric_normal, bsdf.wiW)*dot(bsdf.geometric_normal, bsdf.woW);
+  float same_hemi_or_zero = max(0.0, sign(same_hemisphere));
+  vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
+  vec3 wi = to_shading_space(bsdf.wiW, bsdf.shading);
+  RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
+  Spectrum value = lambert_value();
+  vec3 sampled_texel = texture(textures[nonuniformEXT(mat.diffuse)], bsdf.uv).rgb;
+  Spectrum sampled_spectrum = from_surface_color(sampled_texel);
+  bsdf.value = mul(mul(value, sampled_spectrum), same_hemi_or_zero);
+  bsdf.pdf = same_hemi_or_zero*lambert_pdf(wo, wi);
 }

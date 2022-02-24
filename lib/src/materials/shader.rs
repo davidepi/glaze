@@ -139,13 +139,10 @@ impl ShaderMat {
         [
             include_shader!("mat_lambert_value.rcall").to_vec(),
             include_shader!("mat_lambert_sample_value.rcall").to_vec(),
-            include_shader!("mat_lambert_pdf.rcall").to_vec(),
             include_shader!("mat_mirror_value.rcall").to_vec(),
             include_shader!("mat_mirror_sample_value.rcall").to_vec(),
-            include_shader!("mat_mirror_pdf.rcall").to_vec(),
             include_shader!("mat_glass_value.rcall").to_vec(),
             include_shader!("mat_glass_sample_value.rcall").to_vec(),
-            include_shader!("mat_glass_pdf.rcall").to_vec(),
         ]
     }
 

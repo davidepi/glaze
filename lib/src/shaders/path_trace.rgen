@@ -11,7 +11,6 @@ layout(location=1) rayPayloadEXT bool shadow_ray_hit;
 layout(location=2) callableDataEXT SampledLight sam;
 layout(location=3) callableDataEXT BsdfValue bsdfval;
 layout(location=4) callableDataEXT BsdfSampleValue bsdfsampleval;
-layout(location=5) callableDataEXT BsdfPdf bsdfpdf;
 
 layout(push_constant) uniform readonly pc {
   mat4 camera2world;
@@ -78,17 +77,10 @@ Spectrum direct_light(inout uint rng, in vec3 woW, in ShadingSpace mat, in RTMat
       shadow_ray_hit = true;
       traceRayEXT(scene, gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT,
           0xFF, 0, 0, 1, hit.point, 0.001, sam.wiW, sam.distance-1E-3, 1);
-      if (!shadow_ray_hit)
+      if (!shadow_ray_hit && bsdfval.pdf > 0.0)
       {
-        bsdfpdf.woW = bsdfval.woW;
-        bsdfpdf.wiW = bsdfval.wiW;
-        bsdfpdf.shading = mat;
-        executeCallableEXT(material.bsdf_index+2, 5);
-        if(bsdfpdf.pdf > 0)
-        {
           float adot = abs(dot(bsdfval.wiW, hit.shading_normal))/sam.pdf;
           L = mul(mul(bsdfval.value, sam.emission), adot);
-        }
       }
     }
   }
