@@ -134,6 +134,7 @@ void main()
     }
     bsdfsampleval.uv = hit.uv;
     bsdfsampleval.woW = woW;
+    bsdfsampleval.geometric_normal = hit.geometric_normal;
     bsdfsampleval.rand_sample = rand2(rng);
     bsdfsampleval.shading = matrix;
     bsdfsampleval.material_index = hit.material_index;

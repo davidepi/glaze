@@ -545,13 +545,13 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                     state.textures_selected = Some(rough);
                     state.textures_window = true;
                 }
-                let mut rmul = current.roughness_mul;
-                if imgui::Slider::new("Roughness multiplier", 0.0, 1.0)
+                let mut rmul = current.roughness_mul.sqrt();
+                if imgui::Slider::new("Roughness multiplier", 0.001, 0.999)
                     .flags(imgui::SliderFlags::ALWAYS_CLAMP)
                     .build(ui, &mut rmul)
                 {
                     let mut new = current.clone();
-                    new.roughness_mul = rmul;
+                    new.roughness_mul = rmul * rmul;
                     new_mat = Some(new);
                 }
             }
@@ -579,7 +579,7 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
             }
             if current.shader.use_anisotropy() {
                 let mut ani = current.anisotropy;
-                if imgui::Slider::new("Anisotropy", -1.0, 1.0)
+                if imgui::Slider::new("Anisotropy", -0.999, 0.999)
                     .flags(imgui::SliderFlags::ALWAYS_CLAMP)
                     .build(ui, &mut ani)
                 {

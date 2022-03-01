@@ -27,7 +27,7 @@ float lambert_pdf(in vec3 wo, in vec3 wi)
 void main()
 {
   float same_hemisphere = dot(bsdf.geometric_normal, bsdf.wiW)*dot(bsdf.geometric_normal, bsdf.woW);
-  float same_hemi_or_zero = max(0.0, sign(same_hemisphere));
+  float same_hemi_or_zero = step(0.0, same_hemisphere);
   vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
   vec3 wi = to_shading_space(bsdf.wiW, bsdf.shading);
   RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];

@@ -1,0 +1,52 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier: require
+
+#include "constants.glsl"
+#include "spectrum.glsl"
+#include "shading_space.glsl"
+#include "fresnel.glsl"
+#include "microfacets.glsl"
+#include "raytrace_commons.glsl"
+
+layout(location = 0) callableDataInEXT BsdfSampleValue bsdf;
+
+layout(std430, set=1, binding=4) readonly buffer materialBuffer {
+  RTMaterial materials[];
+} MaterialBuffer;
+
+layout(set=1, binding=6) uniform sampler2D textures[];
+
+void main()
+{
+  RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
+  vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
+  Spectrum metal_ior = Spectrum(mat.ior0, mat.ior1, mat.ior2, mat.ior3);
+  Spectrum metal_fresnel = Spectrum(mat.metal_fresnel0,mat.metal_fresnel1,mat.metal_fresnel2,mat.metal_fresnel3);
+  float sampled_roughness = texture(textures[nonuniformEXT(mat.roughness)], bsdf.uv).r;
+  vec2 a = to_anisotropic(sampled_roughness*mat.roughness_mul, mat.anisotropy);
+  vec3 wh = normalize(ggx_sample_wh(wo, bsdf.rand_sample, a));
+  vec3 wi = -normalize(reflect(wo, wh));
+  float costwo = abs(wo.z);
+  float costwi = abs(wi.z);
+  // ensures the vectors are all in the same hemisphere.
+  bool same_hemi = wo.z*wi.z > 0.0;
+  // additional degenerate cases
+  bool degenerate = costwo==0.0 || costwi==0.0 || wh==vec3(0.0);
+  if(same_hemi && !degenerate) // can't use a step function due to NaNs propagation
+  {
+    float d = ggx_d(wh, a);
+    float g = ggx_g(wo, wi, a);
+    float ggxpdf = ggx_pdf(d, a, wo, wh);
+    Spectrum F = fresnel_conductor(dot(wi, wh), metal_ior, metal_fresnel);
+    float term = d*g/(4.0*costwo*costwi);
+    float pdf = ggxpdf/(4.0*dot(wo,wh));
+    bsdf.pdf = CHECKNAN(pdf);
+    bsdf.value = mul(F, term);
+    bsdf.wiW = normalize(to_world_space(wi, bsdf.shading));
+  }
+  else
+  {
+    bsdf.pdf = 0.0;
+  }
+}
