@@ -11,6 +11,8 @@ struct Spectrum
 
 #define SPECTRUM_ONE Spectrum(vec4(1.0),vec4(1.0),vec4(1.0),vec4(1.0))
 #define SPECTRUM_ZERO Spectrum(vec4(0.0),vec4(0.0),vec4(0.0),vec4(0.0))
+#define SPECTRUM_CYAN Spectrum(vec4(1.0240953, 1.0245612, 1.0463755, 1.0327847),vec4(1.0478429, 1.0535090, 1.0534870, 1.0530664),vec4(1.0549103, 0.9429917, 0.3100097, 0.0033711),vec4(-0.0048550,0.0018582, 0.0039838, 0.0105072))
+
 
 bool is_black(Spectrum sp)
 {

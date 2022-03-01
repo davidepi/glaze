@@ -1,12 +1,11 @@
+#ifndef _COMMONS_GLSL_
+#define _COMMONS_GLSL_
+
 #include "spectrum.glsl"
 #include "shading_space.glsl"
 
-#define INV_PI 0.3183099
-#define TWO_PI 6.2831853
-#define DEFAULT_IOR 1.000293
-#define SPECTRUM_ONE Spectrum(vec4(1.0),vec4(1.0),vec4(1.0),vec4(1.0))
-#define SPECTRUM_ZERO Spectrum(vec4(0.0),vec4(0.0),vec4(0.0),vec4(0.0))
-#define INFINITY 1.0/0.0
+#define CHECKNAN(X) (isnan(X)?0.0:X)
+#define CHECKINF(X) (isinf(X)?0.0:X)
 
 struct RTInstance {
   uint index_offset;
@@ -117,6 +116,7 @@ struct BsdfSampleValue
 {
   vec3 woW;
   vec3 wiW;
+  vec3 geometric_normal;
   vec2 uv;
   ShadingSpace shading;
   Spectrum value;
@@ -125,3 +125,5 @@ struct BsdfSampleValue
   float pdf;
   bool was_spec;
 };
+
+#endif
