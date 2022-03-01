@@ -16,15 +16,15 @@ Spectrum fresnel_conductor(in float cosin, in Spectrum ior, in Spectrum ior2abs2
   return div(add(rperpsq, rparsq), 2.0);
 }
 
-float fresnel_dielectric(in float costi, out float etai, out float etat)
+float fresnel_dielectric(in float costi, in float etai, in float etat)
 {
-  float sin2ti = 1.0-costi*costi;
+  float sin2ti = max(0.0, 1.0-costi*costi);
   float sin2tt = etai*etai/(etat*etat) * sin2ti;
   if(sin2tt >= 1.0)
   {
     return 1.0;
   }
-  float costt = sqrt(1.0-sin2tt);
+  float costt = sqrt(max(0.0, 1.0-sin2tt));
   float etatcostt = etat*costt;
   float etatcosti = etat*costi;
   float etaicosti = etai*costi;

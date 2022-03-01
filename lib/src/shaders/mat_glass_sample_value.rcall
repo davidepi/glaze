@@ -34,20 +34,11 @@ void main()
 {
   vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
   RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
-  float etai;
-  float etat;
   float costi = wo.z;
-  if(costi>0.0)
-  {
-    etai = DEFAULT_IOR;
-    etat = mat.ior_dielectric;
-  }
-  else
-  {
-    etai = mat.ior_dielectric;
-    etat = DEFAULT_IOR;
-    costi = abs(costi);
-  }
+  float from_outside = step(0.0, costi);
+  float etai = mix(mat.ior_dielectric, DEFAULT_IOR, from_outside);
+  float etat = mix(DEFAULT_IOR, mat.ior_dielectric, from_outside);
+  costi = mix(abs(costi), costi, from_outside);
   float fresnel = fresnel_dielectric(costi, etai, etat);
   vec3 wi;
   if(bsdf.rand_sample.x < fresnel)
