@@ -84,7 +84,7 @@ Spectrum direct_light(inout uint rng, in vec3 woW, in ShadingSpace mat, in RTMat
       }
     }
   }
-  return L;
+  return mul(L, float(FrameData.lights_no));
 }
 
 void main()
