@@ -36,6 +36,7 @@ void main()
   Spectrum value = lambert_sample_value(bsdf.rand_sample.xy, wo, wi, bsdf.pdf);
   bsdf.wiW = normalize(to_world_space(wi, bsdf.shading));
   vec3 sampled_texel = texture(textures[nonuniformEXT(mat.diffuse)], bsdf.uv).rgb;
-  Spectrum sampled_spectrum = from_surface_color(sampled_texel);
+  vec3 diffuse_mul = mat.diffuse_mul.xyz;
+  Spectrum sampled_spectrum = from_surface_color(sampled_texel*diffuse_mul);
   bsdf.value = mul(sampled_spectrum, value);
 }

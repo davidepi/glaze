@@ -33,7 +33,8 @@ void main()
   RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
   Spectrum value = lambert_value();
   vec3 sampled_texel = texture(textures[nonuniformEXT(mat.diffuse)], bsdf.uv).rgb;
-  Spectrum sampled_spectrum = from_surface_color(sampled_texel);
-  bsdf.value = mul(mul(value, sampled_spectrum), same_hemi_or_zero);
+  vec3 diffuse_mul = mat.diffuse_mul.xyz;
+  Spectrum sampled_spectrum = from_surface_color(sampled_texel*diffuse_mul);
+  bsdf.value = mul(value, sampled_spectrum);
   bsdf.pdf = same_hemi_or_zero*lambert_pdf(wo, wi);
 }
