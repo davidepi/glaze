@@ -6,6 +6,7 @@
 
 #define CHECKNAN(X) (isnan(X)?0.0:X)
 #define CHECKINF(X) (isinf(X)?0.0:X)
+#define CHECKNANINF(X) (isnan(X)||isinf(X)?0.0:X)
 
 struct RTInstance {
   uint index_offset;
@@ -121,7 +122,7 @@ struct BsdfSampleValue
   ShadingSpace shading;
   Spectrum value;
   uint material_index;
-  vec2 rand_sample;
+  vec3 rand_sample;
   float pdf;
   bool was_spec;
 };

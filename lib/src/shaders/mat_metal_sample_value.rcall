@@ -25,7 +25,7 @@ void main()
   Spectrum metal_fresnel = Spectrum(mat.metal_fresnel0,mat.metal_fresnel1,mat.metal_fresnel2,mat.metal_fresnel3);
   float sampled_roughness = texture(textures[nonuniformEXT(mat.roughness)], bsdf.uv).r;
   vec2 a = to_anisotropic(sampled_roughness*mat.roughness_mul, mat.anisotropy);
-  vec3 wh = normalize(ggx_sample_wh(wo, bsdf.rand_sample, a));
+  vec3 wh = normalize(ggx_sample_wh(wo, bsdf.rand_sample.xy, a));
   vec3 wi = -normalize(reflect(wo, wh));
   float costwo = abs(wo.z);
   float costwi = abs(wi.z);

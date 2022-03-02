@@ -32,6 +32,8 @@ pub enum ShaderMat {
     GLASS,
     /// Purely metallic material.
     METAL,
+    /// Frosted glass-like material.
+    FROSTED,
     /// Generic physically based material.
     UBER,
     /// Flat shading.
@@ -51,6 +53,7 @@ impl ShaderMat {
             ShaderMat::MIRROR => "Mirror",
             ShaderMat::GLASS => "Glass",
             ShaderMat::METAL => "Metal",
+            ShaderMat::FROSTED => "Frosted",
             ShaderMat::UBER => "Generic (GGX)",
         }
     }
@@ -65,7 +68,8 @@ impl ShaderMat {
             2 => Ok(ShaderMat::MIRROR),
             3 => Ok(ShaderMat::GLASS),
             4 => Ok(ShaderMat::METAL),
-            5 => Ok(ShaderMat::UBER),
+            5 => Ok(ShaderMat::FROSTED),
+            6 => Ok(ShaderMat::UBER),
             _ => Err(format!("Unknown shader id: {}", id).into()),
         }
     }
@@ -78,20 +82,22 @@ impl ShaderMat {
             ShaderMat::MIRROR => 2,
             ShaderMat::GLASS => 3,
             ShaderMat::METAL => 4,
-            ShaderMat::UBER => 5,
+            ShaderMat::FROSTED => 5,
+            ShaderMat::UBER => 6,
             _ => panic!("Internal shaders have no ID assigned"),
         }
     }
 
     /// Iterates all the possible assignable shaders.
     /// Shaders used internally by the engine are skipped.
-    pub fn all_values() -> [ShaderMat; 5] {
+    pub fn all_values() -> [ShaderMat; 6] {
         [
             ShaderMat::FLAT,
             ShaderMat::LAMBERT,
             ShaderMat::MIRROR,
             ShaderMat::GLASS,
             ShaderMat::METAL,
+            ShaderMat::FROSTED,
         ]
     }
 
@@ -107,6 +113,7 @@ impl ShaderMat {
             ShaderMat::MIRROR => true,
             ShaderMat::GLASS => true,
             ShaderMat::METAL => false,
+            ShaderMat::FROSTED => false,
             ShaderMat::UBER => false,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
@@ -120,6 +127,7 @@ impl ShaderMat {
             ShaderMat::MIRROR => false,
             ShaderMat::GLASS => false,
             ShaderMat::METAL => false,
+            ShaderMat::FROSTED => false,
             ShaderMat::UBER => true,
             ShaderMat::INTERNAL_FLAT_2SIDED => true,
         }
@@ -133,6 +141,7 @@ impl ShaderMat {
             ShaderMat::MIRROR => false,
             ShaderMat::GLASS => false,
             ShaderMat::METAL => true,
+            ShaderMat::FROSTED => true,
             ShaderMat::UBER => true,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
@@ -146,6 +155,7 @@ impl ShaderMat {
             ShaderMat::MIRROR => false,
             ShaderMat::GLASS => false,
             ShaderMat::METAL => false,
+            ShaderMat::FROSTED => false,
             ShaderMat::UBER => true,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
@@ -159,6 +169,7 @@ impl ShaderMat {
             ShaderMat::MIRROR => false,
             ShaderMat::GLASS => false,
             ShaderMat::METAL => true,
+            ShaderMat::FROSTED => true,
             ShaderMat::UBER => true,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
@@ -182,6 +193,7 @@ impl ShaderMat {
             ShaderMat::MIRROR => true,
             ShaderMat::GLASS => false,
             ShaderMat::METAL => true,
+            ShaderMat::FROSTED => false,
             ShaderMat::UBER => true,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
@@ -195,6 +207,7 @@ impl ShaderMat {
             ShaderMat::MIRROR => false,
             ShaderMat::GLASS => true,
             ShaderMat::METAL => false,
+            ShaderMat::FROSTED => true,
             ShaderMat::UBER => true,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
@@ -226,6 +239,8 @@ impl ShaderMat {
             include_shader!("mat_glass_sample_value.rcall").to_vec(),
             include_shader!("mat_metal_value.rcall").to_vec(),
             include_shader!("mat_metal_sample_value.rcall").to_vec(),
+            include_shader!("mat_frosted_value.rcall").to_vec(),
+            include_shader!("mat_frosted_sample_value.rcall").to_vec(),
         ]
     }
 
@@ -237,7 +252,8 @@ impl ShaderMat {
             ShaderMat::MIRROR => 1,
             ShaderMat::GLASS => 2,
             ShaderMat::METAL => 3,
-            ShaderMat::UBER => 4,
+            ShaderMat::FROSTED => 4,
+            ShaderMat::UBER => 5,
             ShaderMat::INTERNAL_FLAT_2SIDED => panic!("This shader should not appear in the sbt"),
         };
         (base_index + shader_index * SBT_MATERIAL_STRIDE) as u32

@@ -41,7 +41,7 @@ void main()
   costi = mix(abs(costi), costi, from_outside);
   float fresnel = fresnel_dielectric(costi, etai, etat);
   vec3 wi;
-  if(bsdf.rand_sample.x < fresnel)
+  if(bsdf.rand_sample.z < fresnel)
   {
     bsdf.value = glass_reflective_sample_value(wo, wi, fresnel);
     bsdf.pdf = fresnel;

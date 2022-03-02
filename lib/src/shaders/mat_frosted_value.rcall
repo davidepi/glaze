@@ -1,0 +1,73 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier: require
+
+#include "constants.glsl"
+#include "spectrum.glsl"
+#include "fresnel.glsl"
+#include "microfacets.glsl"
+#include "raytrace_commons.glsl"
+
+layout(location = 0) callableDataInEXT BsdfValue bsdf;
+
+layout(std430, set=1, binding=4) readonly buffer materialBuffer {
+  RTMaterial materials[];
+} MaterialBuffer;
+
+layout(set=1, binding=6) uniform sampler2D textures[];
+
+void main()
+{
+  //RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
+  //vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
+  //vec3 wi = to_shading_space(bsdf.wiW, bsdf.shading);
+  //float sampled_roughness = texture(textures[nonuniformEXT(mat.roughness)], bsdf.uv).r;
+  //vec2 a = to_anisotropic(sampled_roughness*mat.roughness_mul, mat.anisotropy);
+  //bool same_hemi = wo.z*wi.z > 0.0;
+  //float from_outside = step(0.0, wo.z);
+  //float etai = mix(mat.ior_dielectric, DEFAULT_IOR, from_outside);
+  //float etat = mix(DEFAULT_IOR, mat.ior_dielectric, from_outside);
+  //float eta = etai/etat;
+
+  //// I cannot choose branch wrt the fresnel result, as I'm using wh as normal and that changes depending on reflection or transmission
+  //if(same_hemi) // reflected
+  //{
+  //  vec3 wh = normalize(wo+wi);
+  //  float dotwowh = dot(wo,wh);
+  //  float dotwiwh = dot(wi,wh);
+  //  float costi = dot(wi, sign(dot(wh,vec3(0,0,1)))*wh);
+  //  float f = fresnel_dielectric(costi, etai, etat);
+  //  float costwo = abs(wo.z);
+  //  float costwi = abs(wi.z);
+  //  float d = step(0.0, wo.z)*ggx_d(wh, a);
+  //  float g = step(0.0, dotwowh)*step(0.0, dotwiwh)*ggx_g(wo, wi, a);
+  //  float pdf = ggx_pdf(d, a, wo, wh)/(4.0*dotwowh);
+  //  float term_reflective = d*g*f/(4.0*costwo*costwi);
+  //  bsdf.value = spectrum_uniform(term_reflective);
+  //  bsdf.pdf = CHECKNAN(pdf);
+  //}
+  //else // transmitted
+  //{
+  //  vec3 wh = normalize(wo+eta*wi);
+  //  wh *= sign(wo.z);
+  //  float dotwowh = dot(wo,wh);
+  //  float dotwiwh = dot(wi,wh);
+  //  float f = fresnel_dielectric(dotwowh, etai, etat);
+  //  float costwo = abs(wo.z);
+  //  float costwi = abs(wi.z);
+  //  float denom = (dotwowh+eta*dotwiwh);
+  //  float d = ggx_d(wh, a);
+  //  float g = ggx_g(wo, wi, a);
+  //  float pdf = ggx_pdf(d, a, wo, wh)*abs(eta*eta*dotwiwh)/(denom*denom);
+  //  float term_refractive = d*g*(1.0-f)*abs(dotwiwh)*abs(dotwowh)/(denom*denom*costwo*costwi);
+  //  bsdf.value = spectrum_uniform(term_refractive);
+  //  bsdf.pdf = CHECKNAN(pdf);
+  //}
+
+  // this generates a lot of fireflies, but everything seems to converge... eventually.
+  // I'm not sure if it is correct or not, and I already have plans for BDPT, so
+  // I'll try a bidirectional method before investing time fixing here and maybe
+  // it's not even a bug.
+
+  bsdf.pdf = 0.0;
+}
