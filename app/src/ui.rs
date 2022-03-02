@@ -942,6 +942,7 @@ fn open_scene(state: &mut UiState) {
                 });
                 state.textures_selected = None;
                 state.materials_selected = None;
+                state.light_selected = None;
                 state.open_loading_popup = true;
                 state.clear_rtrenderer();
             }
