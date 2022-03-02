@@ -456,6 +456,7 @@ impl RealtimeRenderer {
                 raytracer
                     .scene
                     .update_lights(scene.lights(), &mut self.tcmdm, &mut unf);
+                raytracer.request_new_frame = true;
                 unf.wait_completion();
             }
         }
@@ -473,6 +474,7 @@ impl RealtimeRenderer {
                 raytracer
                     .scene
                     .update_lights(scene.lights(), &mut self.tcmdm, &mut unf);
+                raytracer.request_new_frame = true;
                 unf.wait_completion();
             }
         }
