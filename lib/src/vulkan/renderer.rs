@@ -355,6 +355,12 @@ impl RealtimeRenderer {
         }
         if let Some(raytracer) = &mut self.raytracer {
             raytracer.change_resolution(render_size.width, render_size.height);
+            if let Some(scene) = &self.scene {
+                // the raytracer already updates the camera, but uses the one in the scene.
+                // this is the intended behaviour: camera changes are managed by the presentation
+                // renderer.
+                raytracer.update_camera(&scene.current_cam);
+            }
         }
     }
 
