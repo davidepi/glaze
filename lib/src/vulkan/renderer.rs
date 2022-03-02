@@ -535,7 +535,7 @@ impl RealtimeRenderer {
             let compute_finished = [frame_sync.compute_finished];
             let present_ready = [frame_sync.render_finished];
             frame_data.data.frame_time = (current_time - self.start_time).as_secs_f32();
-            if self.use_raytracer {
+            if self.scene.is_some() && self.use_raytracer {
                 self.raytracer.as_mut().unwrap().draw_frame(
                     frame_sync.image_available,
                     compute_finished[0],
@@ -568,7 +568,7 @@ impl RealtimeRenderer {
                 }
                 self.forward_pass.end(cmd);
                 acquired.renderpass.begin(cmd);
-                if !self.use_raytracer {
+                if !self.use_raytracer || self.scene.is_none() {
                     copy_to_swapchain(
                         device,
                         cmd,
