@@ -17,6 +17,16 @@ Spectrum spectrum_uniform(float f)
   return Spectrum(vec4(f), vec4(f), vec4(f), vec4(f));
 }
 
+Spectrum mix(Spectrum a, Spectrum b, float value)
+{
+  return Spectrum(
+    mix(a.col0, b.col0, value),
+    mix(a.col1, b.col1, value),
+    mix(a.col2, b.col2, value),
+    mix(a.col3, b.col3, value)
+  );
+}
+
 bool is_black(Spectrum sp)
 {
   vec4 black = vec4(0.0);

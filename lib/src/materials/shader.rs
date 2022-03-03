@@ -90,8 +90,9 @@ impl ShaderMat {
 
     /// Iterates all the possible assignable shaders.
     /// Shaders used internally by the engine are skipped.
-    pub fn all_values() -> [ShaderMat; 6] {
+    pub fn all_values() -> [ShaderMat; 7] {
         [
+            ShaderMat::UBER,
             ShaderMat::FLAT,
             ShaderMat::LAMBERT,
             ShaderMat::MIRROR,
@@ -241,6 +242,8 @@ impl ShaderMat {
             include_shader!("mat_metal_sample_value.rcall").to_vec(),
             include_shader!("mat_frosted_value.rcall").to_vec(),
             include_shader!("mat_frosted_sample_value.rcall").to_vec(),
+            include_shader!("mat_uber_value.rcall").to_vec(),
+            include_shader!("mat_uber_sample_value.rcall").to_vec(),
         ]
     }
 

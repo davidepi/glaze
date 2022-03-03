@@ -14,9 +14,9 @@ layout(std430, set=1, binding=4) readonly buffer materialBuffer {
 
 layout(set=1, binding=6) uniform sampler2D textures[];
 
-Spectrum lambert_value()
+float lambert_value()
 {
-  return mul(SPECTRUM_ONE, INV_PI);
+  return INV_PI;
 }
 
 float lambert_pdf(in vec3 wo, in vec3 wi)
@@ -31,10 +31,9 @@ void main()
   vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
   vec3 wi = to_shading_space(bsdf.wiW, bsdf.shading);
   RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
-  Spectrum value = lambert_value();
+  float value = lambert_value();
   vec3 sampled_texel = texture(textures[nonuniformEXT(mat.diffuse)], bsdf.uv).rgb;
   vec3 diffuse_mul = mat.diffuse_mul.xyz;
-  Spectrum sampled_spectrum = from_surface_color(sampled_texel*diffuse_mul);
-  bsdf.value = mul(value, sampled_spectrum);
+  bsdf.value = from_surface_color(sampled_texel*diffuse_mul*value);
   bsdf.pdf = same_hemi_or_zero*lambert_pdf(wo, wi);
 }

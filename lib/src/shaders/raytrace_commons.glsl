@@ -107,6 +107,7 @@ struct BsdfValue
   vec3 wiW;
   vec3 geometric_normal;
   vec2 uv;
+  float rand_sample;
   ShadingSpace shading;
   Spectrum value;
   uint material_index;
@@ -124,7 +125,6 @@ struct BsdfSampleValue
   uint material_index;
   vec3 rand_sample;
   float pdf;
-  bool was_spec;
 };
 
 #endif

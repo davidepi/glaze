@@ -22,7 +22,6 @@ Spectrum mirror_sample_value(in vec3 wo, out vec3 wi, out float pdf)
   Spectrum ior2abs2 = Spectrum(mat.metal_fresnel0, mat.metal_fresnel1, mat.metal_fresnel2, mat.metal_fresnel3);
   Spectrum fresnel = fresnel_conductor(wo.z, ior, ior2abs2);
   pdf = 1.0;
-  bsdf.was_spec = true;
   return div(fresnel, abs(wo.z));
 }
 

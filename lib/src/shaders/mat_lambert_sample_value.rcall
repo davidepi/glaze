@@ -15,7 +15,7 @@ layout(std430, set=1, binding=4) readonly buffer materialBuffer {
 
 layout(set=1, binding=6) uniform sampler2D textures[];
 
-Spectrum lambert_sample_value(in vec2 rand_sample, in vec3 wo, out vec3 wi, out float pdf)
+float lambert_sample_value(in vec2 rand_sample, in vec3 wo, out vec3 wi, out float pdf)
 {
   float t = TWO_PI * rand_sample.x;
   float r = sqrt(rand_sample.y);
@@ -24,8 +24,7 @@ Spectrum lambert_sample_value(in vec2 rand_sample, in vec3 wo, out vec3 wi, out 
   wi.z = sqrt(max(0.0, 1.0 - wi.x * wi.x - wi.y * wi.y));
   wi.z *= sign(wo.z);
   pdf = abs(wi.z) * INV_PI;
-  bsdf.was_spec = false;
-  return mul(SPECTRUM_ONE, INV_PI);
+  return INV_PI;
 }
 
 void main()
@@ -33,10 +32,9 @@ void main()
   RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
   vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
   vec3 wi;
-  Spectrum value = lambert_sample_value(bsdf.rand_sample.xy, wo, wi, bsdf.pdf);
+  float value = lambert_sample_value(bsdf.rand_sample.xy, wo, wi, bsdf.pdf);
   bsdf.wiW = normalize(to_world_space(wi, bsdf.shading));
   vec3 sampled_texel = texture(textures[nonuniformEXT(mat.diffuse)], bsdf.uv).rgb;
   vec3 diffuse_mul = mat.diffuse_mul.xyz;
-  Spectrum sampled_spectrum = from_surface_color(sampled_texel*diffuse_mul);
-  bsdf.value = mul(sampled_spectrum, value);
+  bsdf.value = from_surface_color(sampled_texel*diffuse_mul*value);
 }
