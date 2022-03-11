@@ -169,7 +169,7 @@ impl VulkanScene {
                 (shader, desc)
             })
             .collect::<Vec<_>>();
-        let current_cam = parsed.cameras()?[0].clone(); // parser automatically adds a default cam
+        let current_cam = parsed.cameras()?[0];
         let lights = parsed.lights()?;
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
@@ -364,7 +364,7 @@ impl VulkanScene {
     }
 
     pub fn save(&mut self) -> Result<(), std::io::Error> {
-        let cameras = [self.current_cam.clone()];
+        let cameras = [self.current_cam];
         let lights = self.lights().to_vec();
         let materials = self.materials().to_vec();
         let meta = &self.meta;
@@ -995,7 +995,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
             .with_meshes(&meshes, &instances, &transforms, &materials);
         let acc = builder.build();
-        let camera = scene.cameras()?[0].clone();
+        let camera = scene.cameras()?[0];
         let instance_buffer =
             load_raytrace_instances_to_gpu(device, mm, &mut tcmdm, &mut unf, &meshes, &instances);
         let material_buffer =
@@ -1097,7 +1097,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         let meta = scene.meta;
         unf.wait_completion();
         Ok(RayTraceScene {
-            camera: scene.current_cam.clone(),
+            camera: scene.current_cam,
             descriptor,
             sampler,
             vertex_buffer,

@@ -305,7 +305,7 @@ impl RealtimeRenderer {
     /// Updates also the raytracer camera, if this exists
     pub fn set_camera(&mut self, camera: Camera) {
         if let Some(rt) = &mut self.raytracer {
-            rt.update_camera(&camera);
+            rt.update_camera(camera);
         }
         if let Some(scene) = &mut self.scene {
             scene.current_cam = camera;
@@ -359,7 +359,7 @@ impl RealtimeRenderer {
                 // the raytracer already updates the camera, but uses the one in the scene.
                 // this is the intended behaviour: camera changes are managed by the presentation
                 // renderer.
-                raytracer.update_camera(&scene.current_cam);
+                raytracer.update_camera(scene.current_cam);
             }
         }
     }

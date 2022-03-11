@@ -248,7 +248,7 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                     .preview_value(camera_name)
                     .build(ui, || {
                         if Selectable::new("Perspective").flags(disabled).build(ui) {
-                            let camera = renderer.camera().unwrap().clone();
+                            let camera = *renderer.camera().unwrap();
                             if let Camera::Perspective(_) = camera {
                             } else {
                                 renderer.set_camera(Camera::Perspective(PerspectiveCam {
@@ -262,7 +262,7 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                             }
                         }
                         if Selectable::new("Orthographic").flags(disabled).build(ui) {
-                            let camera = renderer.camera().unwrap().clone();
+                            let camera = *renderer.camera().unwrap();
                             if let Camera::Orthographic(_) = camera {
                             } else {
                                 renderer.set_camera(Camera::Orthographic(OrthographicCam {
@@ -289,7 +289,7 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                             .flags(SliderFlags::ALWAYS_CLAMP)
                             .build(ui, &mut far);
                         Slider::new("Field of View", 1.0, 150.0).build(ui, &mut fovx);
-                        let mut new_cam = cam.clone();
+                        let mut new_cam = *cam;
                         new_cam.near = near;
                         new_cam.far = far;
                         new_cam.fovx = fovx.to_radians();
@@ -306,7 +306,7 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                             .flags(SliderFlags::ALWAYS_CLAMP)
                             .build(ui, &mut far);
                         Slider::new("Scale", 1.0, 10.0).build(ui, &mut scale);
-                        let mut new_cam = cam.clone();
+                        let mut new_cam = *cam;
                         new_cam.near = near;
                         new_cam.far = far;
                         new_cam.scale = scale;

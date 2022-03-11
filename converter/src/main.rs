@@ -402,8 +402,8 @@ fn convert_cameras(cams: &[russimp::camera::Camera], pb: ProgressBar, radius: f3
             target: Point3::new(0.0, 0.0, 100.0),
             up: Vec3::new(0.0, 1.0, 0.0),
             fovx: f32::to_radians(90.0),
-            near: radius * 2.0 * 1E-5,
-            far: radius * 2.0,
+            near: f32::max(1E-3, radius * 2.0 * 1E-5),
+            far: f32::max(100.0, radius * 2.0),
         }));
         pb.inc(1);
     }

@@ -1,7 +1,7 @@
 use cgmath::{ortho, perspective, InnerSpace, Matrix3, Matrix4, Point3, Rad, Vector3 as Vec3};
 
 /// A camera exhibiting a perspective projection.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct PerspectiveCam {
     /// Position of the camera.
     pub position: Point3<f32>,
@@ -24,8 +24,21 @@ impl PerspectiveCam {
     }
 }
 
+impl Default for PerspectiveCam {
+    fn default() -> Self {
+        Self {
+            position: Point3::new(0.0, 0.0, 0.0),
+            target: Point3::new(0.0, 0.0, 100.0),
+            up: Vec3::new(0.0, 1.0, 0.0),
+            fovx: f32::to_radians(90.0),
+            near: 1E-3,
+            far: 1E3,
+        }
+    }
+}
+
 /// A camera exhibiting an orthographic projection.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct OrthographicCam {
     /// Position of the camera.
     pub position: Point3<f32>,
@@ -42,8 +55,21 @@ pub struct OrthographicCam {
     pub far: f32,
 }
 
+impl Default for OrthographicCam {
+    fn default() -> Self {
+        Self {
+            position: Point3::new(0.0, 0.0, 0.0),
+            target: Point3::new(0.0, 0.0, 100.0),
+            up: Vec3::new(0.0, 1.0, 0.0),
+            scale: 1.0,
+            near: 1E-3,
+            far: 1E3,
+        }
+    }
+}
+
 /// A projective camera in 3D space.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Camera {
     Perspective(PerspectiveCam),
     Orthographic(OrthographicCam),
@@ -212,6 +238,12 @@ impl Camera {
         let v_rot = Matrix3::from_axis_angle(right, Rad(phi));
         let rotation = h_rot * v_rot;
         *target = *position + radius * rotation * direction;
+    }
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Camera::Perspective(PerspectiveCam::default())
     }
 }
 

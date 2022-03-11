@@ -163,12 +163,12 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             &self.out_img,
         );
         unf.wait_completion();
-        self.update_camera(&self.camera.clone());
+        self.update_camera(self.camera);
     }
 
     #[cfg(feature = "vulkan-interactive")]
-    pub(crate) fn update_camera(&mut self, camera: &Camera) {
-        self.push_constants = build_push_constants(camera, self.extent);
+    pub(crate) fn update_camera(&mut self, camera: Camera) {
+        self.push_constants = build_push_constants(&camera, self.extent);
         self.request_new_frame = true;
     }
 
@@ -421,7 +421,7 @@ fn init_rt<T: Instance + Send + Sync>(
     let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf, false);
     let cumulative_img =
         create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf, true);
-    let camera = scene.camera.clone();
+    let camera = scene.camera;
     let push_constants = build_push_constants(&camera, extent);
     let frame_data = (0..frames_in_flight)
         .into_iter()

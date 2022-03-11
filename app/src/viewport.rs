@@ -141,7 +141,7 @@ fn camera_pos_strafe(view: &mut InteractiveView, direction: f32) {
         } else {
             1.0
         };
-        let mut camera = cam.clone();
+        let mut camera = *cam;
         camera.strafe(direction * magnitude * multiplier);
         view.renderer.set_camera(camera);
     }
@@ -155,7 +155,7 @@ fn camera_pos_advance(view: &mut InteractiveView, direction: f32) {
         } else {
             1.0
         };
-        let mut camera = cam.clone();
+        let mut camera = *cam;
         camera.advance(direction * magnitude * multiplier);
         view.renderer.set_camera(camera);
     }
@@ -180,7 +180,7 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
             } else {
                 -1.0
             };
-            let mut camera = cam.clone();
+            let mut camera = *cam;
             camera.look_around(
                 f32::to_radians(magnitude * x_dir * delta.0),
                 f32::to_radians(magnitude * y_dir * delta.1),
@@ -196,7 +196,7 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
             } else {
                 -1.0
             };
-            let mut camera = cam.clone();
+            let mut camera = *cam;
             camera.elevate(direction * magnitude * delta.1);
             view.renderer.set_camera(camera);
         }
