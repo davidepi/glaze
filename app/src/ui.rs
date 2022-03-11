@@ -11,11 +11,9 @@ use imgui::{
 use native_dialog::FileDialog;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{mpsc, Arc};
-use std::thread::{current, JoinHandle};
+use std::thread::JoinHandle;
 use std::time::Instant;
 use winit::window::Window;
-
-const RT_RESULT_TEXTURE_ID: u16 = u16::MAX - 7;
 
 pub struct UiState {
     instance: Arc<PresentInstance>,
@@ -41,11 +39,6 @@ pub struct UiState {
     spectrum_temperature: bool,
     stats_window: bool,
     info_window: bool,
-    render_window: bool,
-    rt_width: i32,
-    rt_height: i32,
-    last_render_w: i32,
-    last_render_h: i32,
     rtrenderer: Option<(Receiver<String>, JoinHandle<TextureLoaded>)>,
     rtrenderer_console: String,
     rtrenderer_has_result: bool,
@@ -78,11 +71,6 @@ impl UiState {
             spectrum_temperature: true,
             stats_window: true,
             info_window: false,
-            render_window: false,
-            rt_width: 1920,
-            rt_height: 1080,
-            last_render_w: 1920,
-            last_render_h: 1080,
             rtrenderer: None,
             rtrenderer_console: String::with_capacity(1024),
             rtrenderer_has_result: false,
@@ -122,7 +110,6 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
             }
         });
         ui.menu("Rendering", || {
-            ui.checkbox("Render", &mut state.render_window);
             if renderer.instance().supports_raytrace() {
                 ui.checkbox("Realtime raytracing", &mut renderer.use_raytracer);
             }
@@ -143,9 +130,6 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
     }
     if state.settings_window {
         window_settings(ui, state, window, renderer);
-    }
-    if state.render_window {
-        window_render(ui, window, state, renderer);
     }
     if state.textures_window {
         window_textures(ui, state, renderer);
@@ -373,7 +357,7 @@ fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
                     if let Some(scene) = scene {
                         scene
                             .textures()
-                            .into_iter()
+                            .iter()
                             .enumerate()
                             .for_each(|(id, texture)| {
                                 if Selectable::new(&texture.info.name).build(ui) {
@@ -845,87 +829,6 @@ fn window_info(ui: &Ui, state: &mut UiState) {
     }
 }
 
-fn window_render(ui: &Ui, window: &Window, state: &mut UiState, renderer: &mut RealtimeRenderer) {
-    let closed = &mut state.render_window;
-    let sizew = window.inner_size().width as f32 * 0.9;
-    let sizeh = window.inner_size().height as f32 * 0.9;
-    if let Some(window) = imgui::Window::new("Render")
-        .size([sizew, sizeh], Condition::Appearing)
-        .opened(closed)
-        .begin(ui)
-    {
-        ui.set_next_item_width(sizew / 4.0);
-        imgui::InputInt::new(ui, "Width", &mut state.rt_width).build();
-        ui.same_line();
-        ui.set_next_item_width(sizew / 4.0);
-        imgui::InputInt::new(ui, "Height", &mut state.rt_height).build();
-        if let Some((rchan, _)) = &state.rtrenderer {
-            match rchan.try_recv() {
-                Ok(msg) => {
-                    state.rtrenderer_console.push_str(&msg);
-                    state.rtrenderer_console.push('\n');
-                }
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => {
-                    let (_, handle) = state.rtrenderer.take().unwrap();
-                    if let Ok(res) = handle.join() {
-                        // FIXME: find a way to give imgui the RT_RESULT_TEXTURE_ID handle
-                        state.rtrenderer_console.push_str("Render failed");
-                        //renderer.add_texture(RT_RESULT_TEXTURE_ID, res);
-                        //state.rtrenderer_has_result = true;
-                    } else {
-                        state.rtrenderer_console.push_str("Render failed");
-                    }
-                }
-            }
-            if ui.button("Cancel") {
-                state.clear_rtrenderer();
-            }
-        } else if ui.button("Render") {
-            state.clear_rtrenderer();
-            state.last_render_w = state.rt_width;
-            state.last_render_h = state.rt_height;
-            let r = renderer.get_raytrace(state.rt_width as u32, state.rt_height as u32);
-            // this block handles "missing scene" and "card not supported"
-            match r {
-                Ok(r) => {
-                    state.rtrenderer_console.clear();
-                    state.rtrenderer_console.push_str("Successfully Created\n");
-                    let (wchan, rchan) = mpsc::channel();
-                    let handle = std::thread::spawn(move || r.draw(wchan));
-                    state.rtrenderer = Some((rchan, handle));
-                }
-                Err(e) => {
-                    let msg = e.to_string();
-                    state.rtrenderer_console.push_str(&format!("{msg}\n"))
-                }
-            }
-        }
-        if state.rtrenderer_has_result {
-            if ui.button("Save") {
-                let texture = renderer
-                    .scene()
-                    .unwrap()
-                    .single_texture(RT_RESULT_TEXTURE_ID)
-                    .unwrap();
-                let image = texture.export();
-                save_image(image);
-            }
-            let ar = state.last_render_w as f32 / state.last_render_h as f32;
-            let imagew = f32::min(state.last_render_w as f32, ui.window_size()[0]);
-            let imageh = imagew / ar;
-            Image::new(
-                TextureId::new(RT_RESULT_TEXTURE_ID as usize),
-                [imagew, imageh],
-            )
-            .build(ui);
-        }
-        ui.text("Log");
-        ui.text_wrapped(&state.rtrenderer_console);
-        window.end()
-    }
-}
-
 fn open_scene(state: &mut UiState) {
     let dialog = FileDialog::new().show_open_single_file();
     match dialog {
@@ -950,23 +853,5 @@ fn open_scene(state: &mut UiState) {
         },
         Ok(None) => (),
         _ => log::error!("Error opening file dialog"),
-    }
-}
-
-fn save_image(img: image::RgbaImage) {
-    let dialog = FileDialog::new()
-        .add_filter("PNG image", &["png"])
-        .show_save_single_file();
-    match dialog {
-        Ok(path) => {
-            if let Some(path) = path {
-                if let Err(e) = img.save(path) {
-                    log::error!("Failed to save image: {e}");
-                }
-            }
-        }
-        Err(err) => {
-            log::error!("Failed to open save path: {err}");
-        }
     }
 }

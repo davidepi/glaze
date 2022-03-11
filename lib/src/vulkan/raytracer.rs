@@ -11,9 +11,7 @@ use crate::vulkan::pipeline::build_raytracing_pipeline;
 use crate::PresentInstance;
 #[cfg(feature = "vulkan-interactive")]
 use crate::VulkanScene;
-use crate::{
-    Camera, ParsedScene, Pipeline, RayTraceInstance, TextureFormat, TextureInfo, TextureLoaded,
-};
+use crate::{Camera, ParsedScene, Pipeline, RayTraceInstance, TextureLoaded};
 use ash::extensions::khr::{
     AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
 };
@@ -54,7 +52,7 @@ struct ShaderBindingTable {
     miss_addr: vk::StridedDeviceAddressRegionKHR,
     hit_addr: vk::StridedDeviceAddressRegionKHR,
     call_addr: vk::StridedDeviceAddressRegionKHR,
-    buffer: AllocatedBuffer,
+    _buffer: AllocatedBuffer,
 }
 
 pub struct RayTraceRenderer<T: Instance + Send + Sync> {
@@ -391,245 +389,8 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     }
 
     pub fn draw(mut self, channel: Sender<String>) -> TextureLoaded {
-        // if the other end disconnected, this thread can die anyway, so unwrap()
-        channel.send("Tracing rays".to_string()).unwrap();
-        if self.request_new_frame {
-            self.sample_scheduler.rewind();
-        }
-        let fd = RTFrameData {
-            seed: self.rng.gen(),
-            lights_no: self.scene.lights_no,
-            pixel_offset: self.sample_scheduler.next().unwrap(),
-            scene_radius: self.scene.meta.scene_radius,
-            exposure: self.scene.meta.exposure,
-        };
-        self.request_new_frame = false;
-        update_frame_data(fd, &mut self.frame_data[0]);
-        let cmd = self.ccmdm.get_cmd_buffer();
-        let device = self.instance.device();
-        let new_frame = self.request_new_frame;
-        self.request_new_frame = false;
-        let command = unsafe {
-            |device: &ash::Device, cmd: vk::CommandBuffer| {
-                if new_frame {
-                    let subresource_range = vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    };
-                    let color = vk::ClearColorValue {
-                        float32: [0.0, 0.0, 0.0, 0.0],
-                    };
-                    device.cmd_clear_color_image(
-                        cmd,
-                        self.cumulative_img.image,
-                        vk::ImageLayout::GENERAL,
-                        &color,
-                        &[subresource_range],
-                    );
-                }
-                device.cmd_push_constants(
-                    cmd,
-                    self.pipeline.layout,
-                    vk::ShaderStageFlags::RAYGEN_KHR,
-                    0,
-                    &self.push_constants,
-                );
-                device.cmd_bind_pipeline(
-                    cmd,
-                    vk::PipelineBindPoint::RAY_TRACING_KHR,
-                    self.pipeline.pipeline,
-                );
-                device.cmd_bind_descriptor_sets(
-                    cmd,
-                    vk::PipelineBindPoint::RAY_TRACING_KHR,
-                    self.pipeline.layout,
-                    0,
-                    &[self.frame_desc[0].set, self.scene.descriptor.set],
-                    &[],
-                );
-                self.rploader.cmd_trace_rays(
-                    cmd,
-                    &self.sbt.rgen_addr,
-                    &self.sbt.miss_addr,
-                    &self.sbt.hit_addr,
-                    &self.sbt.call_addr,
-                    self.extent.width,
-                    self.extent.height,
-                    1,
-                );
-            }
-        };
-        let fence = device.immediate_execute(cmd, device.compute_queue(), command);
-        device.wait_completion(&[fence]);
-        channel.send("Rendering finished".to_string()).unwrap();
-        channel.send("Copying result".to_string()).unwrap();
-
-        let out_image = copy_storage_to_output(
-            self.instance.as_ref(),
-            &mut self.gcmdm,
-            &self.out_img,
-            self.extent,
-        );
-        let out_info = TextureInfo {
-            name: "RT out image".to_string(),
-            format: TextureFormat::RgbaSrgb,
-            width: self.extent.width as u16,
-            height: self.extent.height as u16,
-        };
-        TextureLoaded {
-            info: out_info,
-            image: out_image,
-            instance: self.instance.clone(),
-        }
+        unimplemented!()
     }
-}
-
-fn copy_storage_to_output<T: Instance>(
-    instance: &T,
-    gcmdm: &mut CommandManager,
-    img: &AllocatedImage,
-    extent: vk::Extent2D,
-) -> AllocatedImage {
-    // blit the final image to one with a better layout to be displayed
-    // probably later I want to just COPY the image, perform manual exposure compensation,
-    // and then blit to sRGB or 8bit format.
-    //TODO: probably I want this to be R32G32B32A32_SFLOAT
-    let retval = instance.allocator().create_image_gpu(
-        "RT output",
-        vk::Format::R8G8B8A8_SRGB,
-        extent,
-        vk::ImageUsageFlags::TRANSFER_SRC
-            | vk::ImageUsageFlags::TRANSFER_DST
-            | vk::ImageUsageFlags::SAMPLED,
-        vk::ImageAspectFlags::COLOR,
-        1,
-    );
-    let blit_subresource = vk::ImageSubresourceLayers {
-        aspect_mask: vk::ImageAspectFlags::COLOR,
-        mip_level: 0,
-        base_array_layer: 0,
-        layer_count: 1,
-    };
-    let subresource_range = vk::ImageSubresourceRange {
-        aspect_mask: vk::ImageAspectFlags::COLOR,
-        base_mip_level: 0,
-        level_count: 1,
-        base_array_layer: 0,
-        layer_count: 1,
-    };
-    let blit_regions = [vk::ImageBlit {
-        src_subresource: blit_subresource,
-        src_offsets: [
-            vk::Offset3D { x: 0, y: 0, z: 0 },
-            vk::Offset3D {
-                x: extent.width as i32,
-                y: extent.height as i32,
-                z: 1,
-            },
-        ],
-        dst_subresource: blit_subresource,
-        dst_offsets: [
-            vk::Offset3D { x: 0, y: 0, z: 0 },
-            vk::Offset3D {
-                x: extent.width as i32,
-                y: extent.height as i32,
-                z: 1,
-            },
-        ],
-    }];
-    let barrier_src_general_to_transfer = vk::ImageMemoryBarrier {
-        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
-        p_next: ptr::null(),
-        src_access_mask: vk::AccessFlags::MEMORY_WRITE,
-        dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-        old_layout: vk::ImageLayout::GENERAL,
-        new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-        image: img.image,
-        subresource_range,
-    };
-    let barrier_dst_undefined_to_transfer = vk::ImageMemoryBarrier {
-        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
-        p_next: ptr::null(),
-        src_access_mask: vk::AccessFlags::MEMORY_READ,
-        dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-        old_layout: vk::ImageLayout::UNDEFINED,
-        new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-        image: retval.image,
-        subresource_range,
-    };
-    let barrier_src_transfer_to_general = vk::ImageMemoryBarrier {
-        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
-        p_next: ptr::null(),
-        src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-        dst_access_mask: vk::AccessFlags::MEMORY_WRITE,
-        old_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-        new_layout: vk::ImageLayout::GENERAL,
-        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-        image: img.image,
-        subresource_range,
-    };
-    let barrier_dst_transfer_to_shader = vk::ImageMemoryBarrier {
-        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
-        p_next: ptr::null(),
-        src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-        dst_access_mask: vk::AccessFlags::MEMORY_READ,
-        old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-        image: retval.image,
-        subresource_range,
-    };
-    let device = instance.device();
-    let command = |vkdevice: &ash::Device, cmd: vk::CommandBuffer| unsafe {
-        vkdevice.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            &[
-                barrier_src_general_to_transfer,
-                barrier_dst_undefined_to_transfer,
-            ],
-        );
-        // blit works only on a graphic queue
-        vkdevice.cmd_blit_image(
-            cmd,
-            img.image,
-            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            retval.image,
-            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            &blit_regions,
-            vk::Filter::NEAREST,
-        );
-        vkdevice.cmd_pipeline_barrier(
-            cmd,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::PipelineStageFlags::TRANSFER,
-            vk::DependencyFlags::empty(),
-            &[],
-            &[],
-            &[
-                barrier_src_transfer_to_general,
-                barrier_dst_transfer_to_shader,
-            ],
-        );
-    };
-    let cmd = gcmdm.get_cmd_buffer();
-    let graphic_queue = device.graphic_queue();
-    let fence = device.immediate_execute(cmd, graphic_queue, command);
-    device.wait_completion(&[fence]);
-    retval
 }
 
 fn init_rt<T: Instance + Send + Sync>(
@@ -977,7 +738,7 @@ fn build_sbt<T: Instance>(
         miss_addr,
         hit_addr,
         call_addr,
-        buffer: gpu_buf,
+        _buffer: gpu_buf,
     }
 }
 
