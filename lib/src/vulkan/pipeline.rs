@@ -2,10 +2,11 @@ use crate::geometry::Vertex;
 use crate::{include_shader, LightType, ShaderMat};
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
-use cgmath::Matrix4;
 use std::ffi::CString;
 use std::ptr;
 use std::sync::Arc;
+
+use super::raytracer::RTPushConstants;
 
 /// A Vulkan pipeline paired with a pipeline layout.
 pub struct Pipeline {
@@ -489,7 +490,7 @@ pub fn build_raytracing_pipeline(
     let push_constants = [vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::RAYGEN_KHR,
         offset: 0,
-        size: (std::mem::size_of::<Matrix4<f32>>() * 2) as u32,
+        size: std::mem::size_of::<RTPushConstants>() as u32,
     }];
     let pipeline_layout = vk::PipelineLayoutCreateInfo {
         s_type: vk::StructureType::PIPELINE_LAYOUT_CREATE_INFO,

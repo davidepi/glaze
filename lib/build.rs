@@ -42,9 +42,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut compiler = Compiler::new().expect("Failed to find a SPIR-V compiler");
         let mut options = CompileOptions::new().expect("Error while initializing compiler");
         options.set_include_callback(handle_includes);
-        #[cfg(target_os = "macos")]
-        options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_1 as u32);
-        #[cfg(not(target_os = "macos"))]
         options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
         if is_debug {
             options.set_optimization_level(OptimizationLevel::Zero);
@@ -62,15 +59,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                             "vert" => Some(ShaderKind::Vertex),
                             "comp" => Some(ShaderKind::Compute),
                             "frag" => Some(ShaderKind::Fragment),
-                            #[cfg(not(target_os = "macos"))]
                             "rgen" => Some(ShaderKind::RayGeneration),
-                            #[cfg(not(target_os = "macos"))]
                             "rahit" => Some(ShaderKind::AnyHit),
-                            #[cfg(not(target_os = "macos"))]
                             "rchit" => Some(ShaderKind::ClosestHit),
-                            #[cfg(not(target_os = "macos"))]
                             "rmiss" => Some(ShaderKind::Miss),
-                            #[cfg(not(target_os = "macos"))]
                             "rcall" => Some(ShaderKind::Callable),
                             _ => None,
                         });

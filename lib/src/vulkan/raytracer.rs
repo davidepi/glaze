@@ -16,7 +16,7 @@ use ash::extensions::khr::{
     AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
 };
 use ash::vk;
-use cgmath::{SquareMatrix, Vector2 as Vec2};
+use cgmath::{Matrix4, SquareMatrix, Vector2 as Vec2};
 use gpu_allocator::MemoryLocation;
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro128PlusPlus;
@@ -25,12 +25,25 @@ use std::ptr;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
+// changes in every frame (values required by the integrator)
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RTPushConstants {
+    pixel_offset: Vec2<f32>,
+    seed: u32,
+}
+
+fn as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+    unsafe { std::slice::from_raw_parts((p as *const T) as *const u8, std::mem::size_of::<T>()) }
+}
+
+// doesn't change if the image is the same
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 struct RTFrameData {
-    seed: u32,
+    camera2world: Matrix4<f32>,
+    screen2camera: Matrix4<f32>,
     lights_no: u32,
-    pixel_offset: Vec2<f32>,
     scene_radius: f32,
     exposure: f32,
 }
@@ -38,10 +51,10 @@ struct RTFrameData {
 impl Default for RTFrameData {
     fn default() -> Self {
         Self {
-            seed: 0,
+            camera2world: Matrix4::identity(),
+            screen2camera: Matrix4::identity(),
             lights_no: 0,
             scene_radius: 0.0,
-            pixel_offset: Vec2::new(0.0, 0.0),
             exposure: 1.0,
         }
     }
@@ -57,8 +70,6 @@ struct ShaderBindingTable {
 
 pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     pub(super) scene: RayTraceScene<T>,
-    camera: Camera,
-    push_constants: [u8; 128],
     frame_data: Vec<AllocatedBuffer>,
     rng: Xoshiro128PlusPlus,
     cumulative_img: AllocatedImage,
@@ -163,12 +174,12 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             &self.out_img,
         );
         unf.wait_completion();
-        self.update_camera(self.camera);
+        self.update_camera(self.scene.camera);
     }
 
     #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn update_camera(&mut self, camera: Camera) {
-        self.push_constants = build_push_constants(&camera, self.extent);
+        self.scene.camera = camera;
         self.request_new_frame = true;
     }
 
@@ -288,10 +299,16 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         if self.request_new_frame {
             self.sample_scheduler.rewind();
         }
-        let fd = RTFrameData {
+        let pc = RTPushConstants {
             seed: self.rng.gen(),
-            lights_no: self.scene.lights_no,
             pixel_offset: self.sample_scheduler.next().unwrap(),
+        };
+        // TODO: this could be more efficient and updated only if self.request_new_frame is true
+        let (camera2world, screen2camera) = build_cameras(self.scene.camera, self.extent);
+        let fd = RTFrameData {
+            camera2world,
+            screen2camera,
+            lights_no: self.scene.lights_no,
             scene_radius: self.scene.meta.scene_radius,
             exposure: self.scene.meta.exposure,
         };
@@ -319,7 +336,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                 self.pipeline.layout,
                 vk::ShaderStageFlags::RAYGEN_KHR,
                 0,
-                &self.push_constants,
+                as_u8_slice(&pc),
             );
             vkdevice.cmd_bind_pipeline(
                 cmd,
@@ -421,8 +438,6 @@ fn init_rt<T: Instance + Send + Sync>(
     let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf, false);
     let cumulative_img =
         create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf, true);
-    let camera = scene.camera;
-    let push_constants = build_push_constants(&camera, extent);
     let frame_data = (0..frames_in_flight)
         .into_iter()
         .map(|_| {
@@ -451,8 +466,6 @@ fn init_rt<T: Instance + Send + Sync>(
     unf.wait_completion();
     RayTraceRenderer {
         scene,
-        camera,
-        push_constants,
         frame_data,
         rng,
         cumulative_img,
@@ -742,29 +755,14 @@ fn build_sbt<T: Instance>(
     }
 }
 
-fn build_push_constants(camera: &Camera, extent: vk::Extent2D) -> [u8; 128] {
+fn build_cameras(camera: Camera, extent: vk::Extent2D) -> (Matrix4<f32>, Matrix4<f32>) {
     // build matrices
     let ar = extent.width as f32 / extent.height as f32;
     let view_inv = camera.look_at_rh().invert().unwrap();
     let mut proj = camera.projection(ar);
     proj[1][1] *= -1.0; // cgmath is made for openGL and vulkan projection is slightly different
     let proj_inv = proj.invert().unwrap();
-    // save matrices to byte array
-    let mut retval = [0; 128];
-    let mut index = 0;
-    let matrices = [view_inv, proj_inv];
-    for matrix in matrices {
-        let vals: &[f32; 16] = matrix.as_ref();
-        for val in vals {
-            let bytes = f32::to_le_bytes(*val);
-            retval[index] = bytes[0];
-            retval[index + 1] = bytes[1];
-            retval[index + 2] = bytes[2];
-            retval[index + 3] = bytes[3];
-            index += 4;
-        }
-    }
-    retval
+    (view_inv, proj_inv)
 }
 
 fn update_frame_data(fd: RTFrameData, buf: &mut AllocatedBuffer) {
