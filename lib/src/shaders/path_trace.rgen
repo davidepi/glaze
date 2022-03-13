@@ -13,13 +13,13 @@ layout(location=3) callableDataEXT BsdfValue bsdfval;
 layout(location=4) callableDataEXT BsdfSampleValue bsdfsampleval;
 
 layout(push_constant) uniform readonly pc {
-  vec2 pixel_offset;
-  uint seed;
-} PushConstants;
-layout(set=0, binding=0) uniform readonly frameData {
   mat4 camera2world;
   mat4 screen2camera;
+} Camera;
+layout(set=0, binding=0) uniform readonly frameData {
+  uint seed;
   uint lights_no;
+  vec2 pixel_offset;
   float scene_radius;
   float exposure;
 }FrameData;
@@ -37,7 +37,7 @@ vec3 ray_origin()
 {
   // technically this could be just the camera position...
   vec4 origin_screen_space = vec4(0.0, 0.0, 0.0, 1.0);
-  vec4 origin = FrameData.camera2world * origin_screen_space;
+  vec4 origin = Camera.camera2world * origin_screen_space;
   return origin.xyz;
 }
 
@@ -49,8 +49,8 @@ vec3 ray_dir(vec2 ndc)
   // note the 1.0 in the Z component. In my other renderer I used 0.0 and that was handled by the
   // raster2screen transformation matrix. Here I don't use such matrix so I need to put the
   // direction in screen space slightly in front of the ray origin (which is on 0.0)
-  vec3 target = (FrameData.screen2camera*vec4(ndc, 1.0, 1.0)).xyz;
-  vec4 direction = normalize(FrameData.camera2world * vec4(normalize(target), 0.0));
+  vec3 target = (Camera.screen2camera*vec4(ndc, 1.0, 1.0)).xyz;
+  vec4 direction = normalize(Camera.camera2world * vec4(normalize(target), 0.0));
   return direction.xyz;
 }
 
@@ -96,8 +96,8 @@ void main()
     imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(0.0, 0.0, 0.0, 1.0));
     return;
   }
-  uint rng = srand(vec3(PushConstants.seed, gl_LaunchIDEXT.xy));
-  const vec2 pixel = gl_LaunchIDEXT.xy + PushConstants.pixel_offset;
+  uint rng = srand(vec3(FrameData.seed, gl_LaunchIDEXT.xy));
+  const vec2 pixel = gl_LaunchIDEXT.xy + FrameData.pixel_offset;
   const vec2 uv = pixel / gl_LaunchSizeEXT.xy;
   const vec2 ndc = vec2(-1.0)+2.0*uv;
   vec3 origin = ray_origin();
