@@ -1470,12 +1470,12 @@ fn build_raytrace_descriptor(
         .bind_buffer(
             vertex_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::ANY_HIT_KHR,
+            vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::ANY_HIT_KHR,
         )
         .bind_buffer(
             index_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::ANY_HIT_KHR,
+            vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::ANY_HIT_KHR,
         )
         .bind_buffer(
             instance_buffer,
@@ -1487,7 +1487,6 @@ fn build_raytrace_descriptor(
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::RAYGEN_KHR
                 | vk::ShaderStageFlags::CALLABLE_KHR
-                | vk::ShaderStageFlags::CLOSEST_HIT_KHR
                 | vk::ShaderStageFlags::ANY_HIT_KHR,
         )
         .bind_buffer(
@@ -1499,14 +1498,14 @@ fn build_raytrace_descriptor(
             &textures_memory,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             sampler,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR
+            vk::ShaderStageFlags::RAYGEN_KHR
                 | vk::ShaderStageFlags::ANY_HIT_KHR
                 | vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .bind_buffer(
             derivative_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+            vk::ShaderStageFlags::RAYGEN_KHR,
         )
         .build()
 }

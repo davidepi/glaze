@@ -1,12 +1,14 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier: require
 
 #include "random.glsl"
 #include "constants.glsl"
 #include "spectrum.glsl"
+#include "hit.glsl"
 #include "raytrace_commons.glsl"
 
-layout(location=0) rayPayloadEXT HitPoint hit;
+layout(location=0) rayPayloadEXT SurfaceHit sh;
 layout(location=1) rayPayloadEXT bool shadow_ray_hit;
 layout(location=2) callableDataEXT SampledLight sam;
 layout(location=3) callableDataEXT BsdfValue bsdfval;
@@ -26,13 +28,22 @@ layout(set=0, binding=0) uniform readonly frameData {
 layout(set=0, binding=1, rgba32f) uniform image2D accumulate_image;
 layout(set=0, binding=2, rgba32f) uniform writeonly image2D result_image;
 layout(set=1, binding=0) uniform accelerationStructureEXT scene;
+layout(std430, set=1, binding=1) readonly buffer vertexBuffer {
+  VertexPacked vertices[];
+} VertexBuffer;
+layout(std430, set=1, binding=2) readonly buffer indexBuffer {
+  Triangle indices[];
+} IndexBuffer;
 layout(std430, set=1, binding=4) readonly buffer materialBuffer {
   RTMaterial materials[];
 } MaterialBuffer;
 layout(std430, set=1, binding=5) readonly buffer lightBuffer {
   RTLight lights[];
 } LightBuffer;
-
+layout(set=1, binding=6) uniform sampler2D textures[];
+layout(set=1, binding=7) readonly buffer derivativeBuffer {
+  Derivatives d[];
+}DerivativeBuffer;
 vec3 ray_origin()
 {
   // technically this could be just the camera position...
@@ -54,7 +65,7 @@ vec3 ray_dir(vec2 ndc)
   return direction.xyz;
 }
 
-Spectrum direct_light(inout uint rng, in vec3 woW, in ShadingSpace mat, in RTMaterial material)
+Spectrum direct_light(inout uint rng, in vec3 woW, in HitData hit, in ShadingSpace mat, in RTMaterial material)
 {
   Spectrum L = SPECTRUM_ZERO;
   // choose a random light to sample
@@ -70,7 +81,7 @@ Spectrum direct_light(inout uint rng, in vec3 woW, in ShadingSpace mat, in RTMat
     bsdfval.uv = hit.uv;
     bsdfval.shading = mat;
     bsdfval.rand_sample = rand(rng);
-    bsdfval.material_index = hit.material_index;
+    bsdfval.material_index = sh.ids.y;
     executeCallableEXT(material.bsdf_index, 3);
     if (!is_black(bsdfval.value))
     {
@@ -109,16 +120,18 @@ void main()
   for(int i=0; i<5; i++)
   {
     traceRayEXT(scene, 0, 0xFF, 0, 0, 0, origin, 0.0001, direction, INFINITY, 0);
-    if (hit.miss)
+    if (sh.miss)
     {
       break;
     }
+    HitData hit;
+    RTMaterial material;
+    EXPAND_HIT(sh, hit, material);
     vec3 woW = -direction;
     ShadingSpace matrix = new_shading_space(hit.dpdu, hit.shading_normal);
-    RTMaterial material = MaterialBuffer.materials[hit.material_index];
     if(!material.is_specular)
     {
-      Spectrum direct = direct_light(rng, woW, matrix, material);
+      Spectrum direct = direct_light(rng, woW, hit, matrix, material);
       L = add(L, mul(direct, power));
     }
     if(i>3)
@@ -138,7 +151,7 @@ void main()
     bsdfsampleval.geometric_normal = hit.geometric_normal;
     bsdfsampleval.rand_sample = rand3(rng);
     bsdfsampleval.shading = matrix;
-    bsdfsampleval.material_index = hit.material_index;
+    bsdfsampleval.material_index = sh.ids.y;
     executeCallableEXT(material.bsdf_index+1, 4);
     if(bsdfsampleval.pdf == 0.0 || is_black(bsdfsampleval.value))
     {

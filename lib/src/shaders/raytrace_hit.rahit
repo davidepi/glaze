@@ -2,6 +2,7 @@
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_nonuniform_qualifier: require
 
+#include "hit.glsl"
 #include "raytrace_commons.glsl"
 
 hitAttributeEXT vec2 attrib;

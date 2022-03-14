@@ -1,10 +1,10 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 
-#include "raytrace_commons.glsl"
+#include "hit.glsl"
 
-layout(location = 0) rayPayloadInEXT HitPoint hit;
+layout(location = 0) rayPayloadInEXT SurfaceHit sh;
 
 void main() {
-  hit.miss = true;
+  sh.miss = true;
 }

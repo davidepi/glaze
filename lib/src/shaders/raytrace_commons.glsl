@@ -43,19 +43,6 @@ struct Derivatives
   vec4 dpdv;
 };
 
-struct HitPoint
-{
-  vec3 point;
-  vec3 shading_normal;
-  vec3 geometric_normal;
-  vec3 dpdu;
-  vec3 dpdv;
-  vec2 uv;
-  uint material_index;
-  float distance;
-  bool miss;
-};
-
 struct SampledLight
 {
   Spectrum emission;
