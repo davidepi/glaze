@@ -8,6 +8,7 @@ use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::build_compute_pipeline;
 #[cfg(feature = "vulkan-interactive")]
 use super::pipeline::Pipeline;
+use super::raytrace_structures::{RTInstance, RTLight, RTMaterial};
 use super::UnfinishedExecutions;
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
@@ -878,55 +879,6 @@ impl From<&Material> for MaterialParams {
 /// How many bytes are required for `n` to be aligned to `align` boundary
 pub fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
     ((!n.into()).wrapping_add(1)) & (align.into().wrapping_sub(1))
-}
-
-/// This is the struct passed to the GPU that represents a mesh instance.
-/// Used to retrieve the mesh attributes in a raytracing context.
-/// Unlike MeshInstance and VulkanMesh it MUST be indexed by its position in the array.
-/// The index must correspond to the MeshInstance index passed to the acceleration structure.
-#[repr(C)]
-struct RTInstance {
-    index_offset: u32,
-    index_count: u32,
-    material_id: u32, // due to how std430 works
-}
-
-#[repr(C, align(16))]
-#[derive(Debug, Default, Copy, Clone)]
-struct RTMaterial {
-    diffuse_mul: [f32; 4],
-    ior0: [f32; 4],
-    ior1: [f32; 4],
-    ior2: [f32; 4],
-    ior3: [f32; 4],
-    metal_fresnel0: [f32; 4],
-    metal_fresnel1: [f32; 4],
-    metal_fresnel2: [f32; 4],
-    metal_fresnel3: [f32; 4],
-    diffuse: u32,
-    roughness: u32,
-    metalness: u32,
-    opacity: u32,
-    normal: u32,
-    // callable shader index for the bsdf_value
-    bsdf_index: u32,
-    roughness_mul: f32,
-    metalness_mul: f32,
-    anisotropy: f32,
-    ior_dielectric: f32,
-    is_specular: u32,
-}
-
-#[repr(C, align(16))]
-#[derive(Debug, Copy, Clone)]
-struct RTLight {
-    color0: [f32; 4],
-    color1: [f32; 4],
-    color2: [f32; 4],
-    color3: [f32; 4],
-    pos: [f32; 4],
-    dir: [f32; 4],
-    shader: u32,
 }
 
 pub struct RayTraceScene<T: Instance + Send + Sync> {

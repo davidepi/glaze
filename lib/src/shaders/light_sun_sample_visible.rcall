@@ -2,6 +2,7 @@
 #extension GL_EXT_ray_tracing : require
 
 #include "spectrum.glsl"
+#include "raytrace_structures.glsl"
 #include "raytrace_commons.glsl"
 
 layout(location = 0)  callableDataInEXT SampledLight sam;
@@ -24,5 +25,5 @@ void main()
   sam.wiW = -light.dir.xyz;
   sam.pdf = 1.0;
   sam.distance = 2.0*FrameData.scene_radius+1;
-  sam.emission = Spectrum(light.col0, light.col1, light.col2, light.col3);
+  sam.emission = Spectrum(light.color0, light.color1, light.color2, light.color3);
 }

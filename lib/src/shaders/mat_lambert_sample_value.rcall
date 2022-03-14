@@ -5,6 +5,7 @@
 #include "constants.glsl"
 #include "spectrum.glsl"
 #include "shading_space.glsl"
+#include "raytrace_structures.glsl"
 #include "raytrace_commons.glsl"
 
 layout(location = 0) callableDataInEXT BsdfSampleValue bsdf;

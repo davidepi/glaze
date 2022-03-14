@@ -6,6 +6,7 @@
 #include "spectrum.glsl"
 #include "fresnel.glsl"
 #include "microfacets.glsl"
+#include "raytrace_structures.glsl"
 #include "raytrace_commons.glsl"
 
 layout(location = 0) callableDataInEXT BsdfValue bsdf;

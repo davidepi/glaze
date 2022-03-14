@@ -7,6 +7,7 @@ license  = "MIT"
 
 [build-dependencies]
 shaderc = {version="0.7", optional=true}
+syn = {version="1", features=["full"], optional=true}
 
 [dependencies]
 log = "0.4"
@@ -39,5 +40,5 @@ env_logger = "0.9" # log validation errors in vulkan tests
 
 [features]
 default = ["vulkan-interactive"]
-vulkan = ["ash", "gpu-allocator", "memoffset", "shaderc"]
+vulkan = ["ash", "gpu-allocator", "memoffset", "shaderc", "syn"]
 vulkan-interactive = ["vulkan", "winit", "imgui", "font-kit", "metal", "cocoa", "winapi"]

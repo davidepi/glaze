@@ -3,6 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier: require
 
 #include "hit.glsl"
+#include "raytrace_structures.glsl"
 #include "raytrace_commons.glsl"
 
 hitAttributeEXT vec2 attrib;
@@ -34,7 +35,7 @@ void main()
   Vertex v1 = from_packed(VertexBuffer.vertices[tris.y]);
   Vertex v2 = from_packed(VertexBuffer.vertices[tris.z]);
   vec2 uv = v0.tcoord * barycentric.x + v1.tcoord * barycentric.y + v2.tcoord * barycentric.z;
-  RTMaterial mat = MaterialBuffer.materials[instance.mat_id];
+  RTMaterial mat = MaterialBuffer.materials[instance.material_id];
   float alpha = texture(textures[nonuniformEXT(mat.opacity)], uv).r;
   if (alpha < 0.5)
   {

@@ -8,6 +8,7 @@ mod imgui;
 mod instance;
 mod memory;
 mod pipeline;
+pub(crate) mod raytrace_structures;
 mod raytracer;
 #[cfg(feature = "vulkan-interactive")]
 mod renderer;

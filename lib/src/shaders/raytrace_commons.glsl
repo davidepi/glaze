@@ -8,12 +8,6 @@
 #define CHECKINF(X) (isinf(X)?0.0:X)
 #define CHECKNANINF(X) (isnan(X)||isinf(X)?0.0:X)
 
-struct RTInstance {
-  uint index_offset;
-  uint index_count;
-  uint mat_id;
-};
-
 struct VertexPacked {
   vec4 pxyznx; //position xyz + normal x
   vec4 nyztxy; //normal yz + tcoord xy
@@ -51,41 +45,6 @@ struct SampledLight
   vec3 wiW;
   float distance;
   uint light_index;
-};
-
-struct RTLight
-{
-  vec4 col0;
-  vec4 col1;
-  vec4 col2;
-  vec4 col3;
-  vec4 pos;
-  vec4 dir;
-  uint shader;
-};
-
-struct RTMaterial
-{
-  vec4 diffuse_mul;
-  vec4 ior0;
-  vec4 ior1;
-  vec4 ior2;
-  vec4 ior3;
-  vec4 metal_fresnel0;
-  vec4 metal_fresnel1;
-  vec4 metal_fresnel2;
-  vec4 metal_fresnel3;
-  uint diffuse;
-  uint roughness;
-  uint metalness;
-  uint opacity;
-  uint normal;
-  uint bsdf_index;
-  float roughness_mul;
-  float metalness_mul;
-  float anisotropy;
-  float ior_dielectric;
-  bool is_specular;
 };
 
 struct BsdfValue

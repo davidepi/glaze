@@ -6,8 +6,74 @@ use shaderc::{
 #[cfg(feature = "vulkan")]
 use std::env;
 use std::error::Error;
+use std::path::Path;
 #[cfg(feature = "vulkan")]
 use std::path::PathBuf;
+use syn::{Expr, Item, Lit, Type, TypeArray, TypePath};
+
+fn main() -> Result<(), Box<dyn Error>> {
+    #[cfg(feature = "vulkan")]
+    {
+        println!("cargo:rerun-if-changed=src/vulkan/raytrace_structures.rs");
+        println!("cargo:rerun-if-changed=src/shaders");
+        gen_shared_structures(&["src/vulkan/raytrace_structures.rs"])?;
+        compile_spirv()?;
+    }
+    Ok(())
+}
+
+fn compile_spirv() -> Result<(), Box<dyn Error>> {
+    let is_debug = cfg!(debug_assertions);
+    // specifying different folders is not necessary with OUT_DIR, cargo handles this automatically
+    let outdir = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("shaders");
+    std::fs::create_dir_all(outdir.clone())?;
+    let mut compiler = Compiler::new().expect("Failed to find a SPIR-V compiler");
+    let mut options = CompileOptions::new().expect("Error while initializing compiler");
+    options.set_include_callback(handle_includes);
+    options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
+    if is_debug {
+        options.set_optimization_level(OptimizationLevel::Zero);
+    } else {
+        options.set_optimization_level(OptimizationLevel::Performance);
+    }
+    for entry in std::fs::read_dir("src/shaders")? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            let in_path = entry.path();
+            let maybe_correct_kind =
+                in_path
+                    .extension()
+                    .and_then(|ext| match ext.to_string_lossy().as_ref() {
+                        "vert" => Some(ShaderKind::Vertex),
+                        "comp" => Some(ShaderKind::Compute),
+                        "frag" => Some(ShaderKind::Fragment),
+                        "rgen" => Some(ShaderKind::RayGeneration),
+                        "rahit" => Some(ShaderKind::AnyHit),
+                        "rchit" => Some(ShaderKind::ClosestHit),
+                        "rmiss" => Some(ShaderKind::Miss),
+                        "rcall" => Some(ShaderKind::Callable),
+                        _ => None,
+                    });
+            if let Some(shader_kind) = maybe_correct_kind {
+                let source_text = std::fs::read_to_string(&in_path)?;
+                let compiled_bytes = compiler.compile_into_spirv(
+                    &source_text,
+                    shader_kind,
+                    in_path.as_path().to_str().unwrap(),
+                    "main",
+                    Some(&options),
+                )?;
+                let outfile = outdir.clone().join(format!(
+                    "{}.spv",
+                    in_path.as_path().file_name().unwrap().to_str().unwrap()
+                ));
+
+                std::fs::write(&outfile, &compiled_bytes.as_binary_u8())?;
+            }
+        }
+    }
+    Ok(())
+}
 
 #[cfg(feature = "vulkan")]
 fn handle_includes(name: &str, _: IncludeType, _: &str, _: usize) -> IncludeCallbackResult {
@@ -30,68 +96,100 @@ fn handle_includes(name: &str, _: IncludeType, _: &str, _: usize) -> IncludeCall
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    #[cfg(feature = "vulkan")]
-    {
-        println!("cargo:rerun-if-changed=src/shaders");
-
-        let is_debug = cfg!(debug_assertions);
-        // specyfing different folders is not necessary with OUT_DIR, cargo handles this automatically
-        let outdir = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("shaders");
-        std::fs::create_dir_all(outdir.clone())?;
-        let mut compiler = Compiler::new().expect("Failed to find a SPIR-V compiler");
-        let mut options = CompileOptions::new().expect("Error while initializing compiler");
-        options.set_include_callback(handle_includes);
-        #[cfg(target_os = "macos")]
-        options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_1 as u32);
-        #[cfg(not(target_os = "macos"))]
-        options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
-        if is_debug {
-            options.set_optimization_level(OptimizationLevel::Zero);
-        } else {
-            options.set_optimization_level(OptimizationLevel::Performance);
-        }
-        for entry in std::fs::read_dir("src/shaders")? {
-            let entry = entry?;
-            if entry.file_type()?.is_file() {
-                let in_path = entry.path();
-                let maybe_correct_kind =
-                    in_path
-                        .extension()
-                        .and_then(|ext| match ext.to_string_lossy().as_ref() {
-                            "vert" => Some(ShaderKind::Vertex),
-                            "comp" => Some(ShaderKind::Compute),
-                            "frag" => Some(ShaderKind::Fragment),
-                            #[cfg(not(target_os = "macos"))]
-                            "rgen" => Some(ShaderKind::RayGeneration),
-                            #[cfg(not(target_os = "macos"))]
-                            "rahit" => Some(ShaderKind::AnyHit),
-                            #[cfg(not(target_os = "macos"))]
-                            "rchit" => Some(ShaderKind::ClosestHit),
-                            #[cfg(not(target_os = "macos"))]
-                            "rmiss" => Some(ShaderKind::Miss),
-                            #[cfg(not(target_os = "macos"))]
-                            "rcall" => Some(ShaderKind::Callable),
-                            _ => None,
-                        });
-                if let Some(shader_kind) = maybe_correct_kind {
-                    let source_text = std::fs::read_to_string(&in_path)?;
-                    let compiled_bytes = compiler.compile_into_spirv(
-                        &source_text,
-                        shader_kind,
-                        in_path.as_path().to_str().unwrap(),
-                        "main",
-                        Some(&options),
-                    )?;
-                    let outfile = outdir.clone().join(format!(
-                        "{}.spv",
-                        in_path.as_path().file_name().unwrap().to_str().unwrap()
-                    ));
-
-                    std::fs::write(&outfile, &compiled_bytes.as_binary_u8())?;
-                }
+fn gen_shared_structures(files: &[&str]) -> Result<(), Box<dyn Error>> {
+    for file in files {
+        let content = std::fs::read_to_string(file)?;
+        let ast = syn::parse_file(&content)?;
+        let filestem = Path::new(file).file_stem().unwrap().to_str().unwrap();
+        let output = format!("src/shaders/{}.glsl", filestem);
+        let guard_name = format!("_{}_GLSL_", filestem.to_uppercase());
+        let mut output_content = format!("// Automatically generated by build.rs from {}\n", file);
+        output_content.push_str("// This file will be automatically re-generated by cargo\n\n");
+        output_content.push_str(&format!("#ifndef {guard_name}\n"));
+        output_content.push_str(&format!("#define {guard_name}\n"));
+        let structs = ast
+            .items
+            .into_iter()
+            .flat_map(|i| match i {
+                Item::Struct(i) => Some(i),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for stru in structs {
+            output_content.push_str(&format!("struct {}\n", stru.ident));
+            output_content.push_str("{\n");
+            for field in stru.fields {
+                let field_name = field
+                    .ident
+                    .expect("Unnamed fields are not supported in GLSL")
+                    .to_string();
+                let field_c = match field.ty {
+                    Type::Path(tp) => path_type_to_c_type(tp, field_name),
+                    Type::Array(tp) => array_type_to_c_type(tp, field_name),
+                    _ => panic!("Type not supported in GLSL"),
+                };
+                output_content.push_str(&field_c);
             }
+            output_content.push_str("};\n\n");
         }
+        output_content.push_str("#endif\n\n");
+        std::fs::write(output, output_content)?;
     }
     Ok(())
+}
+
+fn path_type_to_c_type(path: TypePath, field_name: String) -> String {
+    let last = path.path.segments.last().unwrap();
+    let name = last.ident.to_string();
+    let ty = match name.as_str() {
+        "u32" => "uint",
+        "f32" => "float",
+        "Vector2" | "Point2" => "vec2", // not checking that this is really f32
+        "Vector3" | "Point3" => "vec3", // I will face a build error if the type is wrong
+        "Vector4" | "Point4" => "vec4", // and will update this file in that case
+        "Matrix4" => "mat4",
+        _ => panic!(
+            "Type {} is not supported in GLSL (or in the build.rs script)",
+            name
+        ),
+    };
+    format!("  {ty} {field_name};\n")
+}
+
+fn array_type_to_c_type(array: TypeArray, field_name: String) -> String {
+    let inner_type = match *array.elem {
+        Type::Path(tp) => tp,
+        _ => panic!("Nested arrays are not supported in GLSL"),
+    };
+    let int_prefix = match inner_type
+        .path
+        .segments
+        .last()
+        .unwrap()
+        .ident
+        .to_string()
+        .as_str()
+    {
+        "u32" => "u",
+        "f32" => "",
+        _ => panic!("Nested arrays are not supported in GLSL"),
+    };
+    let len = match array.len {
+        Expr::Lit(l) => match l.lit {
+            Lit::Int(l) => l.to_string(),
+            _ => panic!("Array lenght must be an integer"),
+        },
+        _ => panic!("Array length must be constant"),
+    };
+    match len.as_str() {
+        "0" => panic!("Zero length array are not supported in GLSL"),
+        "1" => panic!("Use a primitive type, not a single valued array"),
+        "2" => format!("  {int_prefix}vec2 {field_name};\n"),
+        "3" => format!("  {int_prefix}vec3 {field_name};\n"),
+        "4" => format!("  {int_prefix}vec4 {field_name};\n"),
+        _ => match int_prefix {
+            "u" => format!("  uint {field_name} [{len}];\n"),
+            _ => format!("  float {field_name} [{len}];\n"),
+        },
+    }
 }
