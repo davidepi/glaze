@@ -97,7 +97,7 @@ impl VulkanScene {
     /// `wchan` is used to send feedbacks about the current loading status.
     pub fn load(
         instance: Arc<PresentInstance>,
-        mut parsed: Box<dyn ParsedScene + Send>,
+        parsed: Box<dyn ParsedScene + Send>,
         wchan: Sender<String>,
     ) -> Result<Self, std::io::Error> {
         let device = instance.device();
@@ -908,7 +908,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
     pub fn new(
         instance: Arc<RayTraceInstance>,
         loader: Arc<AccelerationLoader>,
-        mut scene: Box<dyn ParsedScene>,
+        scene: Box<dyn ParsedScene>,
         ccmdm: &mut CommandManager,
     ) -> Result<RayTraceScene<RayTraceInstance>, std::io::Error> {
         let mm = instance.allocator();

@@ -282,23 +282,23 @@ pub struct Meta {
 /// implement this trait and return a `Box<dyn ParsedContent>`.
 pub trait ParsedScene {
     /// Retrieves only the [Vertex]s contained in the file.
-    fn vertices(&mut self) -> Result<Vec<Vertex>, Error>;
+    fn vertices(&self) -> Result<Vec<Vertex>, Error>;
     /// Retrieves only the [Mesh]es contained in the file.
-    fn meshes(&mut self) -> Result<Vec<Mesh>, Error>;
+    fn meshes(&self) -> Result<Vec<Mesh>, Error>;
     /// Retrieves only the [Transform]s contained in the file.
-    fn transforms(&mut self) -> Result<Vec<Transform>, Error>;
+    fn transforms(&self) -> Result<Vec<Transform>, Error>;
     /// Retrieves only the [MeshInstance]s contained in the file.
-    fn instances(&mut self) -> Result<Vec<MeshInstance>, Error>;
+    fn instances(&self) -> Result<Vec<MeshInstance>, Error>;
     /// Retrieves only the [Camera]s contained in the file.
-    fn cameras(&mut self) -> Result<Vec<Camera>, Error>;
+    fn cameras(&self) -> Result<Vec<Camera>, Error>;
     /// Retrieves only the [Texture]s contained in the file.
-    fn textures(&mut self) -> Result<Vec<Texture>, Error>;
+    fn textures(&self) -> Result<Vec<Texture>, Error>;
     /// Retrieves only the [Material]s contained in the file.
-    fn materials(&mut self) -> Result<Vec<Material>, Error>;
+    fn materials(&self) -> Result<Vec<Material>, Error>;
     /// Retrieves only the [Light]s contained in the file.
-    fn lights(&mut self) -> Result<Vec<Light>, Error>;
+    fn lights(&self) -> Result<Vec<Light>, Error>;
     /// Retrieves additional data from the scene.
-    fn meta(&mut self) -> Result<Meta, Error>;
+    fn meta(&self) -> Result<Meta, Error>;
     /// Updates an existing file.
     /// Requires all the cameras and materials as input.
     fn update(

@@ -14,6 +14,7 @@ use std::hash::Hasher;
 use std::io::{BufReader, BufWriter, Error, ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::slice::from_ref;
+use std::sync::Mutex;
 use twox_hash::XxHash64;
 use xz2::read::{XzDecoder, XzEncoder};
 
@@ -206,7 +207,7 @@ impl OffsetsTable {
 /// Parser for this file format.
 pub(super) struct ContentV1 {
     /// Handle to the BufferedReader
-    reader: BufReader<File>,
+    reader: Mutex<BufReader<File>>,
     /// Path of the file contained in the reader (used for reopenings),
     filepath: PathBuf,
     /// Offsets of this particular file.
@@ -219,7 +220,7 @@ impl ContentV1 {
         let mut reader = BufReader::new(file);
         let offsets = OffsetsTable::seek_and_parse(&mut reader)?;
         Ok(ContentV1 {
-            reader,
+            reader: Mutex::new(reader),
             filepath: PathBuf::from(path.as_ref()),
             offsets,
         })
@@ -294,12 +295,14 @@ impl ContentV1 {
     }
 
     /// Reads a chunk with a given ID from the file.
-    fn read_chunk(&mut self, id: ChunkID) -> Result<Chunk, Error> {
+    fn read_chunk(&self, id: ChunkID) -> Result<Chunk, Error> {
         let chunk = if let Some((offset, len)) = self.offsets.chunks.get(&id) {
-            self.reader.seek(SeekFrom::Start(*offset))?;
-            let mut read = Vec::with_capacity(*len as usize);
-            (&mut self.reader).take(*len).read_to_end(&mut read)?;
-            Chunk { data: read }
+            //TODO: replace read_exact with read_buf when RFC 2930 is stable
+            let mut data = vec![0; *len as usize];
+            let mut reader = self.reader.lock().unwrap();
+            reader.seek(SeekFrom::Start(*offset))?;
+            reader.read_exact(&mut data)?;
+            Chunk { data }
         } else {
             Chunk {
                 data: Vec::with_capacity(0),
@@ -310,45 +313,45 @@ impl ContentV1 {
 }
 
 impl ParsedScene for ContentV1 {
-    fn vertices(&mut self) -> Result<Vec<Vertex>, Error> {
+    fn vertices(&self) -> Result<Vec<Vertex>, Error> {
         self.read_chunk(ChunkID::Vertex)?
             .decode_fixed(bytes_to_vertex, "Vertex")
     }
 
-    fn meshes(&mut self) -> Result<Vec<Mesh>, Error> {
+    fn meshes(&self) -> Result<Vec<Mesh>, Error> {
         self.read_chunk(ChunkID::Mesh)?
             .decode_dynamic(bytes_to_mesh, "Mesh")
     }
 
-    fn transforms(&mut self) -> Result<Vec<Transform>, Error> {
+    fn transforms(&self) -> Result<Vec<Transform>, Error> {
         self.read_chunk(ChunkID::Transform)?
             .decode_fixed(bytes_to_transform, "Transform")
     }
 
-    fn instances(&mut self) -> Result<Vec<MeshInstance>, Error> {
+    fn instances(&self) -> Result<Vec<MeshInstance>, Error> {
         self.read_chunk(ChunkID::Instance)?
             .decode_fixed(bytes_to_instance, "Instance")
     }
-    fn cameras(&mut self) -> Result<Vec<Camera>, Error> {
+    fn cameras(&self) -> Result<Vec<Camera>, Error> {
         self.read_chunk(ChunkID::Camera)?
             .decode_fixed(bytes_to_camera, "Camera")
     }
 
-    fn textures(&mut self) -> Result<Vec<Texture>, Error> {
+    fn textures(&self) -> Result<Vec<Texture>, Error> {
         self.read_chunk(ChunkID::Texture)?.decode_textures()
     }
 
-    fn materials(&mut self) -> Result<Vec<Material>, Error> {
+    fn materials(&self) -> Result<Vec<Material>, Error> {
         self.read_chunk(ChunkID::Material)?
             .decode_dynamic(bytes_to_material, "Material")
     }
 
-    fn lights(&mut self) -> Result<Vec<Light>, Error> {
+    fn lights(&self) -> Result<Vec<Light>, Error> {
         self.read_chunk(ChunkID::Light)?
             .decode_dynamic(bytes_to_light, "Light")
     }
 
-    fn meta(&mut self) -> Result<Meta, Error> {
+    fn meta(&self) -> Result<Meta, Error> {
         match self
             .read_chunk(ChunkID::Meta)?
             .decode_fixed(bytes_to_meta, "Meta")
@@ -407,9 +410,9 @@ impl ParsedScene for ContentV1 {
                 (ChunkID::Meta, meta),
             ];
             ContentV1::write_chunks(&mut writer, &chunks)?;
-            self.reader = BufReader::new(File::open(&self.filepath)?);
+            self.reader = Mutex::new(BufReader::new(File::open(&self.filepath)?));
         }
-        self.offsets = OffsetsTable::seek_and_parse(&mut self.reader)?;
+        self.offsets = OffsetsTable::seek_and_parse(self.reader.lock().unwrap().get_mut())?;
         Ok(())
     }
 }
@@ -499,7 +502,7 @@ impl Chunk {
     fn encode_dynamic<T>(items: &[T], func: fn(&T) -> Vec<u8>) -> Self {
         if !items.is_empty() {
             let len = items.len() as u16;
-            let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
+            let mut uncompressed = len.to_le_bytes().to_vec();
             for item in items {
                 let encoded = func(item);
                 let encoded_len = encoded.len() as u32;
@@ -553,7 +556,7 @@ impl Chunk {
     fn encode_textures(items: &[Texture]) -> Self {
         if !items.is_empty() {
             let len = items.len() as u16;
-            let mut uncompressed = len.to_le_bytes().iter().copied().collect::<Vec<_>>();
+            let mut uncompressed = len.to_le_bytes().to_vec();
             for texture in items {
                 let encoded = texture_to_bytes(texture);
                 let encoded_len = encoded.len() as u32;
@@ -1411,7 +1414,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_vertices(&vertices)
             .serialize()?;
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_vertices = read.vertices()?;
         assert_eq!(read_vertices.len(), vertices.len());
@@ -1431,7 +1434,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_meshes(&meshes)
             .serialize()?;
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_meshes = read.meshes()?;
         assert_eq!(read_meshes.len(), meshes.len());
@@ -1451,7 +1454,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_cameras(&cameras)
             .serialize()?;
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_cameras = read.cameras()?;
         assert_eq!(read_cameras.len(), cameras.len());
@@ -1471,7 +1474,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_textures(&textures)
             .serialize()?;
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_textures = read.textures()?;
         assert_eq!(read_textures.len(), textures.len());
@@ -1491,7 +1494,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_materials(&materials)
             .serialize()?;
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_materials = read.materials()?;
         assert_eq!(read_materials.len(), materials.len());
@@ -1511,7 +1514,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_transforms(&transforms)
             .serialize()?;
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_transforms = read.transforms()?;
         assert_eq!(read_transforms.len(), transforms.len());
@@ -1531,7 +1534,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_instances(&instances)
             .serialize()?;
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_instances = read.instances()?;
         assert_eq!(read_instances.len(), instances.len());
@@ -1551,7 +1554,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_lights(&lights)
             .serialize()?;
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_lights = read.lights()?;
         assert_eq!(read_lights.len(), lights.len());
@@ -1571,7 +1574,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_metadata(&meta)
             .serialize()?;
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_meta = read.meta()?;
         assert_eq!(read_meta, meta);
@@ -1602,7 +1605,7 @@ mod tests {
             .with_cameras(&cameras)
             .with_metadata(&meta)
             .serialize()?;
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         remove_file(file.as_path())?;
         let read_vertices = read.vertices()?;
         let read_meshes = read.meshes()?;
@@ -1698,7 +1701,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_vertices(&vertices)
             .serialize()?;
-        let mut read_ok = parse(file.as_path()).unwrap();
+        let read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.vertices().is_ok());
         {
             //corrupt file
@@ -1709,7 +1712,7 @@ mod tests {
             file.seek(SeekFrom::Start(1000))?;
             file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
-        let mut read_corrupted = parse(file.as_path()).unwrap();
+        let read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.vertices().is_err());
         Ok(())
@@ -1723,7 +1726,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_meshes(&meshes)
             .serialize()?;
-        let mut read_ok = parse(file.as_path()).unwrap();
+        let read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.meshes().is_ok());
         {
             //corrupt file
@@ -1734,7 +1737,7 @@ mod tests {
             file.seek(SeekFrom::Start(1000))?;
             file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
-        let mut read_corrupted = parse(file.as_path()).unwrap();
+        let read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.meshes().is_err());
         Ok(())
@@ -1748,7 +1751,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_cameras(&cameras)
             .serialize()?;
-        let mut read_ok = parse(file.as_path()).unwrap();
+        let read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.cameras().is_ok());
         {
             //corrupt file
@@ -1759,7 +1762,7 @@ mod tests {
             file.seek(SeekFrom::Start(1000))?;
             file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
-        let mut read_corrupted = parse(file.as_path()).unwrap();
+        let read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.cameras().is_err());
         Ok(())
@@ -1773,7 +1776,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_textures(&textures)
             .serialize()?;
-        let mut read_ok = parse(file.as_path()).unwrap();
+        let read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.textures().is_ok());
         {
             //corrupt file
@@ -1784,7 +1787,7 @@ mod tests {
             file.seek(SeekFrom::Start(1000))?;
             file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
-        let mut read_corrupted = parse(file.as_path()).unwrap();
+        let read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.textures().is_err());
         Ok(())
@@ -1798,7 +1801,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_materials(&materials)
             .serialize()?;
-        let mut read_ok = parse(file.as_path()).unwrap();
+        let read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.materials().is_ok());
         {
             //corrupt file
@@ -1809,7 +1812,7 @@ mod tests {
             file.seek(SeekFrom::Start(1000))?;
             file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
-        let mut read_corrupted = parse(file.as_path()).unwrap();
+        let read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.materials().is_err());
         Ok(())
@@ -1823,7 +1826,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_transforms(&transforms)
             .serialize()?;
-        let mut read_ok = parse(file.as_path()).unwrap();
+        let read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.transforms().is_ok());
         {
             //corrupt file
@@ -1834,7 +1837,7 @@ mod tests {
             file.seek(SeekFrom::Start(1000))?;
             file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
-        let mut read_corrupted = parse(file.as_path()).unwrap();
+        let read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.transforms().is_err());
         Ok(())
@@ -1848,7 +1851,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_instances(&instances)
             .serialize()?;
-        let mut read_ok = parse(file.as_path()).unwrap();
+        let read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.instances().is_ok());
         {
             //corrupt file
@@ -1859,7 +1862,7 @@ mod tests {
             file.seek(SeekFrom::Start(1000))?;
             file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
-        let mut read_corrupted = parse(file.as_path()).unwrap();
+        let read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.instances().is_err());
         Ok(())
@@ -1873,7 +1876,7 @@ mod tests {
         Serializer::new(file.to_str().unwrap(), ParserVersion::V1)
             .with_lights(&lights)
             .serialize()?;
-        let mut read_ok = parse(file.as_path()).unwrap();
+        let read_ok = parse(file.as_path()).unwrap();
         assert!(read_ok.lights().is_ok());
         {
             //corrupt file
@@ -1884,7 +1887,7 @@ mod tests {
             file.seek(SeekFrom::Start(1000))?;
             file.write_all(&[0xFF, 0xFF, 0xFF, 0xFF])?;
         }
-        let mut read_corrupted = parse(file.as_path()).unwrap();
+        let read_corrupted = parse(file.as_path()).unwrap();
         remove_file(file.as_path())?;
         assert!(read_corrupted.lights().is_err());
         Ok(())
