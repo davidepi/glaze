@@ -1,4 +1,4 @@
-use glaze::{PresentInstance, RayTraceRenderer, RealtimeRenderer};
+use glaze::{parse, PresentInstance, RayTraceRenderer, RealtimeRenderer, VulkanScene};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use std::convert::TryFrom;
 use std::error::Error;
@@ -24,7 +24,10 @@ pub struct InteractiveView {
 }
 
 impl InteractiveView {
-    pub fn new(event_loop: &EventLoop<()>) -> Result<InteractiveView, Box<dyn Error>> {
+    pub fn new(
+        event_loop: &EventLoop<()>,
+        scene_path: Option<String>,
+    ) -> Result<InteractiveView, Box<dyn Error>> {
         if let Some(monitor) = event_loop.primary_monitor() {
             let monitor_size = monitor.size();
             let default_size = PhysicalSize::new(monitor_size.width / 2, monitor_size.height / 2);
@@ -38,13 +41,24 @@ impl InteractiveView {
             platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
             let instance =
                 Arc::new(PresentInstance::new(&window).expect("No GPU or window system found"));
+            let scene = if let Some(scene_path) = scene_path {
+                match parse(&scene_path) {
+                    Ok(parsed) => Some(VulkanScene::new(Arc::clone(&instance), parsed)),
+                    Err(e) => {
+                        log::error!("Failed to parse scene {}: {}", scene_path, e.to_string());
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let renderer = RealtimeRenderer::new(
                 instance.clone(),
                 &mut imgui,
                 default_size.width,
                 default_size.height,
                 1.0,
-                None,
+                scene,
             );
             let raytracer = RayTraceRenderer::<PresentInstance>::try_from(&renderer).ok();
             let state = UiState::new(instance);

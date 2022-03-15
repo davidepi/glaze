@@ -5,6 +5,7 @@ authors = ["Davide Pizzolotto <davide.pizzolotto@gmail.com>"]
 edition = "2018"
 publish = false
 license = "MIT"
+description = "Quasi-realtime unbiased GPU tracer, interactive executable"
 
 [dependencies]
 glaze = {path="../lib", features=["vulkan-interactive"]}
@@ -16,3 +17,4 @@ image = "0.23"
 imgui-winit-support = "0.8"
 cgmath = "0.18"
 native-dialog = "0.6"
+clap = {version="3.1", features=["derive"]}

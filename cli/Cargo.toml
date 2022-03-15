@@ -5,6 +5,7 @@ authors = ["Davide Pizzolotto <davide.pizzolotto@gmail.com>"]
 edition = "2018"
 publish = false
 license = "MIT"
+description = "Unbiased GPU renderer"
 
 [dependencies]
 glaze = {path="../lib", features=["vulkan"]}
@@ -12,6 +13,6 @@ env_logger = "0.9"
 log = "0.4"
 image = "0.23"
 cgmath = "0.18"
-clap = "3"
+clap = {version="3.1", features=["derive"]}
 faccess = "0.2"
 console = "0.15"

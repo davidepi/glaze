@@ -1,4 +1,4 @@
-use clap::{App, Arg};
+use clap::Parser;
 use console::style;
 use faccess::PathExt;
 use glaze::{parse, RayTraceInstance, RayTraceRenderer, RayTraceScene};
@@ -6,50 +6,37 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
 
-fn main() {
-    env_logger::init();
-    let matches = App::new("glaze-cli")
-        .version(env!("CARGO_PKG_VERSION"))
-        .author(env!("CARGO_PKG_AUTHORS"))
-        .about("GPU-based 3D renderer")
-        .arg(
-            Arg::new("input")
-                .required(true)
-                .help("The input file. Must have been generated with glaze-converter."),
-        )
-        .arg(
-            Arg::new("output")
-                .required(true)
-                .help("The output file. Only .png or .jpg are supported."),
-        )
-        .arg(
-            Arg::new("resolution")
-                .short('r')
-                .long("res")
-                .help("The output resolution in form WxH.")
-                .default_value("1920x1080"),
-        )
-        .get_matches();
+#[derive(Parser)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    /// Input scene to be rendered.
+    input: String,
+    /// Output image (.jpg or .png only).
+    output: String,
+    /// Rendering resolution in form "WxH".
+    #[clap(short, long = "res", default_value = "1920x1080")]
+    resolution: String,
+}
 
-    let input = matches.value_of("input").unwrap();
-    let output = matches.value_of("output").unwrap();
-    let res = matches.value_of("resolution").unwrap();
+fn main() {
+    let args = Args::parse();
+    env_logger::init();
     let width;
     let height;
     // check output
-    if !(output.ends_with("jpg") || output.ends_with("png")) {
+    if !(args.output.ends_with("jpg") || args.output.ends_with("png")) {
         log::error!("The output image must end with .jpg or .png");
         std::process::exit(1);
     }
-    let out_path = Path::new(output);
+    let out_path = Path::new(&args.output);
     if !out_path.writable() {
         log::error!("The output file can not be written");
         std::process::exit(1);
     }
     // check resolution
-    if let Some(pos) = res.find('x') {
-        let wstr = &res[..pos];
-        let hstr = &res[pos + 1..];
+    if let Some(pos) = args.resolution.find('x') {
+        let wstr = &args.resolution[..pos];
+        let hstr = &args.resolution[pos + 1..];
         if let Ok(parsedw) = wstr.parse() {
             width = parsedw;
         } else {
@@ -67,7 +54,7 @@ fn main() {
         std::process::exit(1);
     }
     if let Some(instance) = RayTraceInstance::new() {
-        let path = PathBuf::from(input);
+        let path = PathBuf::from(&args.input);
         match parse(path) {
             Ok(parsed) => {
                 print!("Parsing and setting up scene... ");
@@ -92,7 +79,7 @@ fn main() {
                     style("Done").bold().green(),
                     (render_end - render_start).as_millis()
                 );
-                if let Err(e) = image.save(output) {
+                if let Err(e) = image.save(args.output) {
                     log::error!("Failed to save image: {}", e);
                 } else {
                     println!("All done :)");

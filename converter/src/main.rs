@@ -3,7 +3,7 @@ use cgmath::{
     Matrix, Matrix4, MetricSpace, Point2, Point3, SquareMatrix, Transform as CgmathTransform,
     Vector3 as Vec3,
 };
-use clap::{App, Arg};
+use clap::Parser;
 use console::style;
 use glaze::{
     converted_file, parse, Camera, ColorRGB, Light, Material, Mesh, MeshInstance, Meta,
@@ -20,9 +20,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::Write;
 use std::path::PathBuf;
-use std::str::FromStr;
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
 struct TempScene {
@@ -43,50 +42,31 @@ macro_rules! error(
     }
 );
 
+#[derive(Parser)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    /// Input scene
+    input: String,
+    /// Converted scene
+    #[clap(required_unless_present = "benchmark")]
+    output: Option<String>,
+    /// Perform a reading benchmark on the input scene
+    #[clap(short, long)]
+    benchmark: bool,
+}
+
 fn main() {
-    let supported_versions = [ParserVersion::V1]
-        .iter()
-        .map(ParserVersion::to_str)
-        .collect::<Vec<_>>();
-    let matches = App::new("glaze-converter")
-        .version(env!("CARGO_PKG_VERSION"))
-        .author(env!("CARGO_PKG_AUTHORS"))
-        .about("Convert a 3D scene to a format recognizable by glaze")
-        .arg(
-            Arg::with_name("input")
-                .required(true)
-                .help("The input file"),
-        )
-        .arg(
-            Arg::with_name("output")
-                .required_unless("benchmark")
-                .help("The output file"),
-        )
-        .arg(
-            Arg::with_name("benchmark")
-                .long("bench")
-                .help("Run a benchmark for load and save times of a particular scene"),
-        )
-        .arg(
-            Arg::with_name("file version")
-                .short("V")
-                .long("file-version")
-                .default_value(ParserVersion::V1.to_str())
-                .possible_values(&supported_versions),
-        )
-        .get_matches();
-    let input = matches.value_of("input").unwrap();
-    let version = ParserVersion::from_str(matches.value_of("file version").unwrap()).unwrap();
-    if !matches.is_present("benchmark") {
-        let output = matches.value_of("output").unwrap();
+    let args = Args::parse();
+    if !args.benchmark {
+        let output = args.output.unwrap();
         println!("{} Preprocessing input...", style("[1/3]").bold().dim());
-        match preprocess_input(input) {
+        match preprocess_input(&args.input) {
             Ok(scene) => {
                 println!("{} Converting scene...", style("[2/3]").bold().dim());
-                match convert_input(scene, input) {
+                match convert_input(scene, &args.input) {
                     Ok(scene) => {
                         println!("{} Compressing file...", style("[3/3]").bold().dim());
-                        match write_output(scene, version, output) {
+                        match write_output(scene, ParserVersion::V1, &output) {
                             Ok(_) => println!("{}", style("Done!").bold().green()),
                             Err(e) => error!("Failed to compress file", e),
                         }
@@ -96,14 +76,14 @@ fn main() {
             }
             Err(e) => error!("Failed to preprocess input", e),
         }
-    } else if let Err(error) = benchmark(input, version) {
+    } else if let Err(error) = benchmark(&args.input, ParserVersion::V1) {
         error!("Failed to benchmark scene", error);
     };
 }
 
 fn preprocess_input<S: AsRef<str>>(input: S) -> Result<RussimpScene, Box<dyn Error>> {
     let pb = ProgressBar::new_spinner();
-    pb.enable_steady_tick(120);
+    pb.enable_steady_tick(Duration::from_millis(120));
     let postprocess = vec![
         PostProcess::Triangulate,
         PostProcess::ValidateDataStructure,
@@ -135,6 +115,7 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
     let mpb = MultiProgress::new();
     let style = ProgressStyle::default_bar()
         .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
+        .unwrap()
         .progress_chars("#>-");
     let camera_data = scene.cameras;
     let camera_pb = mpb.add(ProgressBar::new(1));
@@ -430,7 +411,7 @@ fn convert_materials(
             let texture = textures.first().unwrap(); // support single textures only
                                                      // replace \ with / and hopes UNIX path do not use strange names
                                                      //TODO: add support for embedded textures
-            let mut path = PathBuf::from(texture.path.clone().replace("\\", "/"));
+            let mut path = PathBuf::from(texture.path.clone().replace('\\', "/"));
             let tex_name = texture.path.as_ref();
             if path.is_relative() {
                 path = PathBuf::from(original_path).parent().unwrap().join(path);
