@@ -1,22 +1,22 @@
 use cgmath::Point3;
 use glaze::{
     parse, Camera, ColorRGB, Light, LightType, Metal, OrthographicCam, PerspectiveCam,
-    PresentInstance, RealtimeRenderer, ShaderMat, Spectrum, TextureFormat, TextureLoaded,
-    VulkanScene,
+    PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer, ShaderMat, Spectrum,
+    TextureFormat, VulkanScene,
 };
 use imgui::{
     CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
     Selectable, Slider, SliderFlags, TextureId, Ui,
 };
 use native_dialog::FileDialog;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::TryRecvError;
 use std::sync::{mpsc, Arc};
-use std::thread::JoinHandle;
 use std::time::Instant;
 use winit::window::Window;
 
 pub struct UiState {
     instance: Arc<PresentInstance>,
+    pub use_raytracer: bool,
     open_loading_popup: bool,
     current_tick: usize,
     last_tick_time: Instant,
@@ -39,9 +39,6 @@ pub struct UiState {
     spectrum_temperature: bool,
     stats_window: bool,
     info_window: bool,
-    rtrenderer: Option<(Receiver<String>, JoinHandle<TextureLoaded>)>,
-    rtrenderer_console: String,
-    rtrenderer_has_result: bool,
     loading_scene: Option<SceneLoad>,
 }
 
@@ -71,17 +68,9 @@ impl UiState {
             spectrum_temperature: true,
             stats_window: true,
             info_window: false,
-            rtrenderer: None,
-            rtrenderer_console: String::with_capacity(1024),
-            rtrenderer_has_result: false,
             loading_scene: None,
+            use_raytracer: false,
         }
-    }
-
-    fn clear_rtrenderer(&mut self) {
-        self.rtrenderer = None;
-        self.rtrenderer_console.clear();
-        self.rtrenderer_has_result = false;
     }
 }
 
@@ -92,10 +81,16 @@ struct SceneLoad {
     /// Last message extracted from the reader.
     last_message: String,
     /// Thread join handle.
-    join_handle: std::thread::JoinHandle<VulkanScene>,
+    join_handle: std::thread::JoinHandle<(VulkanScene, Option<RayTraceScene<PresentInstance>>)>,
 }
 
-pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
+pub fn draw_ui(
+    ui: &Ui,
+    state: &mut UiState,
+    window: &mut Window,
+    renderer: &mut RealtimeRenderer,
+    raytracer: &mut Option<RayTraceRenderer<PresentInstance>>,
+) {
     ui.main_menu_bar(|| {
         ui.menu("File", || {
             if MenuItem::new("Open").build(ui) && state.loading_scene.is_none() {
@@ -109,7 +104,7 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
         });
         ui.menu("Rendering", || {
             if renderer.instance().supports_raytrace() {
-                ui.checkbox("Realtime raytracing", &mut renderer.use_raytracer);
+                ui.checkbox("Realtime raytracing", &mut state.use_raytracer);
             }
         });
         ui.menu("Window", || {
@@ -127,16 +122,16 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
         window_stats(ui, window, &state.instance, renderer);
     }
     if state.settings_window {
-        window_settings(ui, state, window, renderer);
+        window_settings(ui, state, window, renderer, raytracer);
     }
     if state.textures_window {
         window_textures(ui, state, renderer);
     }
     if state.materials_window {
-        window_materials(ui, state, renderer);
+        window_materials(ui, state, renderer, raytracer);
     }
     if state.lights_window {
-        window_lights(ui, state, renderer);
+        window_lights(ui, state, renderer, raytracer);
     }
     if state.info_window {
         window_info(ui, state);
@@ -166,7 +161,7 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
         };
         if finished {
             // swap scene
-            let scene = state
+            let (scene, rtscene) = state
                 .loading_scene
                 .take()
                 .unwrap()
@@ -174,6 +169,9 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
                 .join()
                 .expect("Failed to wait thread");
             renderer.change_scene(scene);
+            if let (Some(raytracer), Some(rtscene)) = (raytracer, rtscene) {
+                raytracer.change_scene(rtscene);
+            }
             ui.close_current_popup();
         } else {
             let spinner_ticks = ['\\', '|', '/', '-'];
@@ -188,7 +186,13 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
     }
 }
 
-fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut RealtimeRenderer) {
+fn window_settings(
+    ui: &Ui,
+    state: &mut UiState,
+    window: &Window,
+    renderer: &mut RealtimeRenderer,
+    raytracer: &mut Option<RayTraceRenderer<PresentInstance>>,
+) {
     let mut closed = state.settings_window;
 
     imgui::Window::new("Settings")
@@ -214,6 +218,12 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                         state.render_scale_sel,
                     );
                     state.render_scale_cur = state.render_scale_sel;
+                    if let Some(raytracer) = raytracer.as_mut() {
+                        raytracer.change_resolution(
+                            (w_size.width as f32 * state.render_scale_cur) as u32,
+                            (w_size.height as f32 * state.render_scale_cur) as u32,
+                        )
+                    }
                 }
                 ui.separator();
                 let mut color = renderer.get_clear_color();
@@ -229,31 +239,31 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                     Camera::Orthographic(_) => "Orthographic",
                 };
                 ui.text(format!("Current camera type: {}", camera_name));
+                let old_cam = renderer.camera();
+                let mut new_cam = old_cam;
                 ComboBox::new("Camera type")
                     .preview_value(camera_name)
                     .build(ui, || {
                         if Selectable::new("Perspective").build(ui) {
-                            let camera = renderer.camera();
-                            if let Camera::Perspective(_) = camera {
+                            if let Camera::Perspective(_) = old_cam {
                             } else {
-                                renderer.set_camera(Camera::Perspective(PerspectiveCam {
-                                    position: camera.position(),
-                                    target: camera.target(),
-                                    up: camera.up(),
+                                new_cam = Camera::Perspective(PerspectiveCam {
+                                    position: old_cam.position(),
+                                    target: old_cam.target(),
+                                    up: old_cam.up(),
                                     fovx: 90.0_f32.to_radians(),
                                     near: 0.1,
                                     far: 250.0,
-                                }));
+                                });
                             }
                         }
                         if Selectable::new("Orthographic").build(ui) {
-                            let camera = renderer.camera();
-                            if let Camera::Orthographic(_) = camera {
+                            if let Camera::Orthographic(_) = old_cam {
                             } else {
                                 renderer.set_camera(Camera::Orthographic(OrthographicCam {
-                                    position: camera.position(),
-                                    target: camera.target(),
-                                    up: camera.up(),
+                                    position: old_cam.position(),
+                                    target: old_cam.target(),
+                                    up: old_cam.up(),
                                     scale: 5.0,
                                     near: 0.1,
                                     far: 250.0,
@@ -261,45 +271,33 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                             }
                         }
                     });
-                let original_cam = renderer.camera();
-                let new_cam = match &original_cam {
-                    Camera::Perspective(cam) => {
-                        let mut near = cam.near;
-                        let mut far = cam.far;
+                match new_cam {
+                    Camera::Perspective(mut cam) => {
                         let mut fovx = cam.fovx.to_degrees();
                         Slider::new("Near clipping plane", 0.01, 1.0)
                             .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut near);
+                            .build(ui, &mut cam.near);
                         Slider::new("Far clipping plane", 100.0, 10000.0)
                             .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut far);
+                            .build(ui, &mut cam.far);
                         Slider::new("Field of View", 1.0, 150.0).build(ui, &mut fovx);
-                        let mut new_cam = *cam;
-                        new_cam.near = near;
-                        new_cam.far = far;
-                        new_cam.fovx = fovx.to_radians();
-                        Camera::Perspective(new_cam)
+                        cam.fovx = fovx.to_radians();
                     }
-                    Camera::Orthographic(cam) => {
-                        let mut near = cam.near;
-                        let mut far = cam.far;
-                        let mut scale = cam.scale;
+                    Camera::Orthographic(mut cam) => {
                         Slider::new("Near clipping plane", 0.01, 1.0)
                             .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut near);
+                            .build(ui, &mut cam.near);
                         Slider::new("Far clipping plane", 100.0, 10000.0)
                             .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut far);
-                        Slider::new("Scale", 1.0, 10.0).build(ui, &mut scale);
-                        let mut new_cam = *cam;
-                        new_cam.near = near;
-                        new_cam.far = far;
-                        new_cam.scale = scale;
-                        Camera::Orthographic(new_cam)
+                            .build(ui, &mut cam.far);
+                        Slider::new("Scale", 1.0, 10.0).build(ui, &mut cam.scale);
                     }
                 };
-                if original_cam != new_cam {
+                if old_cam != new_cam {
                     renderer.set_camera(new_cam);
+                    if let Some(raytracer) = raytracer.as_mut() {
+                        raytracer.update_camera(new_cam);
+                    }
                 }
             }
             if CollapsingHeader::new("Controls").build(ui) {
@@ -394,7 +392,12 @@ fn channels_to_string(colortype: TextureFormat) -> &'static str {
     }
 }
 
-fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) {
+fn window_materials(
+    ui: &Ui,
+    state: &mut UiState,
+    renderer: &mut RealtimeRenderer,
+    raytracer: &mut Option<RayTraceRenderer<PresentInstance>>,
+) {
     let closed = &mut state.materials_window;
     let selected = &mut state.materials_selected;
     let scene = renderer.scene();
@@ -577,7 +580,12 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
                 }
             }
             if let Some(new_mat) = new_mat {
-                renderer.change_material(*selected, new_mat);
+                renderer.change_material(*selected, new_mat.clone());
+                if let Some(raytracer) = raytracer.as_mut() {
+                    let mut materials = renderer.scene().materials().to_vec();
+                    materials[*selected as usize] = new_mat;
+                    raytracer.update_materials(&materials);
+                }
             }
         }
         window.end();
@@ -616,13 +624,19 @@ fn texture_selector(ui: &Ui, text: &str, mut selected: u16, scene: &VulkanScene)
     (selected, clicked_on_preview)
 }
 
-fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) {
+fn window_lights(
+    ui: &Ui,
+    state: &mut UiState,
+    renderer: &mut RealtimeRenderer,
+    raytracer: &mut Option<RayTraceRenderer<PresentInstance>>,
+) {
     let closed = &mut state.lights_window;
     let mut add = None;
     let mut update = None;
     let mut remove = None;
     let mut exposure = renderer.exposure();
     let mut update_exposure = false;
+    let mut update_lights = false;
     if let Some(window) = imgui::Window::new("Lights")
         .opened(closed)
         .size([400.0, 400.0], Condition::Appearing)
@@ -642,6 +656,7 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
                 Spectrum::from_blackbody(2500.0),
                 Point3::<f32>::new(0.0, 0.0, 0.0),
             );
+            update_lights = true;
             add = Some(dflt_light);
         }
         ui.separator();
@@ -675,8 +690,8 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
             table.end();
         }
         if let Some(selected) = state.light_selected {
-            let mut edited = false;
             let light = &scene.lights()[selected];
+            let mut updated_current = false;
             let mut new_name = light.name().to_string();
             let mut new_type = light.ltype();
             let mut new_color = light.emission();
@@ -687,14 +702,14 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
                 .enter_returns_true(true)
                 .build()
             {
-                edited = true;
+                updated_current = true;
             }
             ComboBox::new("Light type")
                 .preview_value(new_type.name())
                 .build(ui, || {
                     for light_type in LightType::all() {
                         if Selectable::new(light_type.name()).build(ui) {
-                            edited = true;
+                            update_lights = true;
                             new_type = light_type;
                         }
                     }
@@ -702,7 +717,7 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
             if state.spectrum_temperature {
                 let mut temperature = 1500.0;
                 if imgui::InputFloat::new(ui, "Temperature (K)", &mut temperature).build() {
-                    edited = true;
+                    updated_current = true;
                     new_color = Spectrum::from_blackbody(temperature);
                 }
             } else {
@@ -712,7 +727,7 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
                     .side_preview(false)
                     .build(ui)
                 {
-                    edited = true;
+                    updated_current = true;
                     new_color = Spectrum::from_rgb(ColorRGB::from(current), true);
                 }
             }
@@ -726,40 +741,52 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
             match new_type {
                 LightType::OMNI => {
                     if imgui::InputFloat3::new(ui, "Position", new_pos.as_mut()).build() {
-                        edited = true;
+                        updated_current = true;
                     }
                 }
                 LightType::SUN => {
                     if imgui::InputFloat3::new(ui, "Position", new_pos.as_mut()).build() {
-                        edited = true;
+                        updated_current = true;
                     }
                     if imgui::InputFloat3::new(ui, "Direction", new_dir.as_mut()).build() {
-                        edited = true;
+                        updated_current = true;
                     }
                 }
             }
             if ui.button("Remove") {
                 remove = Some(selected);
-            } else if edited {
+                update_lights = true;
+            } else if updated_current {
                 let new_light = match new_type {
                     LightType::OMNI => Light::new_omni(new_name, new_color, new_pos),
                     LightType::SUN => Light::new_sun(new_name, new_color, new_pos, new_dir),
                 };
                 update = Some((selected, new_light));
+                update_lights = true;
             }
         }
         if update_exposure {
             renderer.set_exposure(exposure);
+            if let Some(raytracer) = raytracer.as_mut() {
+                raytracer.set_exposure(exposure);
+            }
         }
         window.end();
-    }
-    if let Some(new) = add {
-        renderer.add_light(new);
-    } else if let Some((old, new)) = update {
-        renderer.change_light(old, new);
-    } else if let Some(old) = remove {
-        renderer.remove_light(old);
-        state.light_selected = None;
+        if update_lights {
+            let mut lights = renderer.scene().lights().to_vec();
+            if let Some(new) = add {
+                lights.push(new);
+            } else if let Some((old, new)) = update {
+                lights[old] = new;
+            } else if let Some(old) = remove {
+                lights.remove(old);
+                state.light_selected = None;
+            }
+            renderer.update_light(&lights);
+            if let Some(raytracer) = raytracer.as_mut() {
+                raytracer.update_lights(&lights);
+            }
+        }
     }
 }
 
@@ -816,8 +843,16 @@ fn open_scene(state: &mut UiState) {
                 let (wchan, rchan) = mpsc::channel();
                 let instance_clone = Arc::clone(&state.instance);
                 let thandle = std::thread::spawn(move || {
-                    wchan.send("Loading scene...".to_string()).ok();
-                    VulkanScene::new(instance_clone, parsed)
+                    let instance = instance_clone;
+                    wchan.send("Loading realtime scene...".to_string()).ok();
+                    let scene = VulkanScene::new(Arc::clone(&instance), parsed);
+                    let rtscene = if instance.supports_raytrace() {
+                        wchan.send("Loading raytraced scene...".to_string()).ok();
+                        Some(RayTraceScene::<PresentInstance>::from(&scene))
+                    } else {
+                        None
+                    };
+                    (scene, rtscene)
                 });
                 state.loading_scene = Some(SceneLoad {
                     reader: rchan,
@@ -828,7 +863,6 @@ fn open_scene(state: &mut UiState) {
                 state.materials_selected = None;
                 state.light_selected = None;
                 state.open_loading_popup = true;
-                state.clear_rtrenderer();
             }
             Err(err) => log::error!("Failed to parse scene file: {}", err),
         },

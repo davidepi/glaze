@@ -648,7 +648,7 @@ fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std::err
         conversion_time = None;
         file = PathBuf::from(input);
     }
-    let mut parsed = parse(&file)?;
+    let parsed = parse(&file)?;
     let vert_start = Instant::now();
     let vertices = parsed.vertices()?;
     let vert_end = Instant::now();
@@ -708,7 +708,7 @@ mod tests {
         );
         let parsed = parse(&file);
         assert!(parsed.is_ok());
-        if let Ok(mut parsed) = parsed {
+        if let Ok(parsed) = parsed {
             assert_eq!(parsed.meshes()?.len(), 1);
             assert_eq!(parsed.transforms()?.len(), 1);
             assert_eq!(parsed.instances()?.len(), 1);
@@ -748,7 +748,7 @@ mod tests {
         );
         let parsed = parse(&file);
         assert!(parsed.is_ok());
-        if let Ok(mut parsed) = parsed {
+        if let Ok(parsed) = parsed {
             assert_eq!(parsed.meshes()?.len(), 1);
             assert_eq!(parsed.instances()?.len(), 5);
         } else {

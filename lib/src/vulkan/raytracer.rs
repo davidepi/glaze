@@ -8,11 +8,10 @@ use crate::geometry::{SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
 use crate::materials::{SBT_MATERIAL_STRIDE, SBT_MATERIAL_TYPES};
 use crate::parser::NoScene;
 use crate::vulkan::pipeline::build_raytracing_pipeline;
+use crate::vulkan::FRAMES_IN_FLIGHT;
 #[cfg(feature = "vulkan-interactive")]
 use crate::PresentInstance;
-#[cfg(feature = "vulkan-interactive")]
-use crate::VulkanScene;
-use crate::{Camera, Pipeline, RayTraceInstance, TextureLoaded};
+use crate::{Camera, Light, Material, Pipeline, RayTraceInstance, RealtimeRenderer, TextureLoaded};
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
 use cgmath::{SquareMatrix, Vector2 as Vec2};
@@ -55,22 +54,21 @@ struct ShaderBindingTable {
 }
 
 pub struct RayTraceRenderer<T: Instance + Send + Sync> {
-    pub(super) scene: RayTraceScene<T>,
-    camera: Camera,
+    scene: RayTraceScene<T>,
     push_constants: [u8; 128],
     frame_data: Vec<AllocatedBuffer>,
     rng: Xoshiro128PlusPlus,
     cumulative_img: AllocatedImage,
-    out_img: AllocatedImage,
+    out32_img: AllocatedImage,
+    out8_img: AllocatedImage,
     sample_scheduler: WorkScheduler,
-    pub(crate) request_new_frame: bool,
+    request_new_frame: bool,
     // contains also the out_img
     frame_desc: Vec<Descriptor>,
     extent: vk::Extent2D,
     sbt: ShaderBindingTable,
     pipeline: Pipeline,
     dm: DescriptorSetManager,
-    gcmdm: CommandManager,
     tcmdm: CommandManager,
     ccmdm: CommandManager,
     rploader: RTPipelineLoader,
@@ -90,7 +88,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             RayTraceScene::<RayTraceInstance>::new(Arc::clone(&instance), Box::new(NoScene))
         };
         let extent = vk::Extent2D { width, height };
-        init_rt(instance, scene, extent, 1)
+        init_rt(instance, scene, extent)
     }
 
     pub fn set_exposure(&mut self, exposure: f32) {
@@ -101,21 +99,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         // no need to restart the frame, as only the weight for each sample is affected.
     }
 
-    #[cfg(feature = "vulkan-interactive")]
-    pub(crate) fn from_realtime(
-        instance: Arc<PresentInstance>,
-        scene: &VulkanScene,
-        width: u32,
-        height: u32,
-        frames_in_flight: usize,
-    ) -> RayTraceRenderer<PresentInstance> {
-        let scene = RayTraceScene::<PresentInstance>::from(scene);
-        let extent = vk::Extent2D { width, height };
-        init_rt(instance, scene, extent, frames_in_flight as u8)
-    }
-
-    #[cfg(feature = "vulkan-interactive")]
-    pub(crate) fn change_scene(&mut self, scene: RayTraceScene<T>) {
+    pub fn change_scene(&mut self, scene: RayTraceScene<T>) {
         let instance = &self.instance;
         let device = instance.device();
         let mut unf = UnfinishedExecutions::new(device);
@@ -138,16 +122,23 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         self.request_new_frame = true;
     }
 
-    #[cfg(feature = "vulkan-interactive")]
-    pub(crate) fn change_resolution(&mut self, width: u32, height: u32) {
+    pub fn change_resolution(&mut self, width: u32, height: u32) {
         self.extent = vk::Extent2D { width, height };
         let mut unf = UnfinishedExecutions::new(self.instance.device());
-        self.out_img = create_storage_image(
+        self.out32_img = create_storage_image(
             self.instance.as_ref(),
             &mut self.tcmdm,
             self.extent,
             &mut unf,
             false,
+        );
+        self.out8_img = self.instance.allocator().create_image_gpu(
+            "32bit image raytracer",
+            vk::Format::R8G8B8A8_SRGB,
+            self.extent,
+            vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+            vk::ImageAspectFlags::COLOR,
+            1,
         );
         self.cumulative_img = create_storage_image(
             self.instance.as_ref(),
@@ -160,16 +151,34 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             &mut self.dm,
             &self.frame_data,
             &self.cumulative_img,
-            &self.out_img,
+            &self.out32_img,
         );
         unf.wait_completion();
-        self.update_camera(self.camera);
+        self.update_camera(self.scene.camera);
     }
 
-    #[cfg(feature = "vulkan-interactive")]
-    pub(crate) fn update_camera(&mut self, camera: Camera) {
+    pub fn update_camera(&mut self, camera: Camera) {
         self.push_constants = build_push_constants(&camera, self.extent);
         self.request_new_frame = true;
+    }
+
+    pub fn update_materials(&mut self, materials: &[Material]) {
+        let mut unf = UnfinishedExecutions::new(self.instance.device());
+        self.scene
+            .update_materials(materials, &mut self.tcmdm, &mut unf);
+        unf.wait_completion();
+        self.request_new_frame = true;
+    }
+
+    pub fn update_lights(&mut self, lights: &[Light]) {
+        let mut unf = UnfinishedExecutions::new(self.instance.device());
+        self.scene.update_lights(lights, &mut self.tcmdm, &mut unf);
+        unf.wait_completion();
+        self.request_new_frame = true;
+    }
+
+    pub(crate) fn output_image(&self) -> &AllocatedImage {
+        &self.out8_img
     }
 
     #[cfg(feature = "vulkan-interactive")]
@@ -177,7 +186,6 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         &mut self,
         wait: vk::Semaphore,
         signal: vk::Semaphore,
-        out_img: &AllocatedImage,
         frame_no: usize,
     ) {
         let device = self.instance.device();
@@ -245,7 +253,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
             src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
             dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            image: self.out_img.image,
+            image: self.out32_img.image,
             subresource_range,
         };
         let barrier_dst_undefined_to_transfer = vk::ImageMemoryBarrier {
@@ -257,7 +265,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
             dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            image: out_img.image,
+            image: self.out8_img.image,
             subresource_range,
         };
         let barrier_src_transfer_to_general = vk::ImageMemoryBarrier {
@@ -269,7 +277,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             new_layout: vk::ImageLayout::GENERAL,
             src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
             dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            image: self.out_img.image,
+            image: self.out32_img.image,
             subresource_range,
         };
         let barrier_dst_transfer_to_shader = vk::ImageMemoryBarrier {
@@ -281,7 +289,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
             dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            image: out_img.image,
+            image: self.out8_img.image,
             subresource_range,
         };
         let frame_index = frame_no % self.frame_desc.len();
@@ -359,12 +367,12 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             // blit works only on a graphic queue
             vkdevice.cmd_blit_image(
                 cmd,
-                self.out_img.image,
+                self.out32_img.image,
                 vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                out_img.image,
+                self.out8_img.image,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &blit_regions,
-                vk::Filter::NEAREST,
+                vk::Filter::LINEAR,
             );
             vkdevice.cmd_pipeline_barrier(
                 cmd,
@@ -393,11 +401,28 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     }
 }
 
+impl TryFrom<&RealtimeRenderer> for RayTraceRenderer<PresentInstance> {
+    type Error = std::io::Error;
+
+    fn try_from(value: &RealtimeRenderer) -> Result<Self, Self::Error> {
+        if value.instance().supports_raytrace() {
+            let scene = RayTraceScene::<PresentInstance>::from(value.scene());
+            let (width, height) = value.render_size();
+            let extent = vk::Extent2D { width, height };
+            Ok(init_rt(value.instance(), scene, extent))
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "GPU does not support raytracing",
+            ))
+        }
+    }
+}
+
 fn init_rt<T: Instance + Send + Sync>(
     instance: Arc<T>,
     scene: RayTraceScene<T>,
     extent: vk::Extent2D,
-    frames_in_flight: u8,
 ) -> RayTraceRenderer<T> {
     const AVG_DESC: [(vk::DescriptorType, f32); 2] = [
         (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
@@ -406,10 +431,8 @@ fn init_rt<T: Instance + Send + Sync>(
     let device = instance.device();
     let mut unf = UnfinishedExecutions::new(device);
     let rploader = RTPipelineLoader::new(instance.instance(), device.logical());
-    let graphic_queue = device.graphic_queue();
     let transfer_queue = device.transfer_queue();
     let compute_queue = device.compute_queue();
-    let gcmdm = CommandManager::new(device.logical_clone(), graphic_queue.idx, 1);
     let ccmdm = CommandManager::new(device.logical_clone(), compute_queue.idx, 15);
     let sample_scheduler = WorkScheduler::new();
     let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
@@ -418,12 +441,19 @@ fn init_rt<T: Instance + Send + Sync>(
         &AVG_DESC,
         instance.desc_layout_cache(),
     );
-    let out_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf, false);
+    let out32_img = create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf, false);
+    let out8_img = instance.allocator().create_image_gpu(
+        "Present image raytracer",
+        vk::Format::R8G8B8A8_SRGB,
+        extent,
+        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+        vk::ImageAspectFlags::COLOR,
+        1,
+    );
     let cumulative_img =
         create_storage_image(instance.as_ref(), &mut tcmdm, extent, &mut unf, true);
-    let camera = scene.camera;
-    let push_constants = build_push_constants(&camera, extent);
-    let frame_data = (0..frames_in_flight)
+    let push_constants = build_push_constants(&scene.camera, extent);
+    let frame_data = (0..FRAMES_IN_FLIGHT)
         .into_iter()
         .map(|_| {
             instance.allocator().create_buffer(
@@ -434,7 +464,7 @@ fn init_rt<T: Instance + Send + Sync>(
             )
         })
         .collect::<Vec<_>>();
-    let frame_desc = build_descriptor(&mut dm, &frame_data, &cumulative_img, &out_img);
+    let frame_desc = build_descriptor(&mut dm, &frame_data, &cumulative_img, &out32_img);
     let pipeline = build_raytracing_pipeline(
         &rploader,
         device.logical_clone(),
@@ -451,12 +481,12 @@ fn init_rt<T: Instance + Send + Sync>(
     unf.wait_completion();
     RayTraceRenderer {
         scene,
-        camera,
         push_constants,
         frame_data,
         rng,
         cumulative_img,
-        out_img,
+        out32_img,
+        out8_img,
         sample_scheduler,
         request_new_frame: true,
         frame_desc,
@@ -464,7 +494,6 @@ fn init_rt<T: Instance + Send + Sync>(
         sbt,
         pipeline,
         dm,
-        gcmdm,
         tcmdm,
         ccmdm,
         rploader,
@@ -523,7 +552,7 @@ fn create_storage_image<T: Instance>(
         vk::ImageUsageFlags::empty()
     };
     let out_img = mm.create_image_gpu(
-        "RT out image",
+        "RT storage image",
         vk::Format::R32G32B32A32_SFLOAT,
         extent,
         vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC | clearable_flags,

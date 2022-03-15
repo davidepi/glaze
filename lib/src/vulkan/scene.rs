@@ -341,27 +341,8 @@ impl VulkanScene {
         &self.lights
     }
 
-    /// Adds a light to the scene.
-    pub(super) fn add_light(&mut self, light: Light) {
-        self.lights.push(light);
-    }
-
-    /// Replaces an existing light with the one passed as input.
-    /// Does nothing if the index does not exist.
-    pub(super) fn update_light(&mut self, index: usize, light: Light) {
-        if index < self.lights().len() {
-            self.lights[index] = light;
-        }
-    }
-
-    /// Removes a light at a specific index.
-    /// This has complexity O(n) in the number of lights.
-    ///
-    /// Does nothing if the light does not exist.
-    pub fn remove_light(&mut self, index: usize) {
-        if index < self.lights.len() {
-            self.lights.remove(index);
-        }
+    pub fn update_lights(&mut self, lights: &[Light]) {
+        self.lights = lights.to_vec();
     }
 
     pub fn save(&mut self) -> Result<(), std::io::Error> {
@@ -1023,7 +1004,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
     }
 
     #[cfg(feature = "vulkan-interactive")]
-    pub fn update_materials(
+    pub(crate) fn update_materials(
         &mut self,
         materials: &[Material],
         tcmdm: &mut CommandManager,
@@ -1050,7 +1031,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
     }
 
     #[cfg(feature = "vulkan-interactive")]
-    pub fn update_lights(
+    pub(crate) fn update_lights(
         &mut self,
         lights: &[Light],
         tcmdm: &mut CommandManager,

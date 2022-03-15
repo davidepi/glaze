@@ -1,5 +1,6 @@
-use glaze::{PresentInstance, RealtimeRenderer};
+use glaze::{PresentInstance, RayTraceRenderer, RealtimeRenderer};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
+use std::convert::TryFrom;
 use std::error::Error;
 use std::sync::Arc;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -12,6 +13,7 @@ use crate::ui::{draw_ui, UiState};
 pub struct InteractiveView {
     window: Window,
     renderer: RealtimeRenderer,
+    raytracer: Option<RayTraceRenderer<PresentInstance>>,
     platform: WinitPlatform,
     imgui: imgui::Context,
     mouse_pos: (f32, f32),
@@ -44,10 +46,12 @@ impl InteractiveView {
                 1.0,
                 None,
             );
+            let raytracer = RayTraceRenderer::<PresentInstance>::try_from(&renderer).ok();
             let state = UiState::new(instance);
             Ok(InteractiveView {
                 window,
                 renderer,
+                raytracer,
                 platform,
                 imgui,
                 mouse_pos: (0.0, 0.0),
@@ -77,6 +81,12 @@ impl InteractiveView {
                         let scale = self.renderer.render_scale();
                         self.renderer
                             .update_render_size(size.width, size.height, scale);
+                        if let Some(raytracer) = &mut self.raytracer {
+                            raytracer.change_resolution(
+                                (size.width as f32 * scale) as u32,
+                                (size.height as f32 * scale) as u32,
+                            );
+                        }
                     }
                     WindowEvent::KeyboardInput { input, .. } => handle_keyboard(input, &mut self),
                     WindowEvent::CursorMoved { position, .. } => mouse_moved(position, &mut self),
@@ -108,10 +118,21 @@ impl InteractiveView {
                         .prepare_frame(self.imgui.io_mut(), &self.window)
                         .expect("Failed to prepare frame");
                     let ui = self.imgui.frame();
-                    draw_ui(&ui, &mut self.state, &mut self.window, &mut self.renderer);
+                    draw_ui(
+                        &ui,
+                        &mut self.state,
+                        &mut self.window,
+                        &mut self.renderer,
+                        &mut self.raytracer,
+                    );
                     self.platform.prepare_render(&ui, &self.window);
                     let draw_data = ui.render();
-                    self.renderer.draw_frame(Some(draw_data));
+                    if self.state.use_raytracer {
+                        self.renderer
+                            .draw_frame(Some(draw_data), &mut self.raytracer);
+                    } else {
+                        self.renderer.draw_frame(Some(draw_data), &mut None);
+                    }
                 }
                 Event::LoopDestroyed => self.renderer.wait_idle(),
                 _ => (),
@@ -144,6 +165,9 @@ fn camera_pos_strafe(view: &mut InteractiveView, direction: f32) {
     let mut camera = view.renderer.camera();
     camera.strafe(direction * magnitude * multiplier);
     view.renderer.set_camera(camera);
+    if let Some(raytracer) = &mut view.raytracer {
+        raytracer.update_camera(camera);
+    }
 }
 
 fn camera_pos_advance(view: &mut InteractiveView, direction: f32) {
@@ -156,6 +180,9 @@ fn camera_pos_advance(view: &mut InteractiveView, direction: f32) {
     let mut camera = view.renderer.camera();
     camera.advance(direction * magnitude * multiplier);
     view.renderer.set_camera(camera);
+    if let Some(raytracer) = &mut view.raytracer {
+        raytracer.update_camera(camera);
+    }
 }
 
 fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
@@ -182,6 +209,9 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
             f32::to_radians(magnitude * y_dir * delta.1),
         );
         view.renderer.set_camera(camera);
+        if let Some(raytracer) = &mut view.raytracer {
+            raytracer.update_camera(camera);
+        }
     }
     if view.mmb_down {
         let magnitude = view.state.vert_speed;
@@ -193,5 +223,8 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
         let mut camera = view.renderer.camera();
         camera.elevate(direction * magnitude * delta.1);
         view.renderer.set_camera(camera);
+        if let Some(raytracer) = &mut view.raytracer {
+            raytracer.update_camera(camera);
+        }
     }
 }

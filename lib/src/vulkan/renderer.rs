@@ -5,21 +5,17 @@ use super::instance::{Instance, PresentInstance};
 use super::memory::AllocatedBuffer;
 use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderpass::RenderPass;
-use super::scene::{RayTraceScene, VulkanScene};
+use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
-use super::{AllocatedImage, UnfinishedExecutions};
+use super::{UnfinishedExecutions, FRAMES_IN_FLIGHT};
 use crate::parser::NoScene;
 use crate::{include_shader, Camera, Light, Material, RayTraceRenderer};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
-use std::io::ErrorKind;
 use std::ptr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-/// Number of frames prepared by the CPU while waiting for the GPU.
-const FRAMES_IN_FLIGHT: usize = 2;
 
 /// Stats about the renderer.
 #[derive(Debug, Copy, Clone)]
@@ -53,16 +49,8 @@ struct FrameDataBuf {
 
 /// Realtime renderer capable of rendering a scene to a presentation surface.
 pub struct RealtimeRenderer {
-    /// In case the previewed image will use the raytraced renderer.
-    /// The RayTraceRenderer lacks the support for handling presentation, so it cannot do it on its
-    /// own. This field is None if raytracing is not supported.
-    raytracer: Option<RayTraceRenderer<PresentInstance>>,
-    /// True if the presented image should come from the raytracer.
-    pub use_raytracer: bool,
-    /// Stores the images that will be used to display raytrace outputs.
-    raytrace_output: AllocatedImage,
-    /// Descriptor containing the raytrace_output, will be passed to the copy_pipeline.
-    raytrace_copy_desc: Descriptor,
+    /// Descriptor containing the raytracer output image, will be passed to the copy_pipeline.
+    raytrace_copy_desc: Option<Descriptor>,
     /// Scene to be rendered.
     scene: VulkanScene,
     /// Swapchain of the renderer.
@@ -199,24 +187,8 @@ impl RealtimeRenderer {
         let scene =
             scene.unwrap_or_else(|| VulkanScene::new(Arc::clone(&instance), Box::new(NoScene)));
         imgui_renderer.load_scene_textures(&scene);
-        let raytracer = if instance.supports_raytrace() {
-            Some(RayTraceRenderer::<PresentInstance>::from_realtime(
-                Arc::clone(&instance),
-                &scene,
-                render_size.width,
-                render_size.height,
-                FRAMES_IN_FLIGHT,
-            ))
-        } else {
-            None
-        };
-        let (raytrace_output, raytrace_copy_desc) =
-            raytracer_copy_helpers(&instance, &mut dm, copy_sampler, render_size);
         RealtimeRenderer {
-            raytracer,
-            use_raytracer: false,
-            raytrace_output,
-            raytrace_copy_desc,
+            raytrace_copy_desc: None,
             scene,
             swapchain,
             copy_sampler,
@@ -247,6 +219,15 @@ impl RealtimeRenderer {
         self.render_scale
     }
 
+    /// Returns the current render size in pixels.
+    pub fn render_size(&self) -> (u32, u32) {
+        let window_extent = self.swapchain.extent();
+        (
+            (window_extent.width as f32 * self.render_scale) as u32,
+            (window_extent.height as f32 * self.render_scale) as u32,
+        )
+    }
+
     /// Returns the current background color.
     ///
     /// Color is expressed as RGB floats in the range [0, 1].
@@ -264,9 +245,6 @@ impl RealtimeRenderer {
 
     pub fn set_exposure(&mut self, exposure: f32) {
         self.scene.meta.exposure = exposure;
-        if let Some(raytracer) = &mut self.raytracer {
-            raytracer.set_exposure(exposure);
-        }
     }
 
     /// Sets the background color.
@@ -283,8 +261,8 @@ impl RealtimeRenderer {
     }
 
     /// Reuturns the vulkan instance used by the renderer.
-    pub fn instance(&self) -> &PresentInstance {
-        &self.instance
+    pub fn instance(&self) -> Arc<PresentInstance> {
+        Arc::clone(&self.instance)
     }
 
     /// Returns the current scene being rendered.
@@ -300,9 +278,6 @@ impl RealtimeRenderer {
     /// Updates the current camera.
     /// Updates also the raytracer camera, if this exists
     pub fn set_camera(&mut self, camera: Camera) {
-        if let Some(rt) = &mut self.raytracer {
-            rt.update_camera(camera);
-        }
         self.scene.current_cam = camera;
     }
 
@@ -334,10 +309,7 @@ impl RealtimeRenderer {
             self.swapchain.renderpass(),
             &[self.forward_pass.copy_descriptor.layout],
         );
-        let (rt_out, rt_desc) =
-            raytracer_copy_helpers(&self.instance, &mut self.dm, self.copy_sampler, render_size);
-        self.raytrace_output = rt_out;
-        self.raytrace_copy_desc = rt_desc;
+        self.raytrace_copy_desc = None;
         self.scene.deinit_pipelines();
         self.scene.init_pipelines(
             render_size,
@@ -345,13 +317,6 @@ impl RealtimeRenderer {
             self.forward_pass.renderpass,
             self.frame_data[0].descriptor.layout,
         );
-        if let Some(raytracer) = &mut self.raytracer {
-            raytracer.change_resolution(render_size.width, render_size.height);
-            // the raytracer already updates the camera, but uses the one in the scene.
-            // this is the intended behaviour: camera changes are managed by the presentation
-            // renderer.
-            raytracer.update_camera(self.scene.current_cam);
-        }
     }
 
     /// Loads a new scene in the renderer.
@@ -396,10 +361,6 @@ impl RealtimeRenderer {
             self.frame_data[0].descriptor.layout,
         );
         self.imgui_renderer.load_scene_textures(&scene);
-        if let Some(raytracer) = &mut self.raytracer {
-            let rtscene = RayTraceScene::from(&scene);
-            raytracer.change_scene(rtscene);
-        }
         self.scene = scene;
     }
 
@@ -426,85 +387,23 @@ impl RealtimeRenderer {
             self.frame_data[0].descriptor.layout,
             render_size,
         );
-        if let Some(raytracer) = &mut self.raytracer {
-            raytracer
-                .scene
-                .update_materials(self.scene.materials(), &mut self.tcmdm, &mut unf);
-            raytracer.request_new_frame = true;
-        }
         unf.wait_completion();
     }
 
-    /// Adds a new light to the scene.
-    pub fn add_light(&mut self, new: Light) {
+    /// Updates the lights in the loaded scene.
+    pub fn update_light(&mut self, lights: &[Light]) {
         self.wait_idle();
-        self.scene.add_light(new);
-        if let Some(raytracer) = &mut self.raytracer {
-            let mut unf = UnfinishedExecutions::new(self.instance.device());
-            raytracer
-                .scene
-                .update_lights(self.scene.lights(), &mut self.tcmdm, &mut unf);
-            raytracer.request_new_frame = true;
-            unf.wait_completion();
-        }
-    }
-
-    /// Removes from the scene the light with the given id.
-    ///
-    /// If the light does not exist, nothing happens.
-    pub fn remove_light(&mut self, id: usize) {
-        self.wait_idle();
-        self.scene.remove_light(id);
-        if let Some(raytracer) = &mut self.raytracer {
-            let mut unf = UnfinishedExecutions::new(self.instance.device());
-            raytracer
-                .scene
-                .update_lights(self.scene.lights(), &mut self.tcmdm, &mut unf);
-            raytracer.request_new_frame = true;
-            unf.wait_completion();
-        }
-    }
-
-    /// Replaces a light in the scene.
-    pub fn change_light(&mut self, old: usize, new: Light) {
-        self.wait_idle();
-        self.scene.update_light(old, new);
-        if let Some(raytracer) = &mut self.raytracer {
-            let mut unf = UnfinishedExecutions::new(self.instance.device());
-            raytracer
-                .scene
-                .update_lights(self.scene.lights(), &mut self.tcmdm, &mut unf);
-            raytracer.request_new_frame = true;
-            unf.wait_completion();
-        }
-    }
-
-    pub fn get_raytrace(
-        &mut self,
-        width: u32,
-        height: u32,
-    ) -> Result<RayTraceRenderer<PresentInstance>, std::io::Error> {
-        if self.instance.supports_raytrace() {
-            let instance = Arc::clone(&self.instance);
-            Ok(RayTraceRenderer::<PresentInstance>::from_realtime(
-                instance,
-                &self.scene,
-                width,
-                height,
-                FRAMES_IN_FLIGHT,
-            ))
-        } else {
-            Err(std::io::Error::new(
-                ErrorKind::Unsupported,
-                "The video card does not support raytraced rendering",
-            ))
-        }
+        self.scene.update_lights(lights);
     }
 
     /// Draws a single frame.
     ///
     /// If there is a GUI to draw, the `imgui_data` should contain the GUI data.
-    pub fn draw_frame(&mut self, imgui_data: Option<&imgui::DrawData>) {
+    pub fn draw_frame(
+        &mut self,
+        imgui_data: Option<&imgui::DrawData>,
+        raytracer: &mut Option<RayTraceRenderer<PresentInstance>>,
+    ) {
         self.stats.update();
         let frame_sync = self.sync.get(self.frame_no);
         let device = self.instance.device().logical();
@@ -516,11 +415,10 @@ impl RealtimeRenderer {
             let compute_finished = [frame_sync.compute_finished];
             let present_ready = [frame_sync.render_finished];
             frame_data.data.frame_time = (current_time - self.start_time).as_secs_f32();
-            if self.use_raytracer {
-                self.raytracer.as_mut().unwrap().draw_frame(
+            if let Some(raytracer) = raytracer.as_mut() {
+                raytracer.draw_frame(
                     frame_sync.image_available,
                     compute_finished[0],
-                    &self.raytrace_output,
                     self.frame_no,
                 );
                 // swap signal: the graphic queue have to wait the raytrace, not the image
@@ -540,19 +438,34 @@ impl RealtimeRenderer {
                     .expect("Failed to begin command buffer");
                 // if raytracer is not requested, draw the objects
                 self.forward_pass.begin(cmd);
-                if !self.use_raytracer {
+                if raytracer.is_none() {
                     let ar = self.swapchain.extent().width as f32
                         / self.swapchain.extent().height as f32;
                     draw_objects(&self.scene, ar, frame_data, device, cmd, &mut self.stats);
                 }
                 self.forward_pass.end(cmd);
                 acquired.renderpass.begin(cmd);
-                if !self.use_raytracer {
+                if let Some(raytracer) = raytracer.as_ref() {
+                    let copy_desc = self.raytrace_copy_desc.unwrap_or_else(|| {
+                        let desc = self
+                            .dm
+                            .new_set()
+                            .bind_image(
+                                raytracer.output_image(),
+                                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                                self.copy_sampler,
+                                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                                vk::ShaderStageFlags::FRAGMENT,
+                            )
+                            .build();
+                        self.raytrace_copy_desc = Some(desc);
+                        desc
+                    });
                     copy_to_swapchain(
                         device,
                         cmd,
                         &self.copy_pipeline,
-                        &self.forward_pass.copy_descriptor,
+                        &copy_desc,
                         &mut self.stats,
                     );
                 } else {
@@ -560,7 +473,7 @@ impl RealtimeRenderer {
                         device,
                         cmd,
                         &self.copy_pipeline,
-                        &self.raytrace_copy_desc,
+                        &self.forward_pass.copy_descriptor,
                         &mut self.stats,
                     );
                 }
@@ -749,33 +662,6 @@ fn copy_to_swapchain(
         device.cmd_draw(cmd, 3, 1, 0, 0);
         stats.done_draw_call();
     }
-}
-
-fn raytracer_copy_helpers(
-    instance: &PresentInstance,
-    dm: &mut DescriptorSetManager,
-    sampler: vk::Sampler,
-    extent: vk::Extent2D,
-) -> (AllocatedImage, Descriptor) {
-    let raytrace_output = instance.allocator().create_image_gpu(
-        "Raytracer output",
-        vk::Format::R8G8B8A8_SRGB,
-        extent,
-        vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
-        vk::ImageAspectFlags::COLOR,
-        1,
-    );
-    let raytrace_copy_desc = dm
-        .new_set()
-        .bind_image(
-            &raytrace_output,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            sampler,
-            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            vk::ShaderStageFlags::FRAGMENT,
-        )
-        .build();
-    (raytrace_output, raytrace_copy_desc)
 }
 
 // not frame-time precise (counts after the CPU time, not the GPU) but the average should be correct

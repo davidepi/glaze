@@ -39,3 +39,6 @@ pub use self::renderer::RealtimeRenderer;
 pub use self::scene::RayTraceScene;
 #[cfg(feature = "vulkan-interactive")]
 pub use self::scene::VulkanScene;
+
+/// Number of frames prepared by the CPU while waiting for the GPU.
+const FRAMES_IN_FLIGHT: usize = 2;
