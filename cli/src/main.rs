@@ -1,7 +1,7 @@
 use clap::{App, Arg};
 use console::style;
 use faccess::PathExt;
-use glaze::{parse, RayTraceInstance, RayTraceRenderer};
+use glaze::{parse, RayTraceInstance, RayTraceRenderer, RayTraceScene};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
@@ -72,13 +72,10 @@ fn main() {
             Ok(parsed) => {
                 print!("Parsing and setting up scene... ");
                 let setup_start = Instant::now();
-                let renderer = RayTraceRenderer::<RayTraceInstance>::new(
-                    Arc::new(instance),
-                    parsed,
-                    width,
-                    height,
-                )
-                .unwrap();
+                let instance = Arc::new(instance);
+                let scene = RayTraceScene::<RayTraceInstance>::new(Arc::clone(&instance), parsed);
+                let renderer =
+                    RayTraceRenderer::<RayTraceInstance>::new(instance, Some(scene), width, height);
                 let setup_end = Instant::now();
                 println!(
                     "{} ({} ms)",

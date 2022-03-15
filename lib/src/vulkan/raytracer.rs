@@ -6,15 +6,14 @@ use super::scene::{padding, RayTraceScene};
 use super::{AllocatedImage, Descriptor, UnfinishedExecutions};
 use crate::geometry::{SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
 use crate::materials::{SBT_MATERIAL_STRIDE, SBT_MATERIAL_TYPES};
+use crate::parser::NoScene;
 use crate::vulkan::pipeline::build_raytracing_pipeline;
 #[cfg(feature = "vulkan-interactive")]
 use crate::PresentInstance;
 #[cfg(feature = "vulkan-interactive")]
 use crate::VulkanScene;
-use crate::{Camera, ParsedScene, Pipeline, RayTraceInstance, TextureLoaded};
-use ash::extensions::khr::{
-    AccelerationStructure as AccelerationLoader, RayTracingPipeline as RTPipelineLoader,
-};
+use crate::{Camera, Pipeline, RayTraceInstance, TextureLoaded};
+use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
 use cgmath::{SquareMatrix, Vector2 as Vec2};
 use gpu_allocator::MemoryLocation;
@@ -74,7 +73,6 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     gcmdm: CommandManager,
     tcmdm: CommandManager,
     ccmdm: CommandManager,
-    asloader: Arc<AccelerationLoader>,
     rploader: RTPipelineLoader,
     instance: Arc<T>,
 }
@@ -82,25 +80,17 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
 impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     pub fn new(
         instance: Arc<RayTraceInstance>,
-        scene: Box<dyn ParsedScene>,
+        scene: Option<RayTraceScene<RayTraceInstance>>,
         width: u32,
         height: u32,
-    ) -> Result<RayTraceRenderer<RayTraceInstance>, std::io::Error> {
-        let device = instance.device();
-        let compute = device.compute_queue();
-        let mut ccmdm = CommandManager::new(device.logical_clone(), compute.idx, 15);
-        let loader = Arc::new(AccelerationLoader::new(
-            instance.instance(),
-            device.logical(),
-        ));
-        let scene = RayTraceScene::<RayTraceInstance>::new(
-            instance.clone(),
-            loader.clone(),
-            scene,
-            &mut ccmdm,
-        )?;
+    ) -> RayTraceRenderer<RayTraceInstance> {
+        let scene = if let Some(scene) = scene {
+            scene
+        } else {
+            RayTraceScene::<RayTraceInstance>::new(Arc::clone(&instance), Box::new(NoScene))
+        };
         let extent = vk::Extent2D { width, height };
-        Ok(init_rt(instance, loader, ccmdm, scene, extent, 1))
+        init_rt(instance, scene, extent, 1)
     }
 
     pub fn set_exposure(&mut self, exposure: f32) {
@@ -114,28 +104,38 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn from_realtime(
         instance: Arc<PresentInstance>,
-        scene: &mut VulkanScene,
+        scene: &VulkanScene,
         width: u32,
         height: u32,
         frames_in_flight: usize,
-    ) -> Result<RayTraceRenderer<PresentInstance>, std::io::Error> {
-        let device = instance.device();
-        let compute = device.compute_queue();
-        let mut ccmdm = CommandManager::new(device.logical_clone(), compute.idx, 15);
-        let loader = Arc::new(AccelerationLoader::new(
-            instance.instance(),
-            device.logical(),
-        ));
-        let scene = RayTraceScene::<PresentInstance>::from(loader.clone(), scene, &mut ccmdm)?;
+    ) -> RayTraceRenderer<PresentInstance> {
+        let scene = RayTraceScene::<PresentInstance>::from(scene);
         let extent = vk::Extent2D { width, height };
-        Ok(init_rt(
-            instance,
-            loader,
-            ccmdm,
-            scene,
-            extent,
-            frames_in_flight as u8,
-        ))
+        init_rt(instance, scene, extent, frames_in_flight as u8)
+    }
+
+    #[cfg(feature = "vulkan-interactive")]
+    pub(crate) fn change_scene(&mut self, scene: RayTraceScene<T>) {
+        let instance = &self.instance;
+        let device = instance.device();
+        let mut unf = UnfinishedExecutions::new(device);
+        let pipeline = build_raytracing_pipeline(
+            &self.rploader,
+            device.logical_clone(),
+            &[self.frame_desc[0].layout, scene.descriptor.layout],
+        );
+        let sbt = build_sbt(
+            instance.as_ref(),
+            &self.rploader,
+            &mut self.tcmdm,
+            &pipeline,
+            &mut unf,
+        );
+        self.scene = scene;
+        self.pipeline = pipeline;
+        self.sbt = sbt;
+        unf.wait_completion();
+        self.request_new_frame = true;
     }
 
     #[cfg(feature = "vulkan-interactive")]
@@ -395,8 +395,6 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
 
 fn init_rt<T: Instance + Send + Sync>(
     instance: Arc<T>,
-    loader: Arc<AccelerationLoader>,
-    ccmdm: CommandManager,
     scene: RayTraceScene<T>,
     extent: vk::Extent2D,
     frames_in_flight: u8,
@@ -410,7 +408,9 @@ fn init_rt<T: Instance + Send + Sync>(
     let rploader = RTPipelineLoader::new(instance.instance(), device.logical());
     let graphic_queue = device.graphic_queue();
     let transfer_queue = device.transfer_queue();
+    let compute_queue = device.compute_queue();
     let gcmdm = CommandManager::new(device.logical_clone(), graphic_queue.idx, 1);
+    let ccmdm = CommandManager::new(device.logical_clone(), compute_queue.idx, 15);
     let sample_scheduler = WorkScheduler::new();
     let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
     let mut dm = DescriptorSetManager::new(
@@ -467,7 +467,6 @@ fn init_rt<T: Instance + Send + Sync>(
         gcmdm,
         tcmdm,
         ccmdm,
-        asloader: loader,
         rploader,
         instance,
     }
@@ -826,27 +825,29 @@ impl Iterator for WorkScheduler {
 #[cfg(test)]
 mod tests {
     use super::RayTraceRenderer;
-    use crate::{parse, ParsedScene, RayTraceInstance};
+    use crate::vulkan::scene::RayTraceScene;
+    use crate::{parse, RayTraceInstance};
     use std::path::PathBuf;
     use std::sync::{mpsc, Arc};
     use tempfile::tempdir;
 
-    fn init() -> Box<dyn ParsedScene + Send> {
+    fn init(instance: Arc<RayTraceInstance>) -> Option<RayTraceScene<RayTraceInstance>> {
         let _ = env_logger::builder().is_test(true).try_init();
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
             .join("resources")
             .join("cube.glaze");
-        parse(path).unwrap()
+        Some(RayTraceScene::<RayTraceInstance>::new(
+            Arc::clone(&instance),
+            parse(path).unwrap(),
+        ))
     }
 
     #[test]
     fn load_raytrace() {
         if let Some(instance) = RayTraceInstance::new() {
-            let parsed = init();
-            let _ = RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
-                .unwrap();
+            let _ = RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), None, 2, 2);
         } else {
             // SKIPPED does not exists in cargo test...
         }
@@ -855,10 +856,10 @@ mod tests {
     #[test]
     fn draw_outlive() {
         if let Some(instance) = RayTraceInstance::new() {
-            let parsed = init();
+            let instance = Arc::new(instance);
+            let parsed = init(Arc::clone(&instance));
             let renderer =
-                RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
-                    .unwrap();
+                RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
             let (write, _read) = mpsc::channel();
             let _ = renderer.draw(write);
         } else {
@@ -869,12 +870,12 @@ mod tests {
     #[test]
     fn save_to_disk() -> Result<(), std::io::Error> {
         if let Some(instance) = RayTraceInstance::new() {
-            let parsed = init();
+            let instance = Arc::new(instance);
+            let parsed = init(Arc::clone(&instance));
             let dir = tempdir()?;
             let file = dir.path().join("save.png");
             let renderer =
-                RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
-                    .unwrap();
+                RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
             let (write, _read) = mpsc::channel();
             let image = renderer.draw(write).export();
             image.save(file.clone()).unwrap();
@@ -888,10 +889,10 @@ mod tests {
     #[test]
     fn change_resolution() -> Result<(), std::io::Error> {
         if let Some(instance) = RayTraceInstance::new() {
-            let parsed = init();
+            let instance = Arc::new(instance);
+            let parsed = init(Arc::clone(&instance));
             let mut renderer =
-                RayTraceRenderer::<RayTraceInstance>::new(Arc::new(instance), parsed, 2, 2)
-                    .unwrap();
+                RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
             renderer.change_resolution(4, 4);
             let (write, _read) = mpsc::channel();
             let image = renderer.draw(write).export();

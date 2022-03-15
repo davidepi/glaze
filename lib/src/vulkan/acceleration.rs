@@ -78,7 +78,11 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
     }
 
     pub fn build(mut self) -> SceneAS {
-        let blas = self.build_blases();
+        let blas = if !self.vkmeshes.is_empty() {
+            self.build_blases()
+        } else {
+            Default::default()
+        };
         let tlas = self.build_tlas(&blas);
         SceneAS { blas, tlas }
     }
@@ -334,19 +338,19 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             tlas_ci.push(ci);
         }
         // create a buffer to store all the instances (needed by subsequent methods)
-        let inst_buf_size =
-            std::mem::size_of::<vk::AccelerationStructureInstanceKHR>() * tlas_ci.len();
+        let inst_buf_size = u64::max(
+            1,
+            (std::mem::size_of::<vk::AccelerationStructureInstanceKHR>() * tlas_ci.len()) as u64,
+        );
         let inst_cpu_buf = self.mm.create_buffer(
             "Instances CPU buffer",
-            inst_buf_size as u64,
-            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                | vk::BufferUsageFlags::TRANSFER_SRC
-                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            inst_buf_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
             MemoryLocation::CpuToGpu,
         );
         let inst_gpu_buf = self.mm.create_buffer(
             "Instances CPU buffer",
-            inst_buf_size as u64,
+            inst_buf_size,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::TRANSFER_DST
                 | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,

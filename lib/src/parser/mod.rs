@@ -276,6 +276,15 @@ pub struct Meta {
     pub exposure: f32,
 }
 
+impl Default for Meta {
+    fn default() -> Self {
+        Self {
+            scene_radius: 100.0,
+            exposure: 1.0,
+        }
+    }
+}
+
 /// Trait used for accessing the content of the parsed file and updating them.
 ///
 /// This trait is used to access the content of the parsed file. Various parser versions may
@@ -308,6 +317,86 @@ pub trait ParsedScene {
         lights: Option<&[Light]>,
         meta: Option<&Meta>,
     ) -> Result<(), Error>;
+}
+
+pub(crate) struct NoScene;
+
+impl ParsedScene for NoScene {
+    fn vertices(&self) -> Result<Vec<Vertex>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "Empty scene has no vertices",
+        ))
+    }
+
+    fn meshes(&self) -> Result<Vec<Mesh>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "Empty scene has no meshes",
+        ))
+    }
+
+    fn transforms(&self) -> Result<Vec<Transform>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "Empty scene has no transforms",
+        ))
+    }
+
+    fn instances(&self) -> Result<Vec<MeshInstance>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "Empty scene has no instances",
+        ))
+    }
+
+    fn cameras(&self) -> Result<Vec<Camera>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "Empty scene has no cameras",
+        ))
+    }
+
+    fn textures(&self) -> Result<Vec<Texture>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "Empty scene has no textures",
+        ))
+    }
+
+    fn materials(&self) -> Result<Vec<Material>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "Empty scene has no materials",
+        ))
+    }
+
+    fn lights(&self) -> Result<Vec<Light>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "Empty scene has no lights",
+        ))
+    }
+
+    fn meta(&self) -> Result<Meta, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "Empty scene has no metadata",
+        ))
+    }
+
+    fn update(
+        &mut self,
+        _: Option<&[Camera]>,
+        _: Option<&[Material]>,
+        _: Option<&[Light]>,
+        _: Option<&Meta>,
+    ) -> Result<(), Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "Empty scene can't be saved",
+        ))
+    }
 }
 
 mod v1;

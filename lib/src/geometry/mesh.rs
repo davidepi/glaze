@@ -89,6 +89,12 @@ impl Transform {
     }
 }
 
+impl Default for Transform {
+    fn default() -> Self {
+        Transform::identity()
+    }
+}
+
 impl From<Matrix4<f32>> for Transform {
     fn from(mat: Matrix4<f32>) -> Self {
         Self(mat)

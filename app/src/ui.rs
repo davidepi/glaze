@@ -6,7 +6,7 @@ use glaze::{
 };
 use imgui::{
     CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
-    Selectable, SelectableFlags, Slider, SliderFlags, TextureId, Ui,
+    Selectable, Slider, SliderFlags, TextureId, Ui,
 };
 use native_dialog::FileDialog;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -92,7 +92,7 @@ struct SceneLoad {
     /// Last message extracted from the reader.
     last_message: String,
     /// Thread join handle.
-    join_handle: std::thread::JoinHandle<Result<VulkanScene, std::io::Error>>,
+    join_handle: std::thread::JoinHandle<VulkanScene>,
 }
 
 pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut RealtimeRenderer) {
@@ -102,10 +102,8 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
                 open_scene(state);
             }
             if MenuItem::new("Save").build(ui) {
-                if let Some(scene) = renderer.scene_mut() {
-                    if let Err(error) = scene.save() {
-                        log::error!("Failed to save scene: {}", error);
-                    }
+                if let Err(error) = renderer.save_scene() {
+                    log::error!("Failed to save scene: {}", error);
                 }
             }
         });
@@ -175,10 +173,7 @@ pub fn draw_ui(ui: &Ui, state: &mut UiState, window: &mut Window, renderer: &mut
                 .join_handle
                 .join()
                 .expect("Failed to wait thread");
-            match scene {
-                Ok(loaded) => renderer.change_scene(loaded),
-                Err(e) => log::error!("Failed to load scene {e}"),
-            }
+            renderer.change_scene(scene);
             ui.close_current_popup();
         } else {
             let spinner_ticks = ['\\', '|', '/', '-'];
@@ -229,26 +224,16 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                     renderer.set_clear_color(color);
                 }
                 ui.separator();
-                let (camera_name, disabled) = {
-                    let camera = renderer.camera();
-                    let name = match camera {
-                        Some(Camera::Perspective(_)) => "Perspective",
-                        Some(Camera::Orthographic(_)) => "Orthographic",
-                        None => "None",
-                    };
-                    let disabled = if camera.is_some() {
-                        SelectableFlags::empty()
-                    } else {
-                        SelectableFlags::DISABLED
-                    };
-                    (name, disabled)
+                let camera_name = match renderer.camera() {
+                    Camera::Perspective(_) => "Perspective",
+                    Camera::Orthographic(_) => "Orthographic",
                 };
                 ui.text(format!("Current camera type: {}", camera_name));
                 ComboBox::new("Camera type")
                     .preview_value(camera_name)
                     .build(ui, || {
-                        if Selectable::new("Perspective").flags(disabled).build(ui) {
-                            let camera = *renderer.camera().unwrap();
+                        if Selectable::new("Perspective").build(ui) {
+                            let camera = renderer.camera();
                             if let Camera::Perspective(_) = camera {
                             } else {
                                 renderer.set_camera(Camera::Perspective(PerspectiveCam {
@@ -261,8 +246,8 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                                 }));
                             }
                         }
-                        if Selectable::new("Orthographic").flags(disabled).build(ui) {
-                            let camera = *renderer.camera().unwrap();
+                        if Selectable::new("Orthographic").build(ui) {
+                            let camera = renderer.camera();
                             if let Camera::Orthographic(_) = camera {
                             } else {
                                 renderer.set_camera(Camera::Orthographic(OrthographicCam {
@@ -276,9 +261,9 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                             }
                         }
                     });
-                let original_cam = renderer.camera().cloned();
+                let original_cam = renderer.camera();
                 let new_cam = match &original_cam {
-                    Some(Camera::Perspective(cam)) => {
+                    Camera::Perspective(cam) => {
                         let mut near = cam.near;
                         let mut far = cam.far;
                         let mut fovx = cam.fovx.to_degrees();
@@ -293,9 +278,9 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                         new_cam.near = near;
                         new_cam.far = far;
                         new_cam.fovx = fovx.to_radians();
-                        Some(Camera::Perspective(new_cam))
+                        Camera::Perspective(new_cam)
                     }
-                    Some(Camera::Orthographic(cam)) => {
+                    Camera::Orthographic(cam) => {
                         let mut near = cam.near;
                         let mut far = cam.far;
                         let mut scale = cam.scale;
@@ -310,12 +295,11 @@ fn window_settings(ui: &Ui, state: &mut UiState, window: &Window, renderer: &mut
                         new_cam.near = near;
                         new_cam.far = far;
                         new_cam.scale = scale;
-                        Some(Camera::Orthographic(new_cam))
+                        Camera::Orthographic(new_cam)
                     }
-                    None => None,
                 };
                 if original_cam != new_cam {
-                    renderer.set_camera(new_cam.unwrap());
+                    renderer.set_camera(new_cam);
                 }
             }
             if CollapsingHeader::new("Controls").build(ui) {
@@ -339,8 +323,8 @@ fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
     let closed = &mut state.textures_window;
     let selected = &mut state.textures_selected;
     let scene = renderer.scene();
-    let preview = match (&selected, scene) {
-        (Some(id), Some(scene)) => {
+    let preview = match &selected {
+        Some(id) => {
             let texture = scene.single_texture(*id).unwrap();
             &texture.info.name
         }
@@ -354,21 +338,19 @@ fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
             ComboBox::new("Texture name")
                 .preview_value(preview)
                 .build(ui, || {
-                    if let Some(scene) = scene {
-                        scene
-                            .textures()
-                            .iter()
-                            .enumerate()
-                            .for_each(|(id, texture)| {
-                                if Selectable::new(&texture.info.name).build(ui) {
-                                    *selected = Some(id as u16);
-                                }
-                            });
-                    }
+                    scene
+                        .textures()
+                        .iter()
+                        .enumerate()
+                        .for_each(|(id, texture)| {
+                            if Selectable::new(&texture.info.name).build(ui) {
+                                *selected = Some(id as u16);
+                            }
+                        });
                 });
             if let Some(selected) = selected {
                 ui.separator();
-                let info = &scene.unwrap().single_texture(*selected).unwrap().info;
+                let info = &scene.single_texture(*selected).unwrap().info;
                 ui.text(format!("Resolution {}x{}", info.width, info.height));
                 ui.text(format!("Format {}", channels_to_string(info.format)));
                 let window_w = ui.window_size()[0];
@@ -416,8 +398,8 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
     let closed = &mut state.materials_window;
     let selected = &mut state.materials_selected;
     let scene = renderer.scene();
-    let preview = match (&selected, scene) {
-        (Some(id), Some(scene)) => {
+    let preview = match &selected {
+        Some(id) => {
             let material = scene.single_material(*id).unwrap();
             &material.name
         }
@@ -433,16 +415,14 @@ fn window_materials(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRendere
             .preview_value(preview)
             .begin(ui)
         {
-            if let Some(scene) = scene {
-                scene.materials().iter().enumerate().for_each(|(id, mat)| {
-                    if Selectable::new(&mat.name).build(ui) {
-                        *selected = Some(id as u16);
-                    }
-                });
-            }
+            scene.materials().iter().enumerate().for_each(|(id, mat)| {
+                if Selectable::new(&mat.name).build(ui) {
+                    *selected = Some(id as u16);
+                }
+            });
             mat_combo.end();
         }
-        if let (Some(selected), Some(scene)) = (selected, scene) {
+        if let Some(selected) = selected {
             let mut new_mat = None;
             ui.separator();
             let current = scene.single_material(*selected).unwrap();
@@ -649,128 +629,127 @@ fn window_lights(ui: &Ui, state: &mut UiState, renderer: &mut RealtimeRenderer) 
         .save_settings(false)
         .begin(ui)
     {
-        if let Some(scene) = renderer.scene_mut() {
-            if imgui::Slider::new("Exposure", 1E-3, 1E3)
-                .flags(SliderFlags::ALWAYS_CLAMP | SliderFlags::LOGARITHMIC)
-                .build(ui, &mut exposure)
-            {
-                update_exposure = true;
-            }
-            if ui.button("Add") {
-                let dflt_light = Light::new_omni(
-                    format!("Light{}", scene.lights().len()),
-                    Spectrum::from_blackbody(2500.0),
-                    Point3::<f32>::new(0.0, 0.0, 0.0),
-                );
-                add = Some(dflt_light);
-            }
-            ui.separator();
-            ui.spacing();
-            ui.text("Lights in the scene:");
-            let header = [
-                imgui::TableColumnSetup::new("Name"),
-                imgui::TableColumnSetup::new("Type"),
-                imgui::TableColumnSetup::new("Color"),
-            ];
-            // if let Some(table) = ui.begin_table("lighttable", 3) {
-            if let Some(table) =
-                ui.begin_table_header_with_flags("lighttable", header, imgui::TableFlags::ROW_BG)
-            {
-                for (light_id, light) in scene.lights().iter().enumerate() {
-                    ui.table_next_row();
-                    ui.table_next_column();
-                    if imgui::Selectable::new(light.name())
-                        .span_all_columns(true)
-                        .build(ui)
-                    {
-                        state.light_selected = Some(light_id);
-                    }
-                    ui.table_next_column();
-                    ui.text(light.ltype().name());
-                    ui.table_next_column();
-                    let spectrum_rgb = light.emission().to_xyz().to_rgb();
-                    imgui::ColorButton::new(format!("spectrum{light_id}"), spectrum_rgb.into())
-                        .build(ui);
-                }
-                table.end();
-            }
-            if let Some(selected) = state.light_selected {
-                let mut edited = false;
-                let light = &scene.lights()[selected];
-                let mut new_name = light.name().to_string();
-                let mut new_type = light.ltype();
-                let mut new_color = light.emission();
-                let mut new_pos = light.position();
-                let mut new_dir = light.direction();
-                ui.spacing();
-                if imgui::InputText::new(ui, "Light Name", &mut new_name)
-                    .enter_returns_true(true)
-                    .build()
-                {
-                    edited = true;
-                }
-                ComboBox::new("Light type")
-                    .preview_value(new_type.name())
-                    .build(ui, || {
-                        for light_type in LightType::all() {
-                            if Selectable::new(light_type.name()).build(ui) {
-                                edited = true;
-                                new_type = light_type;
-                            }
-                        }
-                    });
-                if state.spectrum_temperature {
-                    let mut temperature = 1500.0;
-                    if imgui::InputFloat::new(ui, "Temperature (K)", &mut temperature).build() {
-                        edited = true;
-                        new_color = Spectrum::from_blackbody(temperature);
-                    }
-                } else {
-                    let mut current: [f32; 3] = new_color.to_xyz().to_rgb().into();
-                    if imgui::ColorPicker::new("Spectrum color", &mut current)
-                        .small_preview(false)
-                        .side_preview(false)
-                        .build(ui)
-                    {
-                        edited = true;
-                        new_color = Spectrum::from_rgb(ColorRGB::from(current), true);
-                    }
-                }
-                ui.same_line();
-                if imgui::ColorButton::new("spectrum_current", new_color.to_xyz().to_rgb().into())
-                    .tooltip(false)
+        let scene = renderer.scene();
+        if imgui::Slider::new("Exposure", 1E-3, 1E3)
+            .flags(SliderFlags::ALWAYS_CLAMP | SliderFlags::LOGARITHMIC)
+            .build(ui, &mut exposure)
+        {
+            update_exposure = true;
+        }
+        if ui.button("Add") {
+            let dflt_light = Light::new_omni(
+                format!("Light{}", scene.lights().len()),
+                Spectrum::from_blackbody(2500.0),
+                Point3::<f32>::new(0.0, 0.0, 0.0),
+            );
+            add = Some(dflt_light);
+        }
+        ui.separator();
+        ui.spacing();
+        ui.text("Lights in the scene:");
+        let header = [
+            imgui::TableColumnSetup::new("Name"),
+            imgui::TableColumnSetup::new("Type"),
+            imgui::TableColumnSetup::new("Color"),
+        ];
+        // if let Some(table) = ui.begin_table("lighttable", 3) {
+        if let Some(table) =
+            ui.begin_table_header_with_flags("lighttable", header, imgui::TableFlags::ROW_BG)
+        {
+            for (light_id, light) in scene.lights().iter().enumerate() {
+                ui.table_next_row();
+                ui.table_next_column();
+                if imgui::Selectable::new(light.name())
+                    .span_all_columns(true)
                     .build(ui)
                 {
-                    state.spectrum_temperature = !state.spectrum_temperature;
+                    state.light_selected = Some(light_id);
                 }
-                match new_type {
-                    LightType::OMNI => {
-                        if imgui::InputFloat3::new(ui, "Position", new_pos.as_mut()).build() {
+                ui.table_next_column();
+                ui.text(light.ltype().name());
+                ui.table_next_column();
+                let spectrum_rgb = light.emission().to_xyz().to_rgb();
+                imgui::ColorButton::new(format!("spectrum{light_id}"), spectrum_rgb.into())
+                    .build(ui);
+            }
+            table.end();
+        }
+        if let Some(selected) = state.light_selected {
+            let mut edited = false;
+            let light = &scene.lights()[selected];
+            let mut new_name = light.name().to_string();
+            let mut new_type = light.ltype();
+            let mut new_color = light.emission();
+            let mut new_pos = light.position();
+            let mut new_dir = light.direction();
+            ui.spacing();
+            if imgui::InputText::new(ui, "Light Name", &mut new_name)
+                .enter_returns_true(true)
+                .build()
+            {
+                edited = true;
+            }
+            ComboBox::new("Light type")
+                .preview_value(new_type.name())
+                .build(ui, || {
+                    for light_type in LightType::all() {
+                        if Selectable::new(light_type.name()).build(ui) {
                             edited = true;
+                            new_type = light_type;
                         }
                     }
-                    LightType::SUN => {
-                        if imgui::InputFloat3::new(ui, "Position", new_pos.as_mut()).build() {
-                            edited = true;
-                        }
-                        if imgui::InputFloat3::new(ui, "Direction", new_dir.as_mut()).build() {
-                            edited = true;
-                        }
+                });
+            if state.spectrum_temperature {
+                let mut temperature = 1500.0;
+                if imgui::InputFloat::new(ui, "Temperature (K)", &mut temperature).build() {
+                    edited = true;
+                    new_color = Spectrum::from_blackbody(temperature);
+                }
+            } else {
+                let mut current: [f32; 3] = new_color.to_xyz().to_rgb().into();
+                if imgui::ColorPicker::new("Spectrum color", &mut current)
+                    .small_preview(false)
+                    .side_preview(false)
+                    .build(ui)
+                {
+                    edited = true;
+                    new_color = Spectrum::from_rgb(ColorRGB::from(current), true);
+                }
+            }
+            ui.same_line();
+            if imgui::ColorButton::new("spectrum_current", new_color.to_xyz().to_rgb().into())
+                .tooltip(false)
+                .build(ui)
+            {
+                state.spectrum_temperature = !state.spectrum_temperature;
+            }
+            match new_type {
+                LightType::OMNI => {
+                    if imgui::InputFloat3::new(ui, "Position", new_pos.as_mut()).build() {
+                        edited = true;
                     }
                 }
-                if ui.button("Remove") {
-                    remove = Some(selected);
-                } else if edited {
-                    let new_light = match new_type {
-                        LightType::OMNI => Light::new_omni(new_name, new_color, new_pos),
-                        LightType::SUN => Light::new_sun(new_name, new_color, new_pos, new_dir),
-                    };
-                    update = Some((selected, new_light));
+                LightType::SUN => {
+                    if imgui::InputFloat3::new(ui, "Position", new_pos.as_mut()).build() {
+                        edited = true;
+                    }
+                    if imgui::InputFloat3::new(ui, "Direction", new_dir.as_mut()).build() {
+                        edited = true;
+                    }
                 }
             }
-            if update_exposure {
-                renderer.set_exposure(exposure);
+            if ui.button("Remove") {
+                remove = Some(selected);
+            } else if edited {
+                let new_light = match new_type {
+                    LightType::OMNI => Light::new_omni(new_name, new_color, new_pos),
+                    LightType::SUN => Light::new_sun(new_name, new_color, new_pos, new_dir),
+                };
+                update = Some((selected, new_light));
             }
+        }
+        if update_exposure {
+            renderer.set_exposure(exposure);
         }
         window.end();
     }
@@ -836,11 +815,13 @@ fn open_scene(state: &mut UiState) {
             Ok(parsed) => {
                 let (wchan, rchan) = mpsc::channel();
                 let instance_clone = Arc::clone(&state.instance);
-                let thandle =
-                    std::thread::spawn(move || VulkanScene::load(instance_clone, parsed, wchan));
+                let thandle = std::thread::spawn(move || {
+                    wchan.send("Loading scene...".to_string()).ok();
+                    VulkanScene::new(instance_clone, parsed)
+                });
                 state.loading_scene = Some(SceneLoad {
                     reader: rchan,
-                    last_message: "Loading...".to_string(),
+                    last_message: "".to_string(),
                     join_handle: thandle,
                 });
                 state.textures_selected = None;

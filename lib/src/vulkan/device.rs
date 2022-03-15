@@ -336,7 +336,9 @@ impl<'device> UnfinishedExecutions<'device> {
 
 impl Drop for UnfinishedExecutions<'_> {
     fn drop(&mut self) {
-        self.device.wait_completion(&self.fences);
+        if !self.fences.is_empty() {
+            self.device.wait_completion(&self.fences);
+        }
     }
 }
 

@@ -36,5 +36,6 @@ pub use self::raytracer::RayTraceRenderer;
 pub use self::instance::PresentInstance;
 #[cfg(feature = "vulkan-interactive")]
 pub use self::renderer::RealtimeRenderer;
+pub use self::scene::RayTraceScene;
 #[cfg(feature = "vulkan-interactive")]
 pub use self::scene::VulkanScene;

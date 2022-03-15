@@ -36,12 +36,13 @@ impl InteractiveView {
             platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Rounded);
             let instance =
                 Arc::new(PresentInstance::new(&window).expect("No GPU or window system found"));
-            let renderer = RealtimeRenderer::create(
+            let renderer = RealtimeRenderer::new(
                 instance.clone(),
                 &mut imgui,
                 default_size.width,
                 default_size.height,
                 1.0,
+                None,
             );
             let state = UiState::new(instance);
             Ok(InteractiveView {
@@ -134,31 +135,27 @@ fn handle_keyboard(input: KeyboardInput, view: &mut InteractiveView) {
 }
 
 fn camera_pos_strafe(view: &mut InteractiveView, direction: f32) {
-    if let Some(cam) = view.renderer.camera() {
-        let magnitude = view.state.mov_speed;
-        let multiplier = if view.alt_speed_down {
-            view.state.mov_speed_mul
-        } else {
-            1.0
-        };
-        let mut camera = *cam;
-        camera.strafe(direction * magnitude * multiplier);
-        view.renderer.set_camera(camera);
-    }
+    let magnitude = view.state.mov_speed;
+    let multiplier = if view.alt_speed_down {
+        view.state.mov_speed_mul
+    } else {
+        1.0
+    };
+    let mut camera = view.renderer.camera();
+    camera.strafe(direction * magnitude * multiplier);
+    view.renderer.set_camera(camera);
 }
 
 fn camera_pos_advance(view: &mut InteractiveView, direction: f32) {
-    if let Some(cam) = view.renderer.camera() {
-        let magnitude = view.state.mov_speed;
-        let multiplier = if view.alt_speed_down {
-            view.state.mov_speed_mul
-        } else {
-            1.0
-        };
-        let mut camera = *cam;
-        camera.advance(direction * magnitude * multiplier);
-        view.renderer.set_camera(camera);
-    }
+    let magnitude = view.state.mov_speed;
+    let multiplier = if view.alt_speed_down {
+        view.state.mov_speed_mul
+    } else {
+        1.0
+    };
+    let mut camera = view.renderer.camera();
+    camera.advance(direction * magnitude * multiplier);
+    view.renderer.set_camera(camera);
 }
 
 fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
@@ -168,37 +165,33 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
     view.mouse_pos = (x, y);
     // if lmb pressed, move camera
     if view.rmb_down {
-        if let Some(cam) = view.renderer.camera() {
-            let magnitude = view.state.mouse_sensitivity;
-            let x_dir = if view.state.inverted_mouse_h {
-                1.0
-            } else {
-                -1.0
-            };
-            let y_dir = if view.state.inverted_mouse_v {
-                1.0
-            } else {
-                -1.0
-            };
-            let mut camera = *cam;
-            camera.look_around(
-                f32::to_radians(magnitude * x_dir * delta.0),
-                f32::to_radians(magnitude * y_dir * delta.1),
-            );
-            view.renderer.set_camera(camera);
-        }
+        let magnitude = view.state.mouse_sensitivity;
+        let x_dir = if view.state.inverted_mouse_h {
+            1.0
+        } else {
+            -1.0
+        };
+        let y_dir = if view.state.inverted_mouse_v {
+            1.0
+        } else {
+            -1.0
+        };
+        let mut camera = view.renderer.camera();
+        camera.look_around(
+            f32::to_radians(magnitude * x_dir * delta.0),
+            f32::to_radians(magnitude * y_dir * delta.1),
+        );
+        view.renderer.set_camera(camera);
     }
     if view.mmb_down {
-        if let Some(cam) = view.renderer.camera() {
-            let magnitude = view.state.vert_speed;
-            let direction = if view.state.inverted_vert_mov {
-                1.0
-            } else {
-                -1.0
-            };
-            let mut camera = *cam;
-            camera.elevate(direction * magnitude * delta.1);
-            view.renderer.set_camera(camera);
-        }
+        let magnitude = view.state.vert_speed;
+        let direction = if view.state.inverted_vert_mov {
+            1.0
+        } else {
+            -1.0
+        };
+        let mut camera = view.renderer.camera();
+        camera.elevate(direction * magnitude * delta.1);
+        view.renderer.set_camera(camera);
     }
 }

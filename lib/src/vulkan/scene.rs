@@ -30,8 +30,6 @@ use std::collections::hash_map::Entry;
 use std::ffi::c_void;
 #[cfg(feature = "vulkan-interactive")]
 use std::ptr;
-#[cfg(feature = "vulkan-interactive")]
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 /// A scene optimized to be rendered using this crates vulkan implementation.
@@ -95,11 +93,7 @@ impl VulkanScene {
     /// Converts a parsed scene into a vulkan scene.
     ///
     /// `wchan` is used to send feedbacks about the current loading status.
-    pub fn load(
-        instance: Arc<PresentInstance>,
-        parsed: Box<dyn ParsedScene + Send>,
-        wchan: Sender<String>,
-    ) -> Result<Self, std::io::Error> {
+    pub fn new(instance: Arc<PresentInstance>, parsed: Box<dyn ParsedScene + Send>) -> Self {
         let device = instance.device();
         let mm = instance.allocator();
         let with_raytrace = instance.supports_raytrace();
@@ -114,46 +108,48 @@ impl VulkanScene {
             &avg_desc,
             instance.desc_layout_cache(),
         );
-        wchan.send("[1/4] Loading vertices...".to_string()).ok();
         let vertex_buffer = load_vertices_to_gpu(
             device,
             mm,
             &mut tcmdm,
             &mut unf,
-            &parsed.vertices()?,
+            &parsed.vertices().unwrap_or_default(),
             with_raytrace,
         );
-        wchan.send("[2/4] Loading meshes...".to_string()).ok();
         let transforms = load_transforms_to_gpu(
             device,
             mm,
             &mut tcmdm,
             &mut dm,
             &mut unf,
-            &parsed.transforms()?,
+            &parsed
+                .transforms()
+                .unwrap_or_else(|_| vec![Transform::default()]),
         );
         let (mut meshes, index_buffer) = load_indices_to_gpu(
             device,
             mm,
             &mut tcmdm,
             &mut unf,
-            &parsed.meshes()?,
+            &parsed.meshes().unwrap_or_default(),
             with_raytrace,
         );
-        let instances = instances_to_map(&parsed.instances()?);
-        wchan.send("[3/4] Loading textures...".to_string()).ok();
+        let instances = instances_to_map(&parsed.instances().unwrap_or_default());
         let sampler = create_sampler(device);
-        let scene_textures = parsed.textures()?;
+        let scene_textures = parsed
+            .textures()
+            .unwrap_or_else(|_| vec![Texture::default()]);
         let textures = Arc::new(
             scene_textures
                 .into_iter()
                 .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
                 .collect::<Vec<_>>(),
         );
-        let materials = parsed.materials()?;
+        let materials = parsed
+            .materials()
+            .unwrap_or_else(|_| vec![Material::default()]);
         let params_buffer = load_materials_parameters(device, &materials, mm, &mut tcmdm, &mut unf);
         unf.wait_completion();
-        wchan.send("[4/4] Loading materials...".to_string()).ok();
         let materials_desc = materials
             .iter()
             .enumerate()
@@ -170,8 +166,12 @@ impl VulkanScene {
                 (shader, desc)
             })
             .collect::<Vec<_>>();
-        let current_cam = parsed.cameras()?[0];
-        let lights = parsed.lights()?;
+        let current_cam = parsed
+            .cameras()
+            .unwrap_or_default()
+            .pop()
+            .unwrap_or_default();
+        let lights = parsed.lights().unwrap_or_default();
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
             "Material update transfer buffer",
@@ -180,8 +180,8 @@ impl VulkanScene {
             MemoryLocation::CpuToGpu,
         );
         sort_meshes(&mut meshes, &materials_desc);
-        let meta = parsed.meta()?;
-        Ok(VulkanScene {
+        let meta = parsed.meta().unwrap_or_default();
+        VulkanScene {
             file: parsed,
             current_cam,
             vertex_buffer: Arc::new(vertex_buffer),
@@ -200,7 +200,7 @@ impl VulkanScene {
             lights,
             instance,
             meta,
-        })
+        }
     }
 
     /// Updates (changes) a single material in the scene.
@@ -487,14 +487,11 @@ fn load_indices_to_gpu(
     meshes: &[Mesh],
     with_raytrace: bool,
 ) -> (Vec<VulkanMesh>, AllocatedBuffer) {
-    let size =
-        (std::mem::size_of::<u32>() * meshes.iter().map(|m| m.indices.len()).sum::<usize>()) as u64;
-    let cpu_buffer = mm.create_buffer(
-        "indices_local",
-        size,
-        vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
-        MemoryLocation::CpuToGpu,
+    let size = u64::max(
+        1,
+        (std::mem::size_of::<u32>() * meshes.iter().map(|m| m.indices.len()).sum::<usize>()) as u64,
     );
+    let mut converted_meshes = Vec::with_capacity(meshes.len());
     let raytrace_flags = if with_raytrace {
         vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
             | vk::BufferUsageFlags::STORAGE_BUFFER
@@ -508,45 +505,52 @@ fn load_indices_to_gpu(
         vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST | raytrace_flags,
         MemoryLocation::GpuOnly,
     );
-    let mut converted_meshes = Vec::with_capacity(meshes.len());
-    let mut mapped = cpu_buffer
-        .allocation()
-        .mapped_ptr()
-        .expect("Failed to map memory")
-        .cast()
-        .as_ptr();
-    let mut offset = 0;
-    for mesh in meshes {
-        unsafe {
-            std::ptr::copy_nonoverlapping(mesh.indices.as_ptr(), mapped, mesh.indices.len());
-            mapped = mapped.add(mesh.indices.len());
-        };
-        let max_index = mesh.indices.iter().max().copied().unwrap_or(0);
-        let converted = VulkanMesh {
-            mesh_id: mesh.id,
-            index_offset: offset,
-            index_count: mesh.indices.len() as u32,
-            max_index,
-            material: mesh.material,
-        };
-        converted_meshes.push(converted);
-        offset += mesh.indices.len() as u32;
-    }
-    let copy_region = vk::BufferCopy {
-        // these are not the allocation offset, but the buffer offset!
-        src_offset: 0,
-        dst_offset: 0,
-        size: cpu_buffer.size,
-    };
-    let command = unsafe {
-        |device: &ash::Device, cmd: vk::CommandBuffer| {
-            device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+    if !meshes.is_empty() {
+        let cpu_buffer = mm.create_buffer(
+            "indices_local",
+            size,
+            vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+            MemoryLocation::CpuToGpu,
+        );
+        let mut mapped = cpu_buffer
+            .allocation()
+            .mapped_ptr()
+            .expect("Failed to map memory")
+            .cast()
+            .as_ptr();
+        let mut offset = 0;
+        for mesh in meshes {
+            unsafe {
+                std::ptr::copy_nonoverlapping(mesh.indices.as_ptr(), mapped, mesh.indices.len());
+                mapped = mapped.add(mesh.indices.len());
+            };
+            let max_index = mesh.indices.iter().max().copied().unwrap_or(0);
+            let converted = VulkanMesh {
+                mesh_id: mesh.id,
+                index_offset: offset,
+                index_count: mesh.indices.len() as u32,
+                max_index,
+                material: mesh.material,
+            };
+            converted_meshes.push(converted);
+            offset += mesh.indices.len() as u32;
         }
-    };
-    let cmd = tcmdm.get_cmd_buffer();
-    let transfer_queue = device.transfer_queue();
-    let fence = device.immediate_execute(cmd, transfer_queue, command);
-    unfinished.add(fence, cpu_buffer);
+        let copy_region = vk::BufferCopy {
+            // these are not the allocation offset, but the buffer offset!
+            src_offset: 0,
+            dst_offset: 0,
+            size: cpu_buffer.size,
+        };
+        let command = unsafe {
+            |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+            }
+        };
+        let cmd = tcmdm.get_cmd_buffer();
+        let transfer_queue = device.transfer_queue();
+        let fence = device.immediate_execute(cmd, transfer_queue, command);
+        unfinished.add(fence, cpu_buffer);
+    }
     (converted_meshes, gpu_buffer)
 }
 
@@ -882,8 +886,8 @@ pub fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
 }
 
 pub struct RayTraceScene<T: Instance + Send + Sync> {
-    pub camera: Camera,
-    pub descriptor: Descriptor,
+    pub(crate) camera: Camera,
+    pub(crate) descriptor: Descriptor,
     sampler: vk::Sampler,
     vertex_buffer: Arc<AllocatedBuffer>,
     index_buffer: Arc<AllocatedBuffer>,
@@ -891,8 +895,8 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     material_buffer: AllocatedBuffer,
     light_buffer: AllocatedBuffer,
     derivative_buffer: AllocatedBuffer,
-    pub lights_no: u32,
-    pub meta: Meta,
+    pub(crate) lights_no: u32,
+    pub(crate) meta: Meta,
     textures: Arc<Vec<TextureLoaded>>,
     acc: SceneAS,
     dm: DescriptorSetManager,
@@ -907,47 +911,78 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
 
     pub fn new(
         instance: Arc<RayTraceInstance>,
-        loader: Arc<AccelerationLoader>,
-        scene: Box<dyn ParsedScene>,
-        ccmdm: &mut CommandManager,
-    ) -> Result<RayTraceScene<RayTraceInstance>, std::io::Error> {
+        parsed: Box<dyn ParsedScene>,
+    ) -> RayTraceScene<RayTraceInstance> {
         let mm = instance.allocator();
         let device = instance.device();
+        let loader = Arc::new(AccelerationLoader::new(
+            instance.instance(),
+            device.logical(),
+        ));
         let mut unf = UnfinishedExecutions::new(instance.device());
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
-        let instances = scene.instances()?;
-        let transforms = scene.transforms()?;
-        let materials = scene.materials()?;
+        let mut ccmdm = CommandManager::new(device.logical_clone(), device.compute_queue().idx, 1);
+        let instances = parsed.instances().unwrap_or_default();
+        let transforms = parsed
+            .transforms()
+            .unwrap_or_else(|_| vec![Transform::default()]);
+        let materials = parsed
+            .materials()
+            .unwrap_or_else(|_| vec![Material::default()]);
         let mut dm = DescriptorSetManager::new(
             instance.device().logical_clone(),
             &Self::AVG_DESC,
             instance.desc_layout_cache(),
         );
-        let lights = scene.lights()?;
-        let vertex_buffer =
-            load_vertices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.vertices()?, true);
-        let (meshes, index_buffer) =
-            load_indices_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.meshes()?, true);
+        let lights = parsed.lights().unwrap_or_default();
+        let vertex_buffer = load_vertices_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            &parsed.vertices().unwrap_or_default(),
+            true,
+        );
+        let (meshes, index_buffer) = load_indices_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            &parsed.meshes().unwrap_or_default(),
+            true,
+        );
         let derivative_buffer = calculate_geometric_derivatives(
             instance.as_ref(),
             &mut dm,
-            ccmdm,
+            &mut ccmdm,
             &meshes,
             &index_buffer,
             &vertex_buffer,
             &mut unf,
         );
         let textures = Arc::new(
-            scene
-                .textures()?
+            parsed
+                .textures()
+                .unwrap_or_else(|_| vec![Texture::default()])
                 .into_iter()
                 .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
                 .collect::<Vec<_>>(),
         );
-        let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
-            .with_meshes(&meshes, &instances, &transforms, &materials);
+        let builder = SceneASBuilder::new(
+            device,
+            loader,
+            mm,
+            &mut ccmdm,
+            &vertex_buffer,
+            &index_buffer,
+        )
+        .with_meshes(&meshes, &instances, &transforms, &materials);
         let acc = builder.build();
-        let camera = scene.cameras()?[0];
+        let camera = parsed
+            .cameras()
+            .unwrap_or_default()
+            .pop()
+            .unwrap_or_default();
         let instance_buffer =
             load_raytrace_instances_to_gpu(device, mm, &mut tcmdm, &mut unf, &meshes, &instances);
         let material_buffer =
@@ -966,9 +1001,9 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &textures,
             sampler,
         );
-        let meta = scene.meta()?;
+        let meta = parsed.meta().unwrap_or_default();
         unf.wait_completion();
-        Ok(RayTraceScene {
+        RayTraceScene {
             camera,
             descriptor,
             sampler,
@@ -984,87 +1019,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             acc,
             dm,
             instance,
-        })
-    }
-
-    #[cfg(feature = "vulkan-interactive")]
-    pub fn from(
-        loader: Arc<AccelerationLoader>,
-        scene: &mut VulkanScene,
-        ccmdm: &mut CommandManager,
-    ) -> Result<RayTraceScene<PresentInstance>, std::io::Error> {
-        let instance = Arc::clone(&scene.instance);
-        let mm = instance.allocator();
-        let device = instance.device();
-        let mut unf = UnfinishedExecutions::new(instance.device());
-        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
-        let mut dm = DescriptorSetManager::new(
-            instance.device().logical_clone(),
-            &Self::AVG_DESC,
-            instance.desc_layout_cache(),
-        );
-        let instances = scene.file.instances()?;
-        let transforms = scene.file.transforms()?;
-        let materials = scene.materials().to_vec();
-        let vertex_buffer = Arc::clone(&scene.vertex_buffer);
-        let index_buffer = Arc::clone(&scene.index_buffer);
-        let textures = Arc::clone(&scene.textures);
-        let derivative_buffer = calculate_geometric_derivatives(
-            instance.as_ref(),
-            &mut dm,
-            ccmdm,
-            &scene.meshes,
-            &index_buffer,
-            &vertex_buffer,
-            &mut unf,
-        );
-        let builder = SceneASBuilder::new(device, loader, mm, ccmdm, &vertex_buffer, &index_buffer)
-            .with_meshes(&scene.meshes, &instances, &transforms, &materials);
-        let acc = builder.build();
-        let instance_buffer = load_raytrace_instances_to_gpu(
-            device,
-            mm,
-            &mut tcmdm,
-            &mut unf,
-            &scene.meshes,
-            &instances,
-        );
-        let material_buffer =
-            load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
-        let light_buffer =
-            load_raytrace_lights_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.lights);
-        let sampler = create_sampler(device);
-        let descriptor = build_raytrace_descriptor(
-            &mut dm,
-            &acc,
-            &vertex_buffer,
-            &index_buffer,
-            &instance_buffer,
-            &material_buffer,
-            &light_buffer,
-            &derivative_buffer,
-            &textures,
-            sampler,
-        );
-        let meta = scene.meta;
-        unf.wait_completion();
-        Ok(RayTraceScene {
-            camera: scene.current_cam,
-            descriptor,
-            sampler,
-            vertex_buffer,
-            index_buffer,
-            instance_buffer,
-            material_buffer,
-            light_buffer,
-            derivative_buffer,
-            lights_no: scene.lights.len() as u32,
-            meta,
-            textures,
-            acc,
-            dm,
-            instance,
-        })
+        }
     }
 
     #[cfg(feature = "vulkan-interactive")]
@@ -1130,6 +1085,99 @@ impl<T: Instance + Send + Sync> Drop for RayTraceScene<T> {
                 .device()
                 .logical()
                 .destroy_sampler(self.sampler, None)
+        }
+    }
+}
+
+#[cfg(feature = "vulkan-interactive")]
+impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
+    fn from(scene: &VulkanScene) -> RayTraceScene<PresentInstance> {
+        let instance = Arc::clone(&scene.instance);
+        let device = instance.device();
+        let loader = Arc::new(AccelerationLoader::new(
+            instance.instance(),
+            device.logical(),
+        ));
+        let mm = instance.allocator();
+        let mut unf = UnfinishedExecutions::new(instance.device());
+        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
+        let mut ccmdm = CommandManager::new(device.logical_clone(), device.compute_queue().idx, 11);
+        let mut dm = DescriptorSetManager::new(
+            instance.device().logical_clone(),
+            &Self::AVG_DESC,
+            instance.desc_layout_cache(),
+        );
+        let instances = scene.file.instances().unwrap_or_default();
+        let transforms = scene
+            .file
+            .transforms()
+            .unwrap_or_else(|_| vec![Transform::default()]);
+        let materials = scene.materials().to_vec();
+        let vertex_buffer = Arc::clone(&scene.vertex_buffer);
+        let index_buffer = Arc::clone(&scene.index_buffer);
+        let textures = Arc::clone(&scene.textures);
+        let derivative_buffer = calculate_geometric_derivatives(
+            instance.as_ref(),
+            &mut dm,
+            &mut ccmdm,
+            &scene.meshes,
+            &index_buffer,
+            &vertex_buffer,
+            &mut unf,
+        );
+        let builder = SceneASBuilder::new(
+            device,
+            loader,
+            mm,
+            &mut ccmdm,
+            &vertex_buffer,
+            &index_buffer,
+        )
+        .with_meshes(&scene.meshes, &instances, &transforms, &materials);
+        let acc = builder.build();
+        let instance_buffer = load_raytrace_instances_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            &scene.meshes,
+            &instances,
+        );
+        let material_buffer =
+            load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
+        let light_buffer =
+            load_raytrace_lights_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.lights);
+        let sampler = create_sampler(device);
+        let descriptor = build_raytrace_descriptor(
+            &mut dm,
+            &acc,
+            &vertex_buffer,
+            &index_buffer,
+            &instance_buffer,
+            &material_buffer,
+            &light_buffer,
+            &derivative_buffer,
+            &textures,
+            sampler,
+        );
+        let meta = scene.meta;
+        unf.wait_completion();
+        RayTraceScene {
+            camera: scene.current_cam,
+            descriptor,
+            sampler,
+            vertex_buffer,
+            index_buffer,
+            instance_buffer,
+            material_buffer,
+            light_buffer,
+            derivative_buffer,
+            lights_no: scene.lights.len() as u32,
+            meta,
+            textures,
+            acc,
+            dm,
+            instance,
         }
     }
 }
@@ -1289,39 +1337,44 @@ fn upload_buffer<T: Sized + 'static>(
     data: &[T],
 ) -> AllocatedBuffer {
     let size = (std::mem::size_of::<T>() * data.len()) as u64;
-    let cpu_buffer = mm.create_buffer(
-        "scene_buffer_local",
-        size,
-        vk::BufferUsageFlags::TRANSFER_SRC,
-        MemoryLocation::CpuToGpu,
-    );
-    let gpu_buffer = mm.create_buffer(
-        "scene_buffer_dedicated",
-        size,
-        flags | vk::BufferUsageFlags::TRANSFER_DST,
-        MemoryLocation::GpuOnly,
-    );
-    let mapped = cpu_buffer
-        .allocation()
-        .mapped_ptr()
-        .expect("Failed to map memory")
-        .cast()
-        .as_ptr();
-    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), mapped, data.len()) };
-    let copy_region = vk::BufferCopy {
-        // these are not the allocation offset, but the buffer offset!
-        src_offset: 0,
-        dst_offset: 0,
-        size: cpu_buffer.size,
-    };
-    let command = unsafe {
-        |device: &ash::Device, cmd: vk::CommandBuffer| {
-            device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
-        }
-    };
-    let cmd = tcmdm.get_cmd_buffer();
-    let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
-    unf.add(fence, cpu_buffer);
+    let gpu_buffer;
+    if !data.is_empty() {
+        let cpu_buffer = mm.create_buffer(
+            "scene_buffer_local",
+            size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            MemoryLocation::CpuToGpu,
+        );
+        gpu_buffer = mm.create_buffer(
+            "scene_buffer_dedicated",
+            size,
+            flags | vk::BufferUsageFlags::TRANSFER_DST,
+            MemoryLocation::GpuOnly,
+        );
+        let mapped = cpu_buffer
+            .allocation()
+            .mapped_ptr()
+            .expect("Failed to map memory")
+            .cast()
+            .as_ptr();
+        unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), mapped, data.len()) };
+        let copy_region = vk::BufferCopy {
+            // these are not the allocation offset, but the buffer offset!
+            src_offset: 0,
+            dst_offset: 0,
+            size: cpu_buffer.size,
+        };
+        let command = unsafe {
+            |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+            }
+        };
+        let cmd = tcmdm.get_cmd_buffer();
+        let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
+        unf.add(fence, cpu_buffer);
+    } else {
+        gpu_buffer = mm.create_buffer("empty_buffer", 1, flags, MemoryLocation::GpuOnly);
+    }
     gpu_buffer
 }
 
@@ -1342,62 +1395,64 @@ fn calculate_geometric_derivatives<T: Instance>(
         .unwrap_or(0)
         / 3;
     let device = instance.device();
-    let size = triangles as u64 * 48; // 3*vec4(normal, dpdu and dpdv)
+    let size = u64::max(1, triangles as u64 * 48); // 3*vec4(normal, dpdu and dpdv)
     let buffer = mm.create_buffer(
         "Derivatives",
         size,
         vk::BufferUsageFlags::STORAGE_BUFFER,
         MemoryLocation::GpuOnly,
     );
-    let desc = dm
-        .new_set()
-        .bind_buffer(
-            vertex_buffer,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::COMPUTE,
-        )
-        .bind_buffer(
-            index_buffer,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::COMPUTE,
-        )
-        .bind_buffer(
-            &buffer,
-            vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::COMPUTE,
-        )
-        .build();
-    let pipeline = build_compute_pipeline(
-        device.logical_clone(),
-        include_shader!("generate_derivatives.comp").to_vec(),
-        4,
-        &[desc.layout],
-    );
-    let cmd = ccmdm.get_cmd_buffer();
-    let group_count = (triangles / 256) + 1;
-    let command = unsafe {
-        |device: &ash::Device, cmd: vk::CommandBuffer| {
-            device.cmd_bind_descriptor_sets(
-                cmd,
-                vk::PipelineBindPoint::COMPUTE,
-                pipeline.layout,
-                0,
-                &[desc.set],
-                &[],
-            );
-            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.pipeline);
-            device.cmd_push_constants(
-                cmd,
-                pipeline.layout,
+    if triangles > 0 {
+        let desc = dm
+            .new_set()
+            .bind_buffer(
+                vertex_buffer,
+                vk::DescriptorType::STORAGE_BUFFER,
                 vk::ShaderStageFlags::COMPUTE,
-                0,
-                &u32::to_ne_bytes(triangles),
-            );
-            device.cmd_dispatch(cmd, group_count, 1, 1);
-        }
-    };
-    let fence = device.immediate_execute(cmd, device.compute_queue(), command);
-    unf.add_pipeline_execution(fence, pipeline);
+            )
+            .bind_buffer(
+                index_buffer,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            )
+            .bind_buffer(
+                &buffer,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::COMPUTE,
+            )
+            .build();
+        let pipeline = build_compute_pipeline(
+            device.logical_clone(),
+            include_shader!("generate_derivatives.comp").to_vec(),
+            4,
+            &[desc.layout],
+        );
+        let cmd = ccmdm.get_cmd_buffer();
+        let group_count = (triangles / 256) + 1;
+        let command = unsafe {
+            |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_bind_descriptor_sets(
+                    cmd,
+                    vk::PipelineBindPoint::COMPUTE,
+                    pipeline.layout,
+                    0,
+                    &[desc.set],
+                    &[],
+                );
+                device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::COMPUTE, pipeline.pipeline);
+                device.cmd_push_constants(
+                    cmd,
+                    pipeline.layout,
+                    vk::ShaderStageFlags::COMPUTE,
+                    0,
+                    &u32::to_ne_bytes(triangles),
+                );
+                device.cmd_dispatch(cmd, group_count, 1, 1);
+            }
+        };
+        let fence = device.immediate_execute(cmd, device.compute_queue(), command);
+        unf.add_pipeline_execution(fence, pipeline);
+    }
     buffer
 }
 

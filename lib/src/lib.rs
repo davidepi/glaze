@@ -21,4 +21,4 @@ pub use parser::{converted_file, parse, Meta, ParsedScene, ParserVersion, Serial
 #[cfg(feature = "vulkan")]
 pub use vulkan::{DeviceInfo, Pipeline, PipelineBuilder, RayTraceInstance, RayTraceRenderer};
 #[cfg(feature = "vulkan-interactive")]
-pub use vulkan::{PresentInstance, RealtimeRenderer, VulkanScene};
+pub use vulkan::{PresentInstance, RayTraceScene, RealtimeRenderer, VulkanScene};

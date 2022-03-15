@@ -1917,7 +1917,7 @@ mod tests {
         read.update(None, None, None, None)?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         // close file and reopen it
-        let mut read = parse(file.as_path())?;
+        let read = parse(file.as_path())?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         Ok(())
     }
