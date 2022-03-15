@@ -3,6 +3,8 @@
 
 #ifndef _RAYTRACE_STRUCTURES_GLSL_
 #define _RAYTRACE_STRUCTURES_GLSL_
+
+
 struct RTFrameData
 {
   uint seed;
