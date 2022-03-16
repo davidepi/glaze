@@ -396,7 +396,10 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         }
     }
 
-    pub fn draw(&mut self, spp: usize) -> image::RgbaImage {
+    pub fn draw<F>(&mut self, spp: usize, callback: Option<F>) -> image::RgbaImage
+    where
+        F: Fn(),
+    {
         self.request_new_frame = true;
         let mut sync = (0..FRAMES_IN_FLIGHT)
             .map(|_| {
@@ -428,6 +431,12 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             }
             last_semaphore = signal_sem;
             sync.push_back((signal_sem, signal_fence));
+            if let Some(callback) = &callback {
+                // This is called when the CPU finish setting up the command and not when the GPU
+                // ends the execution, but the counter will be wrong by at most FRAMES_IN_FLIGHT
+                // frames
+                callback();
+            }
         }
         let fences = sync
             .iter()
@@ -953,7 +962,7 @@ mod tests {
             let parsed = init(Arc::clone(&instance));
             let mut renderer =
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
-            let _ = renderer.draw(1);
+            let _ = renderer.draw(1, None);
         } else {
             // SKIPPED does not exists in cargo test...
         }
@@ -968,7 +977,7 @@ mod tests {
             let file = dir.path().join("save.png");
             let mut renderer =
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
-            let image = renderer.draw(1);
+            let image = renderer.draw(1, None);
             image.save(file.clone()).unwrap();
             assert!(file.exists());
         } else {
@@ -985,7 +994,7 @@ mod tests {
             let mut renderer =
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
             renderer.change_resolution(4, 4);
-            let image = renderer.draw(1);
+            let image = renderer.draw(1, None);
             assert_eq!(image.width(), 4);
             assert_eq!(image.height(), 4);
         } else {

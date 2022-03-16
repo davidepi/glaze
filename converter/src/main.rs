@@ -114,9 +114,9 @@ fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
 fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, std::io::Error> {
     let mpb = MultiProgress::new();
     let style = ProgressStyle::default_bar()
+        .progress_chars("#>-")
         .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
-        .unwrap()
-        .progress_chars("#>-");
+        .unwrap();
     let camera_data = scene.cameras;
     let camera_pb = mpb.add(ProgressBar::new(1));
     camera_pb.set_style(style.clone());
