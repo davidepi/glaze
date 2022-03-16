@@ -1,9 +1,8 @@
 use clap::Parser;
 use console::style;
-use faccess::PathExt;
 use glaze::{parse, RayTraceInstance, RayTraceRenderer, RayTraceScene};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Parser)]
@@ -16,6 +15,9 @@ struct Args {
     /// Rendering resolution in form "WxH".
     #[clap(short, long = "res", default_value = "1920x1080")]
     resolution: String,
+    /// Samples per pixel.
+    #[clap(short, long, default_value = "256")]
+    spp: usize,
 }
 
 fn main() {
@@ -29,7 +31,7 @@ fn main() {
         std::process::exit(1);
     }
     let out_path = Path::new(&args.output);
-    if !out_path.writable() {
+    if std::fs::File::create(out_path).is_err() {
         log::error!("The output file can not be written");
         std::process::exit(1);
     }
@@ -61,7 +63,7 @@ fn main() {
                 let setup_start = Instant::now();
                 let instance = Arc::new(instance);
                 let scene = RayTraceScene::<RayTraceInstance>::new(Arc::clone(&instance), parsed);
-                let renderer =
+                let mut renderer =
                     RayTraceRenderer::<RayTraceInstance>::new(instance, Some(scene), width, height);
                 let setup_end = Instant::now();
                 println!(
@@ -69,10 +71,9 @@ fn main() {
                     style("Done").bold().green(),
                     (setup_end - setup_start).as_millis()
                 );
-                let (write, _read) = mpsc::channel();
                 print!("Rendering @ {}x{}... ", width, height);
                 let render_start = Instant::now();
-                let image = renderer.draw(write).export();
+                let image = renderer.draw(args.spp);
                 let render_end = Instant::now();
                 println!(
                     "{} ({} ms)",

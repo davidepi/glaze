@@ -86,7 +86,7 @@ impl<const FRAMES_IN_FLIGHT: usize> PresentSync<FRAMES_IN_FLIGHT> {
 }
 
 /// Creates a fence
-fn create_fence(device: &ash::Device, signaled: bool) -> vk::Fence {
+pub(crate) fn create_fence(device: &ash::Device, signaled: bool) -> vk::Fence {
     let ci = vk::FenceCreateInfo {
         s_type: vk::StructureType::FENCE_CREATE_INFO,
         p_next: ptr::null(),
@@ -100,7 +100,7 @@ fn create_fence(device: &ash::Device, signaled: bool) -> vk::Fence {
 }
 
 /// Creates a semaphore
-fn create_semaphore(device: &ash::Device) -> vk::Semaphore {
+pub(crate) fn create_semaphore(device: &ash::Device) -> vk::Semaphore {
     let ci = vk::SemaphoreCreateInfo {
         s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
         p_next: ptr::null(),

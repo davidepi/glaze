@@ -3,7 +3,8 @@ use super::descriptor::DescriptorSetManager;
 use super::instance::Instance;
 use super::memory::AllocatedBuffer;
 use super::scene::{padding, RayTraceScene};
-use super::{AllocatedImage, Descriptor, UnfinishedExecutions};
+use super::sync::{create_fence, create_semaphore};
+use super::{export, AllocatedImage, Descriptor, UnfinishedExecutions};
 use crate::geometry::{SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
 use crate::materials::{SBT_MATERIAL_STRIDE, SBT_MATERIAL_TYPES};
 use crate::parser::NoScene;
@@ -11,16 +12,16 @@ use crate::vulkan::pipeline::build_raytracing_pipeline;
 use crate::vulkan::FRAMES_IN_FLIGHT;
 #[cfg(feature = "vulkan-interactive")]
 use crate::PresentInstance;
-use crate::{Camera, Light, Material, Pipeline, RayTraceInstance, RealtimeRenderer, TextureLoaded};
+use crate::{Camera, Light, Material, Pipeline, RayTraceInstance, RealtimeRenderer};
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
 use cgmath::{SquareMatrix, Vector2 as Vec2};
 use gpu_allocator::MemoryLocation;
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro128PlusPlus;
+use std::collections::VecDeque;
 use std::iter::repeat;
 use std::ptr;
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 #[repr(C)]
@@ -184,8 +185,9 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn draw_frame(
         &mut self,
-        wait: vk::Semaphore,
-        signal: vk::Semaphore,
+        wait: &[vk::Semaphore],
+        signal: &[vk::Semaphore],
+        fence: vk::Fence,
         frame_no: usize,
     ) {
         let device = self.instance.device();
@@ -198,8 +200,6 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         };
         let cmds = [self.ccmdm.get_cmd_buffer()];
         let cmd = cmds[0];
-        let wait = [wait];
-        let signal = [signal];
         let submit_ci = vk::SubmitInfo {
             s_type: vk::StructureType::SUBMIT_INFO,
             p_next: ptr::null(),
@@ -391,13 +391,75 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                 .end_command_buffer(cmd)
                 .expect("Failed to end command buffer");
             vkdevice
-                .queue_submit(queue.queue, &[submit_ci], vk::Fence::null())
+                .queue_submit(queue.queue, &[submit_ci], fence)
                 .expect("Failed to submit to queue");
         }
     }
 
-    pub fn draw(mut self, channel: Sender<String>) -> TextureLoaded {
-        unimplemented!()
+    pub fn draw(&mut self, spp: usize) -> image::RgbaImage {
+        self.request_new_frame = true;
+        let mut sync = (0..FRAMES_IN_FLIGHT)
+            .map(|_| {
+                (
+                    create_semaphore(self.instance.device().logical()),
+                    create_fence(self.instance.device().logical(), true),
+                )
+            })
+            .collect::<VecDeque<_>>();
+        let mut last_semaphore = vk::Semaphore::null();
+        for i in 0..spp {
+            let (signal_sem, signal_fence) = sync.pop_front().unwrap();
+            unsafe {
+                self.instance
+                    .device()
+                    .logical()
+                    .wait_for_fences(&[signal_fence], true, u64::MAX)
+                    .expect("Failed to wait on fence");
+                self.instance
+                    .device()
+                    .logical()
+                    .reset_fences(&[signal_fence])
+                    .expect("Failed to reset fence");
+            }
+            if i == 0 {
+                self.draw_frame(&[], &[signal_sem], signal_fence, i);
+            } else {
+                self.draw_frame(&[last_semaphore], &[signal_sem], signal_fence, i);
+            }
+            last_semaphore = signal_sem;
+            sync.push_back((signal_sem, signal_fence));
+        }
+        let fences = sync
+            .iter()
+            .map(|(_, fence)| fence)
+            .copied()
+            .collect::<Vec<_>>();
+        unsafe {
+            self.instance
+                .device()
+                .logical()
+                .wait_for_fences(&fences, true, u64::MAX)
+                .expect("Failed to wait on fences");
+            for (sem, fence) in sync {
+                self.instance
+                    .device()
+                    .logical()
+                    .destroy_semaphore(sem, None);
+                self.instance.device().logical().destroy_fence(fence, None);
+            }
+        }
+        let mut gcmdm = CommandManager::new(
+            self.instance.device().logical_clone(),
+            self.instance.device().graphic_queue().idx,
+            1,
+        );
+        export(
+            self.instance.as_ref(),
+            self.output_image(),
+            &mut gcmdm,
+            self.extent.width,
+            self.extent.height,
+        )
     }
 }
 
@@ -433,9 +495,9 @@ fn init_rt<T: Instance + Send + Sync>(
     let rploader = RTPipelineLoader::new(instance.instance(), device.logical());
     let transfer_queue = device.transfer_queue();
     let compute_queue = device.compute_queue();
+    let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
     let ccmdm = CommandManager::new(device.logical_clone(), compute_queue.idx, 15);
     let sample_scheduler = WorkScheduler::new();
-    let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
     let mut dm = DescriptorSetManager::new(
         device.logical_clone(),
         &AVG_DESC,
@@ -446,7 +508,9 @@ fn init_rt<T: Instance + Send + Sync>(
         "Present image raytracer",
         vk::Format::R8G8B8A8_SRGB,
         extent,
-        vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
+        vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_SRC // src is used to export the rendered image
+            | vk::ImageUsageFlags::TRANSFER_DST,
         vk::ImageAspectFlags::COLOR,
         1,
     );
@@ -857,7 +921,7 @@ mod tests {
     use crate::vulkan::scene::RayTraceScene;
     use crate::{parse, RayTraceInstance};
     use std::path::PathBuf;
-    use std::sync::{mpsc, Arc};
+    use std::sync::Arc;
     use tempfile::tempdir;
 
     fn init(instance: Arc<RayTraceInstance>) -> Option<RayTraceScene<RayTraceInstance>> {
@@ -887,10 +951,9 @@ mod tests {
         if let Some(instance) = RayTraceInstance::new() {
             let instance = Arc::new(instance);
             let parsed = init(Arc::clone(&instance));
-            let renderer =
+            let mut renderer =
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
-            let (write, _read) = mpsc::channel();
-            let _ = renderer.draw(write);
+            let _ = renderer.draw(1);
         } else {
             // SKIPPED does not exists in cargo test...
         }
@@ -903,10 +966,9 @@ mod tests {
             let parsed = init(Arc::clone(&instance));
             let dir = tempdir()?;
             let file = dir.path().join("save.png");
-            let renderer =
+            let mut renderer =
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
-            let (write, _read) = mpsc::channel();
-            let image = renderer.draw(write).export();
+            let image = renderer.draw(1);
             image.save(file.clone()).unwrap();
             assert!(file.exists());
         } else {
@@ -923,8 +985,7 @@ mod tests {
             let mut renderer =
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
             renderer.change_resolution(4, 4);
-            let (write, _read) = mpsc::channel();
-            let image = renderer.draw(write).export();
+            let image = renderer.draw(1);
             assert_eq!(image.width(), 4);
             assert_eq!(image.height(), 4);
         } else {

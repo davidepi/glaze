@@ -417,8 +417,9 @@ impl RealtimeRenderer {
             frame_data.data.frame_time = (current_time - self.start_time).as_secs_f32();
             if let Some(raytracer) = raytracer.as_mut() {
                 raytracer.draw_frame(
-                    frame_sync.image_available,
-                    compute_finished[0],
+                    &graphics_wait,
+                    &compute_finished,
+                    vk::Fence::null(),
                     self.frame_no,
                 );
                 // swap signal: the graphic queue have to wait the raytrace, not the image

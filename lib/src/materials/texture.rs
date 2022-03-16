@@ -45,8 +45,8 @@ impl TextureLoaded {
             self.instance.as_ref(),
             &self.image,
             &mut gcmdm,
-            self.info.width,
-            self.info.height,
+            self.info.width as u32,
+            self.info.height as u32,
         )
     }
 }

@@ -1,12 +1,10 @@
+use super::cmd::CommandManager;
+use super::Instance;
 use ash::vk;
 use gpu_allocator::vulkan::{Allocation, AllocationCreateDesc, Allocator, AllocatorCreateDesc};
 use gpu_allocator::{AllocatorDebugSettings, MemoryLocation};
 use std::sync::{Arc, Mutex};
 use std::{fmt, ptr};
-
-use super::cmd::CommandManager;
-use super::device::Device;
-use super::Instance;
 
 /// An allocated buffer-memory pair.
 pub struct AllocatedBuffer {
@@ -63,196 +61,6 @@ pub struct AllocatedImage {
     allocation: Option<Allocation>,
     device: Arc<ash::Device>,
     allocator: Arc<Mutex<Allocator>>,
-}
-
-impl AllocatedImage {
-    /// exports a GPU image with SHADER_READ_ONLY_OPTIMAL layout to a linear array of pixel
-    pub fn export(
-        &self,
-        device: &Device,
-        tcmdm: &mut CommandManager,
-        width: u16,
-        height: u16,
-    ) -> image::RgbaImage {
-        // create the dst image with LINEAR tiling
-        let extent3d = vk::Extent3D {
-            width: width as u32,
-            height: height as u32,
-            depth: 1,
-        };
-        let img_ci = vk::ImageCreateInfo {
-            s_type: vk::StructureType::IMAGE_CREATE_INFO,
-            p_next: ptr::null(),
-            flags: vk::ImageCreateFlags::empty(),
-            image_type: vk::ImageType::TYPE_2D,
-            format: vk::Format::R8G8B8A8_UNORM,
-            extent: extent3d,
-            mip_levels: 1,
-            array_layers: 1,
-            samples: vk::SampleCountFlags::TYPE_1,
-            tiling: vk::ImageTiling::LINEAR,
-            usage: vk::ImageUsageFlags::TRANSFER_DST,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            queue_family_index_count: 0,
-            p_queue_family_indices: ptr::null(),
-            initial_layout: vk::ImageLayout::UNDEFINED,
-        };
-        let image =
-            unsafe { self.device.create_image(&img_ci, None) }.expect("Failed to create image");
-        let requirements = unsafe { self.device.get_image_memory_requirements(image) };
-        let alloc_desc = AllocationCreateDesc {
-            name: "Export Image GPU",
-            requirements,
-            location: MemoryLocation::GpuToCpu,
-            linear: true,
-        };
-        let allocation = self
-            .allocator
-            .lock()
-            .unwrap()
-            .allocate(&alloc_desc)
-            .expect("Allocation failed. OOM?");
-        unsafe {
-            self.device
-                .bind_image_memory(image, allocation.memory(), allocation.offset())
-        }
-        .expect("Failed to bind image memory");
-        // prepare the blit subregion
-        let blit_subresource = vk::ImageSubresourceLayers {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            mip_level: 0,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-        let blit_regions = [vk::ImageBlit {
-            src_subresource: blit_subresource,
-            src_offsets: [
-                vk::Offset3D { x: 0, y: 0, z: 0 },
-                vk::Offset3D {
-                    x: width as i32,
-                    y: height as i32,
-                    z: 1,
-                },
-            ],
-            dst_subresource: blit_subresource,
-            dst_offsets: [
-                vk::Offset3D { x: 0, y: 0, z: 0 },
-                vk::Offset3D {
-                    x: width as i32,
-                    y: height as i32,
-                    z: 1,
-                },
-            ],
-        }];
-        // prepare the barriers
-        let subresource_range = vk::ImageSubresourceRange {
-            aspect_mask: vk::ImageAspectFlags::COLOR,
-            base_mip_level: 0,
-            level_count: 1,
-            base_array_layer: 0,
-            layer_count: 1,
-        };
-        let barrier_src_sampled_to_transfer = vk::ImageMemoryBarrier {
-            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
-            p_next: ptr::null(),
-            src_access_mask: vk::AccessFlags::MEMORY_READ,
-            dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-            old_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            new_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            image: self.image,
-            subresource_range,
-        };
-        let barrier_src_transfer_to_sampled = vk::ImageMemoryBarrier {
-            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
-            p_next: ptr::null(),
-            src_access_mask: vk::AccessFlags::TRANSFER_READ,
-            dst_access_mask: vk::AccessFlags::MEMORY_READ,
-            old_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-            new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            image: self.image,
-            subresource_range,
-        };
-        let barrier_dst_undefined_to_transfer = vk::ImageMemoryBarrier {
-            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
-            p_next: ptr::null(),
-            src_access_mask: vk::AccessFlags::empty(),
-            dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-            old_layout: vk::ImageLayout::UNDEFINED,
-            new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            image,
-            subresource_range,
-        };
-        let barrier_dst_transfer_to_general = vk::ImageMemoryBarrier {
-            s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
-            p_next: ptr::null(),
-            src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
-            dst_access_mask: vk::AccessFlags::MEMORY_READ,
-            old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-            new_layout: vk::ImageLayout::GENERAL,
-            src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
-            image,
-            subresource_range,
-        };
-        // run the commands
-        let cmd = tcmdm.get_cmd_buffer();
-        let command = unsafe {
-            |device: &ash::Device, cmd: vk::CommandBuffer| {
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[
-                        barrier_src_sampled_to_transfer,
-                        barrier_dst_undefined_to_transfer,
-                    ],
-                );
-                device.cmd_blit_image(
-                    cmd,
-                    self.image,
-                    vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                    image,
-                    vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                    &blit_regions,
-                    vk::Filter::LINEAR,
-                );
-                device.cmd_pipeline_barrier(
-                    cmd,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::PipelineStageFlags::TRANSFER,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[
-                        barrier_src_transfer_to_sampled,
-                        barrier_dst_transfer_to_general,
-                    ],
-                );
-            }
-        };
-        let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
-        device.wait_completion(&[fence]);
-        // now extract the bytes from the figure
-        let size = (width * height * 4) as usize;
-        let mut raw = vec![0_u8; size];
-        let mapped = allocation
-            .mapped_ptr()
-            .expect("Failed to map image")
-            .cast()
-            .as_ptr();
-        unsafe { std::ptr::copy_nonoverlapping(mapped, &mut raw, size) };
-        image::RgbaImage::from_raw(width as u32, height as u32, raw)
-            .expect("Image conversion failed")
-    }
 }
 
 impl Drop for AllocatedImage {
@@ -462,8 +270,8 @@ pub fn export<T: Instance + ?Sized>(
     instance: &T,
     src_image: &AllocatedImage,
     gcmdm: &mut CommandManager,
-    width: u16,
-    height: u16,
+    width: u32,
+    height: u32,
 ) -> image::RgbaImage {
     // create the dst image with LINEAR tiling
     let extent3d = vk::Extent3D {
