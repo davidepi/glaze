@@ -46,7 +46,8 @@ vec3 ray_dir(vec2 ndc)
   return direction.xyz;
 }
 
-void light_omni_gen_photon(in RTLight light, in vec2 rand_sample, out vec3 origin, out vec3 direction, out Spectrum radiance, out float pdf)
+void light_omni_gen_photon(in RTLight light, in vec2 rand_sample, out vec3 origin,
+                           out vec3 direction, out Spectrum radiance, out float pdf)
 {
   origin = light.pos.xyz;
   float z = 1.0 - 2.0 * rand_sample.x;
@@ -57,10 +58,11 @@ void light_omni_gen_photon(in RTLight light, in vec2 rand_sample, out vec3 origi
   radiance = Spectrum(light.color0, light.color1, light.color2, light.color3);
 }
 
-void light_sun_gen_photon(in RTLight light, in vec2 rand_sample, out vec3 origin, out vec3 direction, out Spectrum radiance, out float pdf)
+void light_sun_gen_photon(in RTLight light, in vec2 rand_sample, out vec3 origin,
+                          out vec3 direction, out Spectrum radiance, out float pdf)
 {
-  // create a coord system around the light direction
-  vec3 v1 = light.dir.xyz;
+  // create a coord system around the light direction (upwards)
+  vec3 v1 = -light.dir.xyz;
   vec3 v2a = vec3(-v1.z, 0, v1.x)/sqrt(v1.x*v1.x+v1.z*v1.z);
   vec3 v2b = vec3(0, v1.z, -v1.y)/sqrt(v1.y*v1.y+v1.z*v1.z);
   vec3 v2 = mix(v2b, v2a, step(abs(v1.y), abs(v1.x)));
@@ -69,11 +71,11 @@ void light_sun_gen_photon(in RTLight light, in vec2 rand_sample, out vec3 origin
   vec2 xgy = vec2(remap.x, PI_OVER_4*remap.y/remap.x);
   vec2 xly = vec2(remap.y, PI_OVER_2-PI_OVER_4*remap.x/remap.y);
   vec2 disk_sample = mix(xly, xgy, step(abs(remap.y), abs(remap.x)));
-  vec3 disk_pos = vec3(0) + FrameData.data.scene_radius*(v1*disk_sample.x+v2*disk_sample.y); // vec3(0) is the world center.
-  // generate the outgoing ray
-  origin = disk_pos+FrameData.data.scene_radius*light.dir.xyz;
+  vec3 disk_pos = FrameData.data.scene_radius*(v1*disk_sample.x+v2*disk_sample.y); // scale the disk, still positioned in 0,0,0
+  // generate the outgoing ray, by positioning in the world space
+  origin = FrameData.data.center_and_bdpt_step.xyz*disk_pos+FrameData.data.scene_radius*-light.dir.xyz;
   direction = light.dir.xyz;
-  pdf = 1/(PI*FrameData.data.scene_radius*FrameData.data.scene_radius);
+  pdf = 1.0/(PI*FrameData.data.scene_radius*FrameData.data.scene_radius);
   radiance = Spectrum(light.color0, light.color1, light.color2, light.color3);
 }
 
