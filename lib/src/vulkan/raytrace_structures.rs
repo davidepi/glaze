@@ -80,8 +80,8 @@ const BDPT_PATH_LEN: usize = 6;
 pub struct BDPTPathVertex {
     pub distance: f32,
     pub miss: bool,
-    pub fwd_pdf: f32,
-    pub bwd_pdf: f32,
+    pub pdf_fwd: f32,
+    pub pdf_bwd: f32,
     pub attribs: [f32; 2],
     pub ids: [u32; 2],
     pub color0: [f32; 4],

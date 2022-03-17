@@ -63,8 +63,8 @@ struct BDPTPathVertex
 {
   float distance;
   bool miss;
-  float fwd_pdf;
-  float bwd_pdf;
+  float pdf_fwd;
+  float pdf_bwd;
   vec2 attribs;
   uvec2 ids;
   vec4 color0;

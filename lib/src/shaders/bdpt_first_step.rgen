@@ -47,26 +47,30 @@ vec3 ray_dir(vec2 ndc)
 }
 
 void light_omni_gen_photon(in RTLight light, in vec2 rand_sample, out vec3 origin,
-                           out vec3 direction, out Spectrum radiance, out float pdf)
+                           out vec3 direction, out vec3 normal,
+                           out Spectrum radiance, out float pdf_pos, out float pdf_dir)
 {
   origin = light.pos.xyz;
   float z = 1.0 - 2.0 * rand_sample.x;
   float r = sqrt(max(0.0, 1.0 - z * z));
   float phi = 2.0 * PI * rand_sample.y;
   direction = vec3(r * cos(phi), r * sin(phi), z);
-  pdf = INV_4PI;
+  normal = direction;
+  pdf_pos = 1.0;
+  pdf_dir = INV_4PI;
   radiance = Spectrum(light.color0, light.color1, light.color2, light.color3);
 }
 
 void light_sun_gen_photon(in RTLight light, in vec2 rand_sample, out vec3 origin,
-                          out vec3 direction, out Spectrum radiance, out float pdf)
+                          out vec3 direction, out vec3 normal,
+                          out Spectrum radiance, out float pdf_pos, out float pdf_dir)
 {
   // create a coord system around the light direction (upwards)
   vec3 v1 = -light.dir.xyz;
   vec3 v2a = vec3(-v1.z, 0, v1.x)/sqrt(v1.x*v1.x+v1.z*v1.z);
   vec3 v2b = vec3(0, v1.z, -v1.y)/sqrt(v1.y*v1.y+v1.z*v1.z);
   vec3 v2 = mix(v2b, v2a, step(abs(v1.y), abs(v1.x)));
-  // sample a position in the disk with with the previous coordinate system and as large as the scene
+  // sample a position in the disk with with the previous coordinate system
   vec2 remap = 2.0 * rand_sample - vec2(1.0);
   vec2 xgy = vec2(remap.x, PI_OVER_4*remap.y/remap.x);
   vec2 xly = vec2(remap.y, PI_OVER_2-PI_OVER_4*remap.x/remap.y);
@@ -75,18 +79,20 @@ void light_sun_gen_photon(in RTLight light, in vec2 rand_sample, out vec3 origin
   // generate the outgoing ray, by positioning in the world space
   origin = FrameData.data.center_and_bdpt_step.xyz*disk_pos+FrameData.data.scene_radius*-light.dir.xyz;
   direction = light.dir.xyz;
-  pdf = 1.0/(PI*FrameData.data.scene_radius*FrameData.data.scene_radius);
+  normal = direction;
+  pdf_pos = 1.0/(PI*FrameData.data.scene_radius*FrameData.data.scene_radius);
+  pdf_dir = 1.0;
   radiance = Spectrum(light.color0, light.color1, light.color2, light.color3);
 }
 
 void main()
 {
-  if (FrameData.data.lights_no == 0)
+  if(FrameData.data.lights_no == 0)
   {
     return;
   }
   uint path_id = uint(gl_LaunchIDEXT.y*gl_LaunchSizeEXT.x+gl_LaunchIDEXT.x);
-  // camera ray
+  /// CAMERA PATH ///
   const vec2 pixel = gl_LaunchIDEXT.xy + FrameData.data.pixel_offset;
   const vec2 uv = pixel / gl_LaunchSizeEXT.xy;
   const vec2 ndc = vec2(-1.0)+2.0*uv;
@@ -98,35 +104,44 @@ void main()
   camera_vertex.miss = sh.miss;
   camera_vertex.attribs = sh.attribs;
   camera_vertex.ids = sh.ids;
+  camera_vertex.pdf_fwd = 1.0;
   camera_vertex.color0 = vec4(1.0);
   camera_vertex.color1 = vec4(1.0);
   camera_vertex.color2 = vec4(1.0);
   camera_vertex.color3 = vec4(1.0);
-  // light ray
+  /// LIGHT PATH ///
   uint rng = srand(vec3(FrameData.data.seed, gl_LaunchIDEXT.xy));
   uint light_id = uint(min(rand(rng)*FrameData.data.lights_no, FrameData.data.lights_no-1));
   RTLight light = LightBuffer.lights[light_id];
-  float light_pdf;
+  float light_pdf = 1.0/FrameData.data.lights_no;
+  vec3 normal;
+  float pdf_pos;
+  float pdf_dir;
   Spectrum radiance;
   if(light.shader == 0)
   {
-    light_omni_gen_photon(light, rand2(rng), origin, direction, radiance, light_pdf);
+    light_omni_gen_photon(light, rand2(rng), origin, direction, normal,
+                          radiance, pdf_pos, pdf_dir);
   }
   else //if(light.shader == 1)
   {
-    light_sun_gen_photon(light, rand2(rng), origin, direction, radiance, light_pdf);
+    light_sun_gen_photon(light, rand2(rng), origin, direction, normal,
+                         radiance, pdf_pos, pdf_dir);
   }
+  float radiance_weight = abs(dot(normal, direction))/(light_pdf*pdf_pos*pdf_dir);
+  radiance = mul(radiance, radiance_weight);
   traceRayEXT(scene, 0, 0xFF, 0, 0, 0, origin, 0.0001, direction, INFINITY, 0);
   BDPTPathVertex light_vertex;
   light_vertex.distance = sh.distance;
   light_vertex.miss = sh.miss;
   light_vertex.attribs = sh.attribs;
   light_vertex.ids = sh.ids;
+  light_vertex.pdf_fwd = pdf_dir;
   light_vertex.color0 = radiance.col0;
   light_vertex.color1 = radiance.col1;
   light_vertex.color2 = radiance.col2;
   light_vertex.color3 = radiance.col3;
-  // write the results
+  /// SAVE RESULTS ///
   Bdpt.paths[path_id].camera[0] = camera_vertex;
   Bdpt.paths[path_id].light[0] = light_vertex;
 }
