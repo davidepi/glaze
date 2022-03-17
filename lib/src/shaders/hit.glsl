@@ -22,9 +22,9 @@ struct SurfaceHit {
 #define EXPAND_HIT(X, HIT, MATERIAL)                                            \
 {                                                                               \
   const vec3 barycentric = vec3(                                                \
-      1.0 - X.attribs.x - X.attribs.y,                                            \
-      X.attribs.x,                                                               \
-      X.attribs.y                                                                \
+      1.0 - X.attribs.x - X.attribs.y,                                          \
+      X.attribs.x,                                                              \
+      X.attribs.y                                                               \
     );                                                                          \
   uint triangle_id = X.ids.x;                                                   \
   uint material_id = X.ids.y;                                                   \

@@ -1,13 +1,12 @@
-use cgmath::Vector2;
-
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-struct RTFrameData {
+pub struct RTFrameData {
     pub seed: u32,
     pub lights_no: u32,
-    pub pixel_offset: Vector2<f32>,
+    pub pixel_offset: [f32; 2],
     pub scene_radius: f32,
     pub exposure: f32,
+    pub scene_size: [f32; 2],
 }
 
 impl Default for RTFrameData {
@@ -16,8 +15,9 @@ impl Default for RTFrameData {
             seed: 0,
             lights_no: 0,
             scene_radius: 0.0,
-            pixel_offset: Vector2::new(0.0, 0.0),
             exposure: 1.0,
+            pixel_offset: [0.0, 0.0],
+            scene_size: [0.0, 0.0],
         }
     }
 }
@@ -69,4 +69,28 @@ pub struct RTLight {
     pub pos: [f32; 4],
     pub dir: [f32; 4],
     pub shader: u32,
+}
+
+const BDPT_PATH_LEN: usize = 6;
+
+#[repr(C, align(16))]
+#[derive(Debug, Copy, Clone)]
+pub struct BDPTPathVertex {
+    pub distance: f32,
+    pub miss: bool,
+    pub fwd_pdf: f32,
+    pub bwd_pdf: f32,
+    pub attribs: [f32; 2],
+    pub ids: [u32; 2],
+    pub color0: [f32; 4],
+    pub color1: [f32; 4],
+    pub color2: [f32; 4],
+    pub color3: [f32; 4],
+}
+
+#[repr(C, align(16))]
+#[derive(Debug, Copy, Clone)]
+pub struct BDPTPath {
+    pub light: [BDPTPathVertex; BDPT_PATH_LEN],
+    pub camera: [BDPTPathVertex; BDPT_PATH_LEN],
 }

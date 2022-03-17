@@ -4,6 +4,7 @@
 #ifndef _RAYTRACE_STRUCTURES_GLSL_
 #define _RAYTRACE_STRUCTURES_GLSL_
 
+#define BDPT_PATH_LEN 6
 
 struct RTFrameData
 {
@@ -12,6 +13,7 @@ struct RTFrameData
   vec2 pixel_offset;
   float scene_radius;
   float exposure;
+  vec2 scene_size;
 };
 
 struct RTInstance
@@ -54,6 +56,26 @@ struct RTLight
   vec4 pos;
   vec4 dir;
   uint shader;
+};
+
+struct BDPTPathVertex
+{
+  float distance;
+  bool miss;
+  float fwd_pdf;
+  float bwd_pdf;
+  vec2 attribs;
+  uvec2 ids;
+  vec4 color0;
+  vec4 color1;
+  vec4 color2;
+  vec4 color3;
+};
+
+struct BDPTPath
+{
+  BDPTPathVertex light[BDPT_PATH_LEN];
+  BDPTPathVertex camera[BDPT_PATH_LEN];
 };
 
 #endif

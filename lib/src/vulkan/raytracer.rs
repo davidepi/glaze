@@ -2,6 +2,7 @@ use super::cmd::CommandManager;
 use super::descriptor::DescriptorSetManager;
 use super::instance::Instance;
 use super::memory::AllocatedBuffer;
+use super::raytrace_structures::{BDPTPath, RTFrameData};
 use super::scene::{padding, RayTraceScene};
 use super::sync::{create_fence, create_semaphore};
 use super::{export, AllocatedImage, Descriptor, UnfinishedExecutions};
@@ -15,7 +16,7 @@ use crate::PresentInstance;
 use crate::{Camera, Light, Material, Pipeline, RayTraceInstance, RealtimeRenderer};
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
-use cgmath::{SquareMatrix, Vector2 as Vec2};
+use cgmath::SquareMatrix;
 use gpu_allocator::MemoryLocation;
 use rand::{Rng, SeedableRng};
 use rand_xoshiro::Xoshiro128PlusPlus;
@@ -23,28 +24,6 @@ use std::collections::VecDeque;
 use std::iter::repeat;
 use std::ptr;
 use std::sync::Arc;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-struct RTFrameData {
-    seed: u32,
-    lights_no: u32,
-    pixel_offset: Vec2<f32>,
-    scene_radius: f32,
-    exposure: f32,
-}
-
-impl Default for RTFrameData {
-    fn default() -> Self {
-        Self {
-            seed: 0,
-            lights_no: 0,
-            scene_radius: 0.0,
-            pixel_offset: Vec2::new(0.0, 0.0),
-            exposure: 1.0,
-        }
-    }
-}
 
 struct ShaderBindingTable {
     rgen_addr: vk::StridedDeviceAddressRegionKHR,
@@ -62,6 +41,8 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     cumulative_img: AllocatedImage,
     out32_img: AllocatedImage,
     out8_img: AllocatedImage,
+    bdpt_buffer: AllocatedBuffer,
+    bdpt_step: u8,
     sample_scheduler: WorkScheduler,
     request_new_frame: bool,
     // contains also the out_img
@@ -125,6 +106,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
 
     pub fn change_resolution(&mut self, width: u32, height: u32) {
         self.extent = vk::Extent2D { width, height };
+        self.bdpt_buffer = create_bdpt_storage_buffer(self.instance.as_ref(), self.extent);
         let mut unf = UnfinishedExecutions::new(self.instance.device());
         self.out32_img = create_storage_image(
             self.instance.as_ref(),
@@ -151,6 +133,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         self.frame_desc = build_descriptor(
             &mut self.dm,
             &self.frame_data,
+            &self.bdpt_buffer,
             &self.cumulative_img,
             &self.out32_img,
         );
@@ -302,6 +285,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             pixel_offset: self.sample_scheduler.next().unwrap(),
             scene_radius: self.scene.meta.scene_radius,
             exposure: self.scene.meta.exposure,
+            scene_size: [self.extent.width as f32, self.extent.height as f32],
         };
         update_frame_data(fd, &mut self.frame_data[frame_index]);
         let queue = device.compute_queue();
@@ -537,7 +521,14 @@ fn init_rt<T: Instance + Send + Sync>(
             )
         })
         .collect::<Vec<_>>();
-    let frame_desc = build_descriptor(&mut dm, &frame_data, &cumulative_img, &out32_img);
+    let bdpt_buffer = create_bdpt_storage_buffer(instance.as_ref(), extent);
+    let frame_desc = build_descriptor(
+        &mut dm,
+        &frame_data,
+        &bdpt_buffer,
+        &cumulative_img,
+        &out32_img,
+    );
     let pipeline = build_raytracing_pipeline(
         &rploader,
         device.logical_clone(),
@@ -571,12 +562,15 @@ fn init_rt<T: Instance + Send + Sync>(
         ccmdm,
         rploader,
         instance,
+        bdpt_buffer,
+        bdpt_step: 0,
     }
 }
 
 fn build_descriptor(
     dm: &mut DescriptorSetManager,
     frame_data: &[AllocatedBuffer],
+    bdpt_buffer: &AllocatedBuffer,
     cumulative_img: &AllocatedImage,
     out_img: &AllocatedImage,
 ) -> Vec<Descriptor> {
@@ -588,6 +582,11 @@ fn build_descriptor(
                     fd,
                     vk::DescriptorType::UNIFORM_BUFFER,
                     vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
+                )
+                .bind_buffer(
+                    bdpt_buffer,
+                    vk::DescriptorType::STORAGE_BUFFER,
+                    vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::RAYGEN_KHR,
                 )
                 .bind_image(
                     cumulative_img,
@@ -868,6 +867,17 @@ fn build_push_constants(camera: &Camera, extent: vk::Extent2D) -> [u8; 128] {
     retval
 }
 
+fn create_bdpt_storage_buffer<T: Instance>(instance: &T, extent: vk::Extent2D) -> AllocatedBuffer {
+    let allocator = instance.allocator();
+    let size = (extent.width * extent.height) as u64 * std::mem::size_of::<BDPTPath>() as u64;
+    allocator.create_buffer(
+        "BDPT storage",
+        size,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        MemoryLocation::GpuOnly,
+    )
+}
+
 fn update_frame_data(fd: RTFrameData, buf: &mut AllocatedBuffer) {
     let mapped = buf
         .allocation()
@@ -886,14 +896,14 @@ fn update_frame_data(fd: RTFrameData, buf: &mut AllocatedBuffer) {
 ///
 /// This iterator is unlimited and will never produce None.
 struct WorkScheduler {
-    current: Vec<(Vec2<f32>, Vec2<f32>)>,
-    next: Vec<(Vec2<f32>, Vec2<f32>)>,
+    current: Vec<([f32; 2], [f32; 2])>,
+    next: Vec<([f32; 2], [f32; 2])>,
 }
 
 impl WorkScheduler {
     pub fn new() -> Self {
         WorkScheduler {
-            current: vec![(Vec2::new(0.0, 0.0), Vec2::new(1.0, 1.0))],
+            current: vec![([0.0, 0.0], [1.0, 1.0])],
             next: Vec::new(),
         }
     }
@@ -905,17 +915,17 @@ impl WorkScheduler {
 }
 
 impl Iterator for WorkScheduler {
-    type Item = Vec2<f32>;
+    type Item = [f32; 2];
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(area) = self.current.pop() {
-            let middle = Vec2::new((area.0.x + area.1.x) / 2.0, (area.0.y + area.1.y) / 2.0);
+            let middle = [(area.0[0] + area.1[0]) / 2.0, (area.0[1] + area.1[1]) / 2.0];
             self.next.push((area.0, middle));
             self.next.push((middle, area.1));
             self.next
-                .push((Vec2::new(middle.x, area.0.y), Vec2::new(area.1.x, middle.y)));
+                .push(([middle[0], area.0[1]], [area.1[0], middle[1]]));
             self.next
-                .push((Vec2::new(area.0.x, middle.y), Vec2::new(middle.x, area.1.y)));
+                .push(([area.0[0], middle[1]], [middle[0], area.1[1]]));
             Some(middle)
         } else {
             self.current.append(&mut self.next);

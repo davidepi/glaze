@@ -149,6 +149,7 @@ fn path_type_to_c_type(path: TypePath, field_name: String) -> String {
     let ty = match name.as_str() {
         "u32" => "uint",
         "f32" => "float",
+        "bool" => "bool",
         "Vector2" | "Point2" => "vec2", // not checking that this is really f32
         "Vector3" | "Point3" => "vec3", // I will face a build error if the type is wrong
         "Vector4" | "Point4" => "vec4", // and will update this file in that case
@@ -166,56 +167,52 @@ fn array_type_to_c_type(array: TypeArray, field_name: String) -> String {
         Type::Path(tp) => tp,
         _ => panic!("Nested arrays are not supported in GLSL"),
     };
-    let int_prefix = match inner_type
-        .path
-        .segments
-        .last()
-        .unwrap()
-        .ident
-        .to_string()
-        .as_str()
-    {
-        "u32" => "u",
-        "f32" => "",
-        _ => panic!("Nested arrays are not supported in GLSL"),
-    };
+    let ty = inner_type.path.segments.last().unwrap().ident.to_string();
     let len = match array.len {
         Expr::Lit(l) => match l.lit {
             Lit::Int(l) => l.to_string(),
             _ => panic!("Array lenght must be an integer"),
         },
-        _ => panic!("Array length must be constant"),
+        Expr::Path(p) => p
+            .path
+            .get_ident()
+            .expect("Failed to get array length")
+            .to_string(),
+        _ => panic!("Unsupported array length"),
     };
-    match len.as_str() {
-        "0" => panic!("Zero length array are not supported in GLSL"),
-        "1" => panic!("Use a primitive type, not a single valued array"),
-        "2" => format!("  {int_prefix}vec2 {field_name};\n"),
-        "3" => format!("  {int_prefix}vec3 {field_name};\n"),
-        "4" => format!("  {int_prefix}vec4 {field_name};\n"),
-        _ => match int_prefix {
-            "u" => format!("  uint {field_name} [{len}];\n"),
-            _ => format!("  float {field_name} [{len}];\n"),
-        },
+    let len_number = len.parse::<usize>().unwrap_or(usize::MAX);
+    if len_number <= 4 && (ty == "u32" || ty == "f32") {
+        let prefix = if ty == "u32" { "u" } else { "" };
+        match len_number {
+            0 => panic!("Zero length array are not supported in GLSL"),
+            1 => panic!("Use a primitive type, not a single valued array"),
+            2 => format!("  {prefix}vec2 {field_name};\n"),
+            3 => format!("  {prefix}vec3 {field_name};\n"),
+            4 => format!("  {prefix}vec4 {field_name};\n"),
+            _ => panic!(), // unreachable
+        }
+    } else {
+        match ty.as_str() {
+            "u32" => format!("  uint {field_name}[{len}];\n"),
+            "f32" => format!("  float {field_name}[{len}];\n"),
+            _ => format!("  {ty} {field_name}[{len}];\n"),
+        }
     }
 }
 
 fn const_to_c_define(con: ItemConst) -> String {
     match *con.ty {
-        Type::Path(t) => {
-            let last = t.path.segments.last().unwrap().ident.to_string();
-            if last.as_str() != "u32" && last.as_str() != "f32" {
-                panic!("Only u32 and f32 literals are supported as consts");
-            }
+        Type::Path(_) => {
             let val = match *con.expr {
                 Expr::Lit(l) => match l.lit {
                     Lit::Int(l) => l.to_string(),
                     Lit::Float(f) => f.to_string(),
-                    _ => panic!("Constant value must be an u32 or f32"),
+                    _ => panic!("Constant value must be an integer or a float"),
                 },
                 _ => panic!("Constant value must be a literal"),
             };
             return format!("#define {} {}\n", con.ident, val);
         }
-        _ => panic!("Only u32 and f32 literals are supported as conts"),
+        _ => panic!("Only literals are supported as conts"),
     }
 }
