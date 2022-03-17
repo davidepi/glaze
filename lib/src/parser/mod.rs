@@ -272,6 +272,7 @@ pub fn converted_file<P: AsRef<Path>>(file: P) -> bool {
 /// Struct to store additional information for the scene that does not fit anywhere else.
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Meta {
+    pub scene_centre: [f32; 3],
     pub scene_radius: f32,
     pub exposure: f32,
 }
@@ -281,6 +282,7 @@ impl Default for Meta {
         Self {
             scene_radius: 100.0,
             exposure: 1.0,
+            scene_centre: [0.0; 3],
         }
     }
 }

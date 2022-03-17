@@ -971,10 +971,8 @@ fn light_to_bytes(light: &Light) -> Vec<u8> {
                 .collect::<Vec<_>>()
         }
         Light::Sun(l) => {
-            let pos: [f32; 3] = l.position.into();
             let dir: [f32; 3] = l.direction.into();
-            pos.into_iter()
-                .chain(dir)
+            dir.into_iter()
                 .flat_map(|x| x.to_le_bytes())
                 .collect::<Vec<_>>()
         }
@@ -1004,12 +1002,6 @@ fn bytes_to_light(data: &[u8]) -> Light {
             Light::new_omni(name, color, position)
         }
         1 => {
-            let position = Point3::new(
-                f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
-                f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
-                f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
-            );
-            index += 12;
             let direction = Vec3::new(
                 f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
                 f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
@@ -1017,16 +1009,20 @@ fn bytes_to_light(data: &[u8]) -> Light {
             );
             index += 12;
             let name = String::from_utf8(data[index..].to_vec()).unwrap();
-            Light::new_sun(name, color, position, direction)
+            Light::new_sun(name, color, direction)
         }
         _ => panic!(),
     }
 }
 
 /// Converts a Light to a vector of bytes.
-fn meta_to_bytes(meta: &Meta) -> [u8; 8] {
-    let mut retval = [0; 8];
+fn meta_to_bytes(meta: &Meta) -> [u8; 20] {
+    let mut retval = [0; 20];
     let mut index = 0;
+    retval[index..index + 4].copy_from_slice(&f32::to_le_bytes(meta.scene_centre[0]));
+    retval[index + 4..index + 8].copy_from_slice(&f32::to_le_bytes(meta.scene_centre[1]));
+    retval[index + 8..index + 12].copy_from_slice(&f32::to_le_bytes(meta.scene_centre[2]));
+    index += 12;
     retval[index..index + 4].copy_from_slice(&f32::to_le_bytes(meta.scene_radius));
     index += 4;
     retval[index..index + 4].copy_from_slice(&f32::to_le_bytes(meta.exposure));
@@ -1034,14 +1030,21 @@ fn meta_to_bytes(meta: &Meta) -> [u8; 8] {
 }
 
 /// Converts a vector of bytes to the Meta struct.
-fn bytes_to_meta(data: [u8; 8]) -> Meta {
+fn bytes_to_meta(data: [u8; 20]) -> Meta {
     let mut index = 0;
+    let scene_centre = [
+        f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
+        f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
+        f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
+    ];
+    index += 12;
     let scene_radius = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
     index += 4;
     let exposure = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
     Meta {
         scene_radius,
         exposure,
+        scene_centre,
     }
 }
 
@@ -1299,9 +1302,8 @@ mod tests {
                 let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
                 Light::new_omni(name, color, position)
             } else {
-                let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
                 let direction = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-                Light::new_sun(name, color, position, direction)
+                Light::new_sun(name, color, direction)
             };
             data.push(light);
         }
@@ -1310,11 +1312,13 @@ mod tests {
 
     fn gen_meta(seed: u64) -> Meta {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
+        let scene_centre = [rng.gen(), rng.gen(), rng.gen()];
         let scene_radius = rng.gen();
         let exposure = rng.gen_range(1E-3..1E3);
         Meta {
             scene_radius,
             exposure,
+            scene_centre,
         }
     }
 

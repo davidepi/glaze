@@ -709,7 +709,7 @@ fn window_lights(
                 .build(ui, || {
                     for light_type in LightType::all() {
                         if Selectable::new(light_type.name()).build(ui) {
-                            update_lights = true;
+                            updated_current = true;
                             new_type = light_type;
                         }
                     }
@@ -745,9 +745,6 @@ fn window_lights(
                     }
                 }
                 LightType::SUN => {
-                    if imgui::InputFloat3::new(ui, "Position", new_pos.as_mut()).build() {
-                        updated_current = true;
-                    }
                     if imgui::InputFloat3::new(ui, "Direction", new_dir.as_mut()).build() {
                         updated_current = true;
                     }
@@ -759,7 +756,7 @@ fn window_lights(
             } else if updated_current {
                 let new_light = match new_type {
                     LightType::OMNI => Light::new_omni(new_name, new_color, new_pos),
-                    LightType::SUN => Light::new_sun(new_name, new_color, new_pos, new_dir),
+                    LightType::SUN => Light::new_sun(new_name, new_color, new_dir),
                 };
                 update = Some((selected, new_light));
                 update_lights = true;

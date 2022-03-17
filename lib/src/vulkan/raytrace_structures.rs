@@ -7,6 +7,7 @@ pub struct RTFrameData {
     pub scene_radius: f32,
     pub exposure: f32,
     pub scene_size: [f32; 2],
+    pub center_and_bdpt_step: [f32; 4],
 }
 
 impl Default for RTFrameData {
@@ -16,8 +17,9 @@ impl Default for RTFrameData {
             lights_no: 0,
             scene_radius: 0.0,
             exposure: 1.0,
-            pixel_offset: [0.0, 0.0],
-            scene_size: [0.0, 0.0],
+            pixel_offset: [0.0; 2],
+            scene_size: [0.0; 2],
+            center_and_bdpt_step: [0.0; 4],
         }
     }
 }

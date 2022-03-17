@@ -286,6 +286,12 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             scene_radius: self.scene.meta.scene_radius,
             exposure: self.scene.meta.exposure,
             scene_size: [self.extent.width as f32, self.extent.height as f32],
+            center_and_bdpt_step: [
+                self.scene.meta.scene_centre[0],
+                self.scene.meta.scene_centre[1],
+                self.scene.meta.scene_centre[2],
+                self.bdpt_step as f32,
+            ],
         };
         update_frame_data(fd, &mut self.frame_data[frame_index]);
         let queue = device.compute_queue();

@@ -154,12 +154,13 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
             .collect();
         (vec![Transform::identity()], instances)
     };
-    let radius = calc_scene_radius(&vertices, &meshes, &instances, &transforms);
+    let (centre, radius) = calc_scene_centre_radius(&vertices, &meshes, &instances, &transforms);
     let camera_thread = thread::spawn(move || convert_cameras(&camera_data, camera_pb, radius));
     let cameras = camera_thread.join().unwrap();
     let meta = Meta {
         scene_radius: radius,
         exposure: 1.0,
+        scene_centre: centre.into(),
     };
     mpb.clear().ok();
     Ok(TempScene {
@@ -175,12 +176,12 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
     })
 }
 
-fn calc_scene_radius(
+fn calc_scene_centre_radius(
     verts: &[Vertex],
     meshes: &[Mesh],
     instns: &[MeshInstance],
     trans: &[Transform],
-) -> f32 {
+) -> (Point3<f32>, f32) {
     let mut pmin = Point3::new(f32::MAX, f32::MAX, f32::MAX);
     let mut pmax = Point3::new(f32::MIN, f32::MIN, f32::MIN);
     for instance in instns {
@@ -197,7 +198,7 @@ fn calc_scene_radius(
             pmax.z = f32::max(pmax.z, vert_world.z);
         }
     }
-    pmax.distance(pmin) / 2.0
+    (pmin + (pmax - pmin) * 0.5, pmax.distance(pmin) / 2.0)
 }
 
 fn russimp_to_cgmath_matrix(mat: russimp::Matrix4x4) -> Matrix4<f32> {
@@ -283,7 +284,6 @@ fn convert_lights(lights: &[russimp::light::Light], pb: ProgressBar) -> Vec<Ligh
             russimp::light::LightSourceType::Directional => Light::new_sun(
                 light.name.clone(),
                 spectrum,
-                russimp_vec_to_point(light.pos),
                 russimp_vec_to_vec(light.direction),
             ),
             // TODO: more gentle error handling
