@@ -28,18 +28,21 @@ impl LightType {
         }
     }
 
-    pub fn callable_shaders() -> [Vec<u8>; SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE] {
+    pub(crate) fn callable_shaders() -> [Vec<u8>; SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE] {
         [
             include_shader!("light_omni_sample_visible.rcall").to_vec(),
+            include_shader!("light_omni_gen_photon.rcall").to_vec(),
             include_shader!("light_sun_sample_visible.rcall").to_vec(),
+            include_shader!("light_sun_gen_photon.rcall").to_vec(),
         ]
     }
 
-    pub fn sbt_callable_index(self) -> u32 {
-        match self {
+    pub(crate) fn sbt_callable_index(&self) -> u32 {
+        let light_index = match self {
             LightType::OMNI => 0,
             LightType::SUN => 1,
-        }
+        };
+        (light_index * SBT_LIGHT_STRIDE) as u32
     }
 }
 

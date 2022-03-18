@@ -47,6 +47,18 @@ struct SampledLight
   uint light_index;
 };
 
+struct LightPhoton
+{
+  Spectrum emission;
+  vec3 origin;
+  float pdf_pos;
+  vec3 direction;
+  float pdf_dir;
+  vec3 normal;
+  uint light_id;
+  vec2 rand_sample;
+};
+
 struct BsdfValue
 {
   vec3 woW;

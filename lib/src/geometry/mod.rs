@@ -11,5 +11,5 @@ pub use self::spectrum::Spectrum;
 mod light;
 pub use self::light::{Light, LightType};
 
-pub(crate) const SBT_LIGHT_STRIDE: usize = 1;
+pub(crate) const SBT_LIGHT_STRIDE: usize = 2;
 pub(crate) const SBT_LIGHT_TYPES: usize = 2;

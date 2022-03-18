@@ -1,0 +1,27 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+#include "spectrum.glsl"
+#include "constants.glsl"
+#include "raytrace_structures.glsl"
+#include "raytrace_commons.glsl"
+
+layout(location = 0)  callableDataInEXT LightPhoton ph;
+
+layout(std430, set=1, binding=5) readonly buffer lightBuffer {
+  RTLight lights[];
+} LightBuffer;
+
+void main()
+{
+  RTLight light = LightBuffer.lights[ph.light_id];
+  float z = 1.0 - 2.0 * ph.rand_sample.x;
+  float r = sqrt(max(0.0, 1.0 - z * z));
+  float phi = 2.0 * PI * ph.rand_sample.y;
+  ph.origin = light.pos.xyz;
+  ph.direction = vec3(r * cos(phi), r * sin(phi), z);
+  ph.normal = ph.direction;
+  ph.pdf_pos = 1.0;
+  ph.pdf_dir = INV_4PI;
+  ph.emission = Spectrum(light.color0, light.color1, light.color2, light.color3);
+}

@@ -1,0 +1,39 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+#include "spectrum.glsl"
+#include "constants.glsl"
+#include "raytrace_structures.glsl"
+#include "raytrace_commons.glsl"
+
+layout(location = 0)  callableDataInEXT LightPhoton ph;
+
+layout(set=0, binding=0) uniform readonly frameData {
+  RTFrameData data;
+} FrameData;
+layout(std430, set=1, binding=5) readonly buffer lightBuffer {
+  RTLight lights[];
+} LightBuffer;
+
+void main()
+{
+  RTLight light = LightBuffer.lights[ph.light_id];
+  // create a coord system around the light direction (upwards)
+  vec3 v1 = -light.dir.xyz;
+  vec3 v2a = vec3(-v1.z, 0, v1.x)/sqrt(v1.x*v1.x+v1.z*v1.z);
+  vec3 v2b = vec3(0, v1.z, -v1.y)/sqrt(v1.y*v1.y+v1.z*v1.z);
+  vec3 v2 = mix(v2b, v2a, step(abs(v1.y), abs(v1.x)));
+  // sample a position in the disk with with the previous coordinate system
+  vec2 remap = 2.0 * ph.rand_sample - vec2(1.0);
+  vec2 xgy = vec2(remap.x, PI_OVER_4*remap.y/remap.x);
+  vec2 xly = vec2(remap.y, PI_OVER_2-PI_OVER_4*remap.x/remap.y);
+  vec2 disk_sample = mix(xly, xgy, step(abs(remap.y), abs(remap.x)));
+  vec3 disk_pos = FrameData.data.scene_radius*(v1*disk_sample.x+v2*disk_sample.y); // scale the disk, still positioned in 0,0,0
+  // generate the outgoing ray, by positioning in the world space
+  ph.origin = FrameData.data.center_and_bdpt_step.xyz*disk_pos+FrameData.data.scene_radius*-light.dir.xyz;
+  ph.direction = light.dir.xyz;
+  ph.normal = ph.direction;
+  ph.pdf_pos = 1.0/(PI*FrameData.data.scene_radius*FrameData.data.scene_radius);
+  ph.pdf_dir = 1.0;
+  ph.emission = Spectrum(light.color0, light.color1, light.color2, light.color3);
+}
