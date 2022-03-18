@@ -73,7 +73,7 @@ pub struct RTLight {
     pub shader: u32,
 }
 
-const BDPT_PATH_LEN: usize = 6;
+const BDPT_PATH_LEN: usize = 5;
 
 #[repr(C, align(16))]
 #[derive(Debug, Copy, Clone)]
@@ -95,4 +95,8 @@ pub struct BDPTPathVertex {
 pub struct BDPTPath {
     pub light: [BDPTPathVertex; BDPT_PATH_LEN],
     pub camera: [BDPTPathVertex; BDPT_PATH_LEN],
+    pub origin_light: [f32; 4],
+    pub origin_camera: [f32; 4],
+    pub last_wo_light: [f32; 4],
+    pub last_wo_camera: [f32; 4],
 }

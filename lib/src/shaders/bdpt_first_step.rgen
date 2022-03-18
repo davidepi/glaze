@@ -5,6 +5,7 @@
 #include "constants.glsl"
 #include "spectrum.glsl"
 #include "hit.glsl"
+#include "bdpt_utils.glsl"
 #include "raytrace_structures.glsl"
 #include "raytrace_commons.glsl"
 
@@ -54,6 +55,7 @@ void main()
     return;
   }
   uint path_id = uint(gl_LaunchIDEXT.y*gl_LaunchSizeEXT.x+gl_LaunchIDEXT.x);
+  uint rng = srand(vec3(FrameData.data.seed, gl_LaunchIDEXT.xy));
 
   /// CAMERA PATH ///
   const vec2 pixel = gl_LaunchIDEXT.xy + FrameData.data.pixel_offset;
@@ -63,10 +65,7 @@ void main()
   vec3 direction = ray_dir(ndc);
   traceRayEXT(scene, 0, 0xFF, 0, 0, 0, origin, 0.0001, direction, INFINITY, 0);
   BDPTPathVertex camera_vertex;
-  camera_vertex.distance = sh.distance;
-  camera_vertex.miss = sh.miss;
-  camera_vertex.attribs = sh.attribs;
-  camera_vertex.ids = sh.ids;
+  surface_hit_to_vertex(sh, camera_vertex);
   camera_vertex.pdf_fwd = 1.0;
   camera_vertex.color0 = vec4(1.0);
   camera_vertex.color1 = vec4(1.0);
@@ -74,7 +73,6 @@ void main()
   camera_vertex.color3 = vec4(1.0);
 
   /// LIGHT PATH ///
-  uint rng = srand(vec3(FrameData.data.seed, gl_LaunchIDEXT.xy));
   uint light_id = uint(min(rand(rng)*FrameData.data.lights_no, FrameData.data.lights_no-1));
   RTLight light = LightBuffer.lights[light_id];
   float light_pdf = 1.0/FrameData.data.lights_no;
@@ -86,10 +84,7 @@ void main()
   ph.emission = mul(ph.emission, weight);
   traceRayEXT(scene, 0, 0xFF, 0, 0, 0, ph.origin, 0.0001, ph.direction, INFINITY, 0);
   BDPTPathVertex light_vertex;
-  light_vertex.distance = sh.distance;
-  light_vertex.miss = sh.miss;
-  light_vertex.attribs = sh.attribs;
-  light_vertex.ids = sh.ids;
+  surface_hit_to_vertex(sh, light_vertex);
   light_vertex.pdf_fwd = ph.pdf_dir;
   light_vertex.color0 = ph.emission.col0;
   light_vertex.color1 = ph.emission.col1;
@@ -98,5 +93,9 @@ void main()
 
   /// SAVE RESULTS ///
   Bdpt.paths[path_id].camera[0] = camera_vertex;
+  Bdpt.paths[path_id].origin_camera = vec4(origin, 0.0);
+  Bdpt.paths[path_id].last_wo_camera = vec4(-direction, 0.0);
   Bdpt.paths[path_id].light[0] = light_vertex;
+  Bdpt.paths[path_id].origin_light = vec4(ph.origin, 0.0);
+  Bdpt.paths[path_id].last_wo_light = vec4(-ph.direction, 0.0);
 }

@@ -4,7 +4,7 @@
 #ifndef _RAYTRACE_STRUCTURES_GLSL_
 #define _RAYTRACE_STRUCTURES_GLSL_
 
-#define BDPT_PATH_LEN 6
+#define BDPT_PATH_LEN 5
 
 struct RTFrameData
 {
@@ -77,6 +77,10 @@ struct BDPTPath
 {
   BDPTPathVertex light[BDPT_PATH_LEN];
   BDPTPathVertex camera[BDPT_PATH_LEN];
+  vec4 origin_light;
+  vec4 origin_camera;
+  vec4 last_wo_light;
+  vec4 last_wo_camera;
 };
 
 #endif

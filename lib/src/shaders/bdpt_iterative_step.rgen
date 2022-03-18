@@ -1,0 +1,135 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier: require
+
+#include "random.glsl"
+#include "constants.glsl"
+#include "spectrum.glsl"
+#include "hit.glsl"
+#include "bdpt_utils.glsl"
+#include "raytrace_structures.glsl"
+#include "raytrace_commons.glsl"
+
+layout(location=0) rayPayloadEXT SurfaceHit sh;
+layout(location=1) callableDataEXT BsdfSampleValue bsdf;
+layout(location=2) callableDataEXT BsdfPdf bsdfpdf;
+
+layout(push_constant) uniform readonly pc {
+  mat4 camera2world;
+  mat4 screen2camera;
+} Camera;
+layout(set=0, binding=0) uniform readonly frameData {
+  RTFrameData data;
+} FrameData;
+layout(std430, set=0, binding=1) buffer bdpt {
+  BDPTPath paths[];
+} Bdpt;
+layout(set=1, binding=0) uniform accelerationStructureEXT scene;
+layout(std430, set=1, binding=1) readonly buffer vertexBuffer {
+  VertexPacked vertices[];
+} VertexBuffer;
+layout(std430, set=1, binding=2) readonly buffer indexBuffer {
+  Triangle indices[];
+} IndexBuffer;
+layout(std430, set=1, binding=4) readonly buffer materialBuffer {
+  RTMaterial materials[];
+} MaterialBuffer;
+layout(std430, set=1, binding=5) readonly buffer lightBuffer {
+  RTLight lights[];
+} LightBuffer;
+layout(set=1, binding=6) uniform sampler2D textures[];
+layout(set=1, binding=7) readonly buffer derivativeBuffer {
+  Derivatives d[];
+}DerivativeBuffer;
+
+float compute_pdf_bwd(in float pdf, in vec3 point, in BDPTPathVertex prev)
+{
+  RTMaterial prev_mat;
+  HitData prev_hit;
+  SurfaceHit prev_sh;
+  vertex_to_surface_hit(prev, prev_sh);
+  EXPAND_HIT(prev_sh, prev_hit, prev_mat);
+  vec3 w = prev_hit.point - point;
+  float inv_dist2 = 1.0/dot(w,w);
+  return pdf * abs(dot(prev_hit.geometric_normal, w * sqrt(inv_dist2))) * inv_dist2;
+}
+
+void main()
+{
+  if(FrameData.data.lights_no == 0)
+  {
+    return;
+  }
+  uint path_id = uint(gl_LaunchIDEXT.y*gl_LaunchSizeEXT.x+gl_LaunchIDEXT.x);
+  uint step_no = uint(FrameData.data.center_and_bdpt_step.w);
+  uint rng = srand(vec3(FrameData.data.seed, gl_LaunchIDEXT.xy));
+  RTMaterial mat;
+  HitData hit;
+  float weight;
+  float pdf_bwd;
+  Spectrum current;
+
+  /// CAMERA PATH ///
+  vertex_to_surface_hit(Bdpt.paths[path_id].camera[step_no-1], sh);
+  EXPAND_HIT(sh, hit, mat);
+  bsdf.woW = Bdpt.paths[path_id].last_wo_camera.xyz;
+  bsdf.uv = hit.uv;
+  bsdf.geometric_normal = hit.geometric_normal;
+  bsdf.rand_sample = rand3(rng);
+  bsdf.shading = new_shading_space(hit.dpdu, hit.shading_normal);
+  bsdf.material_index = sh.ids.y;
+  bsdfpdf.material_index = bsdf.material_index;
+  bsdfpdf.uv = bsdf.uv;
+  bsdfpdf.woW = bsdf.woW;
+  bsdfpdf.shading = bsdf.shading;
+  executeCallableEXT(mat.bsdf_index+1, 1);
+  bsdfpdf.wiW = bsdf.wiW;
+  executeCallableEXT(mat.bsdf_index+2, 2);
+  weight = abs(dot(bsdf.wiW, hit.shading_normal))/bsdf.pdf;
+  current.col0 = Bdpt.paths[path_id].camera[step_no-1].color0;
+  current.col1 = Bdpt.paths[path_id].camera[step_no-1].color1;
+  current.col2 = Bdpt.paths[path_id].camera[step_no-1].color2;
+  current.col3 = Bdpt.paths[path_id].camera[step_no-1].color3;
+  current = mul(current, mul(bsdf.value, weight));
+  pdf_bwd = compute_pdf_bwd(bsdfpdf.pdf, hit.point, Bdpt.paths[path_id].camera[step_no-1]);
+  Bdpt.paths[path_id].camera[step_no].color0 = current.col0;
+  Bdpt.paths[path_id].camera[step_no].color1 = current.col1;
+  Bdpt.paths[path_id].camera[step_no].color2 = current.col2;
+  Bdpt.paths[path_id].camera[step_no].color3 = current.col3;
+  Bdpt.paths[path_id].camera[step_no].pdf_fwd = bsdf.pdf;
+  Bdpt.paths[path_id].camera[step_no-1].pdf_bwd = pdf_bwd;
+  Bdpt.paths[path_id].last_wo_camera = vec4(-bsdf.wiW, 0.0);
+  traceRayEXT(scene, 0, 0xFF, 0, 0, 0, hit.point, 0.0001, bsdf.wiW, INFINITY, 0);
+
+  /// LIGHT PATH ///
+  vertex_to_surface_hit(Bdpt.paths[path_id].light[step_no-1], sh);
+  EXPAND_HIT(sh, hit, mat);
+  bsdf.woW = Bdpt.paths[path_id].last_wo_light.xyz;
+  bsdf.uv = hit.uv;
+  bsdf.geometric_normal = hit.geometric_normal;
+  bsdf.rand_sample = rand3(rng);
+  bsdf.shading = new_shading_space(hit.dpdu, hit.shading_normal);
+  bsdf.material_index = sh.ids.y;
+  bsdfpdf.material_index = bsdf.material_index;
+  bsdfpdf.uv = bsdf.uv;
+  bsdfpdf.woW = bsdf.woW;
+  bsdfpdf.shading = bsdf.shading;
+  executeCallableEXT(mat.bsdf_index+1, 1);
+  bsdfpdf.wiW = bsdf.wiW;
+  executeCallableEXT(mat.bsdf_index+2, 2);
+  weight = abs(dot(bsdf.wiW, hit.shading_normal))/bsdf.pdf;
+  current.col0 = Bdpt.paths[path_id].light[step_no-1].color0;
+  current.col1 = Bdpt.paths[path_id].light[step_no-1].color1;
+  current.col2 = Bdpt.paths[path_id].light[step_no-1].color2;
+  current.col3 = Bdpt.paths[path_id].light[step_no-1].color3;
+  current = mul(current, mul(bsdf.value, weight));
+  pdf_bwd = compute_pdf_bwd(bsdfpdf.pdf, hit.point, Bdpt.paths[path_id].light[step_no-1]);
+  Bdpt.paths[path_id].light[step_no].color0 = current.col0;
+  Bdpt.paths[path_id].light[step_no].color1 = current.col1;
+  Bdpt.paths[path_id].light[step_no].color2 = current.col2;
+  Bdpt.paths[path_id].light[step_no].color3 = current.col3;
+  Bdpt.paths[path_id].light[step_no].pdf_fwd = bsdf.pdf;
+  Bdpt.paths[path_id].light[step_no-1].pdf_bwd = pdf_bwd;
+  Bdpt.paths[path_id].last_wo_light = vec4(-bsdf.wiW, 0.0);
+  traceRayEXT(scene, 0, 0xFF, 0, 0, 0, hit.point, 0.0001, bsdf.wiW, INFINITY, 0);
+}
