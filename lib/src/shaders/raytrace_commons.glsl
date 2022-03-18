@@ -85,4 +85,14 @@ struct BsdfSampleValue
   float pdf;
 };
 
+struct BsdfPdf
+{
+  ShadingSpace shading;
+  vec3 woW;
+  float pdf;
+  vec3 wiW;
+  uint material_index;
+  vec2 uv;
+};
+
 #endif

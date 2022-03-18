@@ -32,9 +32,7 @@ void main()
   float costwi = abs(wi.z);
   // ensures the vectors are all in the same hemisphere.
   bool same_hemi = wo.z*wi.z > 0.0;
-  // additional degenerate cases
-  bool degenerate = costwo==0.0 || costwi==0.0 || wh==vec3(0.0);
-  if(same_hemi && !degenerate) // can't use a step function due to NaNs propagation
+  if(same_hemi) // can't use a step function due to NaNs propagation
   {
     float d = ggx_d(wh, a);
     float g = ggx_g(wo, wi, a);

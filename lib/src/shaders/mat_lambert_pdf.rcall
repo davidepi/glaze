@@ -1,0 +1,16 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+
+#include "constants.glsl"
+#include "shading_space.glsl"
+#include "raytrace_commons.glsl"
+
+layout(location = 0) callableDataInEXT BsdfPdf bsdf;
+
+void main()
+{
+  vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
+  vec3 wi = to_shading_space(bsdf.wiW, bsdf.shading);
+  float same_hemisphere = step(0.0, wo.z*wi.z);
+  bsdf.pdf = same_hemisphere*abs(wi.z)*INV_PI;
+}

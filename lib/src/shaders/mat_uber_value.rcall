@@ -19,13 +19,12 @@ layout(set=1, binding=6) uniform sampler2D textures[];
 
 void main()
 {
-  float same_hemisphere = dot(bsdf.geometric_normal, bsdf.wiW)*dot(bsdf.geometric_normal, bsdf.woW);
-  float same_hemi_or_zero = step(0.0, same_hemisphere);
   vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
   vec3 wi = to_shading_space(bsdf.wiW, bsdf.shading);
   RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
   float sampled_roughness = texture(textures[nonuniformEXT(mat.roughness)], bsdf.uv).r;
   float roughness = sampled_roughness*mat.roughness_mul;
+  float same_hemi = step(0.0, wo.z*wi.z);
   if(bsdf.rand_sample < 0.5)
   {
     // sample specular component
@@ -52,11 +51,11 @@ void main()
     float pdf = ggx_pdf(d, a, wo, wh)/(4.0*dotwowh);
     float term_reflective = d*g/(4.0*costwo*costwi);
     bsdf.value = mul(f, term_reflective);
-    bsdf.pdf = CHECKNAN(same_hemi_or_zero*0.5*pdf);
+    bsdf.pdf = CHECKNAN(same_hemi*0.5*pdf);
   }
   else
   {
-    // sample diffuse component
+    // sample diffuse component (oren-nayar)
     vec3 sampled_texel = texture(textures[nonuniformEXT(mat.diffuse)], bsdf.uv).rgb;
     vec3 diffuse_mul = mat.diffuse_mul.xyz;
     float sigma = roughness*0.5; // remap ggx roughness to oren nayar roughness https://www.gdcvault.com/play/1024478/PBR-Diffuse-Lighting-for-GGX
@@ -75,6 +74,6 @@ void main()
     float tanbeta = mix(sinti/abs(wi.z),sinto/abs(wo.z), dotwi_g_dotwo);
     float term = INV_PI*(A+B*maxcos*sinalpha*tanbeta);
     bsdf.value = from_surface_color(sampled_texel*diffuse_mul*term);
-    bsdf.pdf = same_hemi_or_zero * 0.5 * abs(wi.z) * INV_PI;
+    bsdf.pdf = CHECKNAN(same_hemi * 0.5 * abs(wi.z) * INV_PI);
   }
 }

@@ -3,7 +3,7 @@
 
 #include "raytrace_commons.glsl"
 
-layout(location = 0) callableDataInEXT BsdfValue bsdf;
+layout(location = 0) callableDataInEXT BsdfPdf bsdf;
 
 void main()
 {
