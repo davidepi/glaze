@@ -1,6 +1,6 @@
 use cgmath::Point3;
 use glaze::{
-    parse, Camera, ColorRGB, Light, LightType, Metal, OrthographicCam, PerspectiveCam,
+    parse, Camera, ColorRGB, Integrator, Light, LightType, Metal, OrthographicCam, PerspectiveCam,
     PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer, ShaderMat, Spectrum,
     TextureFormat, VulkanScene,
 };
@@ -105,6 +105,15 @@ pub fn draw_ui(
         ui.menu("Rendering", || {
             if renderer.instance().supports_raytrace() {
                 ui.checkbox("Realtime raytracing", &mut state.use_raytracer);
+                ui.menu("Integrator", || {
+                    for integrator in Integrator::values() {
+                        if imgui::MenuItem::new(integrator.name()).build(ui) {
+                            if let Some(raytracer) = raytracer {
+                                raytracer.set_integrator(integrator);
+                            }
+                        }
+                    }
+                });
             }
         });
         ui.menu("Window", || {

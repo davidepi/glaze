@@ -112,55 +112,12 @@ void main()
   vec3 origin = ray_origin();
   vec3 direction = ray_dir(ndc);
   vec4 cumulative_val = imageLoad(accumulate_image, ivec2(gl_LaunchIDEXT.xy));
-  Spectrum power = SPECTRUM_ONE;
-  Spectrum L = SPECTRUM_ZERO;
-  float rrprob = 1.0;
-  for(int i=0; i<5; i++)
-  {
-    traceRayEXT(scene, 0, 0xFF, 0, 0, 0, origin, 0.0001, direction, INFINITY, 0);
-    if (sh.miss)
-    {
-      break;
-    }
-    HitData hit;
-    RTMaterial material;
-    EXPAND_HIT(sh, hit, material);
-    vec3 woW = -direction;
-    ShadingSpace matrix = new_shading_space(hit.dpdu, hit.shading_normal);
-    if(material.is_specular==0)
-    {
-      Spectrum direct = direct_light(rng, woW, hit, matrix, material);
-      L = add(L, mul(direct, power));
-    }
-    if(i>3)
-    {
-      float term = min(luminance(power), 0.5);
-      if(rand(rng) < term || i==4) // don't sample next direction if it's the last iteration
-      {
-        break;
-      }
-      else
-      {
-        rrprob = term;
-      }
-    }
-    bsdfsampleval.uv = hit.uv;
-    bsdfsampleval.woW = woW;
-    bsdfsampleval.geometric_normal = hit.geometric_normal;
-    bsdfsampleval.rand_sample = rand3(rng);
-    bsdfsampleval.shading = matrix;
-    bsdfsampleval.material_index = sh.ids.y;
-    executeCallableEXT(material.bsdf_index+1, 4);
-    if(bsdfsampleval.pdf == 0.0 || is_black(bsdfsampleval.value))
-    {
-      break;
-    }
-    float adot = abs(dot(bsdfsampleval.wiW, hit.shading_normal));
-    float inv = adot/bsdfsampleval.pdf*rrprob;
-    power = mul(power, mul(bsdfsampleval.value, inv));
-    origin = hit.point;
-    direction = bsdfsampleval.wiW;
-  }
+  traceRayEXT(scene, 0, 0xFF, 0, 0, 0, origin, 0.0001, direction, INFINITY, 0);
+  HitData hit;
+  RTMaterial material;
+  EXPAND_HIT(sh, hit, material);
+  ShadingSpace matrix = new_shading_space(hit.dpdu, hit.shading_normal);
+  Spectrum L = direct_light(rng, -direction, hit, matrix, material);
   cumulative_val.xyz += xyz(L);
   cumulative_val.w += 1.0;
   vec3 rgb = rgb(vec3(cumulative_val.xyz*FrameData.data.exposure/cumulative_val.w));

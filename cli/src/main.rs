@@ -1,10 +1,25 @@
-use clap::Parser;
+use clap::{ArgEnum, Parser};
 use console::style;
-use glaze::{parse, RayTraceInstance, RayTraceRenderer, RayTraceScene};
+use glaze::{parse, Integrator, RayTraceInstance, RayTraceRenderer, RayTraceScene};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum)]
+enum ArgIntegrator {
+    Direct,
+    Pt,
+}
+
+impl From<ArgIntegrator> for Integrator {
+    fn from(arg: ArgIntegrator) -> Self {
+        match arg {
+            ArgIntegrator::Direct => Integrator::DIRECT,
+            ArgIntegrator::Pt => Integrator::PATH_TRACE,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -19,6 +34,8 @@ struct Args {
     /// Samples per pixel.
     #[clap(short, long, default_value = "256")]
     spp: usize,
+    #[clap(arg_enum, short, long, default_value = "pt")]
+    integrator: ArgIntegrator,
 }
 
 fn main() {
@@ -74,6 +91,7 @@ fn main() {
                 let scene = RayTraceScene::<RayTraceInstance>::new(Arc::clone(&instance), parsed);
                 let mut renderer =
                     RayTraceRenderer::<RayTraceInstance>::new(instance, Some(scene), width, height);
+                renderer.set_integrator(args.integrator.into());
                 let setup_end = Instant::now();
                 pb.finish_with_message(format!(
                     "{}{} ({} ms)",

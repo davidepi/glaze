@@ -25,6 +25,32 @@ use std::iter::repeat;
 use std::ptr;
 use std::sync::Arc;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
+pub enum Integrator {
+    DIRECT,
+    PATH_TRACE,
+}
+
+impl Integrator {
+    pub fn values() -> [Integrator; 2] {
+        [Integrator::DIRECT, Integrator::PATH_TRACE]
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Integrator::DIRECT => "Direct light only",
+            Integrator::PATH_TRACE => "Path tracing",
+        }
+    }
+}
+
+impl Default for Integrator {
+    fn default() -> Self {
+        Self::PATH_TRACE
+    }
+}
+
 struct ShaderBindingTable {
     rgen_addr: vk::StridedDeviceAddressRegionKHR,
     miss_addr: vk::StridedDeviceAddressRegionKHR,
@@ -41,6 +67,7 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     cumulative_img: AllocatedImage,
     out32_img: AllocatedImage,
     out8_img: AllocatedImage,
+    integrator: Integrator,
     bdpt_buffer: AllocatedBuffer,
     bdpt_step: u8,
     sample_scheduler: WorkScheduler,
@@ -73,12 +100,42 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         init_rt(instance, scene, extent)
     }
 
+    /// Waits until all the queued frames have been rendered.
+    pub fn wait_idle(&self) {
+        unsafe { self.instance.device().logical().device_wait_idle() }.expect("Failed to wait idle")
+    }
+
     pub fn set_exposure(&mut self, exposure: f32) {
         if exposure >= 0.0 {
             // the higher the value, the brighter the image.
             self.scene.meta.exposure = exposure;
         }
         // no need to restart the frame, as only the weight for each sample is affected.
+    }
+
+    pub fn set_integrator(&mut self, integrator: Integrator) {
+        self.wait_idle();
+        let instance = &self.instance;
+        let device = instance.device();
+        let mut unf = UnfinishedExecutions::new(device);
+        let pipeline = build_raytracing_pipeline(
+            &self.rploader,
+            device.logical_clone(),
+            &[self.frame_desc[0].layout, self.scene.descriptor.layout],
+            integrator,
+        );
+        let sbt = build_sbt(
+            instance.as_ref(),
+            &self.rploader,
+            &mut self.tcmdm,
+            &pipeline,
+            &mut unf,
+        );
+        unf.wait_completion();
+        self.pipeline = pipeline;
+        self.sbt = sbt;
+        self.integrator = integrator;
+        self.request_new_frame = true;
     }
 
     pub fn change_scene(&mut self, scene: RayTraceScene<T>) {
@@ -89,6 +146,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             &self.rploader,
             device.logical_clone(),
             &[self.frame_desc[0].layout, scene.descriptor.layout],
+            self.integrator,
         );
         let sbt = build_sbt(
             instance.as_ref(),
@@ -535,10 +593,12 @@ fn init_rt<T: Instance + Send + Sync>(
         &cumulative_img,
         &out32_img,
     );
+    let integrator = Integrator::default();
     let pipeline = build_raytracing_pipeline(
         &rploader,
         device.logical_clone(),
         &[frame_desc[0].layout, scene.descriptor.layout],
+        integrator,
     );
     let sbt = build_sbt(
         instance.as_ref(),
@@ -557,6 +617,9 @@ fn init_rt<T: Instance + Send + Sync>(
         cumulative_img,
         out32_img,
         out8_img,
+        integrator,
+        bdpt_buffer,
+        bdpt_step: 0,
         sample_scheduler,
         request_new_frame: true,
         frame_desc,
@@ -568,8 +631,6 @@ fn init_rt<T: Instance + Send + Sync>(
         ccmdm,
         rploader,
         instance,
-        bdpt_buffer,
-        bdpt_step: 0,
     }
 }
 

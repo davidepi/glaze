@@ -1,5 +1,5 @@
 use crate::geometry::Vertex;
-use crate::{include_shader, LightType, ShaderMat};
+use crate::{include_shader, Integrator, LightType, ShaderMat};
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
 use cgmath::Matrix4;
@@ -390,8 +390,12 @@ pub fn build_raytracing_pipeline(
     loader: &RTPipelineLoader,
     device: Arc<ash::Device>,
     set_layout: &[vk::DescriptorSetLayout],
+    integrator: Integrator,
 ) -> Pipeline {
-    let rgen = include_shader!("path_trace.rgen");
+    let rgen = match integrator {
+        Integrator::DIRECT => include_shader!("direct.rgen").to_vec(),
+        Integrator::PATH_TRACE => include_shader!("path_trace.rgen").to_vec(),
+    };
     let miss = include_shader!("raytrace_miss.rmiss");
     let miss_shadow = include_shader!("occlusion_tester.rmiss");
     let main_cstr = CString::new("main".as_bytes()).unwrap();
@@ -408,7 +412,7 @@ pub fn build_raytracing_pipeline(
     // raygen is always index 0
     // miss is always index 1 (direct rays) and 2 (shadow rays)
     let mut shader_stages = vec![
-        create_ci(rgen, vk::ShaderStageFlags::RAYGEN_KHR),
+        create_ci(&rgen, vk::ShaderStageFlags::RAYGEN_KHR),
         create_ci(miss, vk::ShaderStageFlags::MISS_KHR),
         create_ci(miss_shadow, vk::ShaderStageFlags::MISS_KHR),
     ];
