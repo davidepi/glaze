@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 enum ArgIntegrator {
     Direct,
     Pt,
+    Bdpt,
 }
 
 impl From<ArgIntegrator> for Integrator {
@@ -17,6 +18,7 @@ impl From<ArgIntegrator> for Integrator {
         match arg {
             ArgIntegrator::Direct => Integrator::DIRECT,
             ArgIntegrator::Pt => Integrator::PATH_TRACE,
+            ArgIntegrator::Bdpt => Integrator::BDPT,
         }
     }
 }

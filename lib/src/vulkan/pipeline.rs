@@ -386,16 +386,13 @@ pub fn build_compute_pipeline(
     }
 }
 
+// bdpt requires 3 different pipelines
 pub fn build_raytracing_pipeline(
     loader: &RTPipelineLoader,
     device: Arc<ash::Device>,
     set_layout: &[vk::DescriptorSetLayout],
     integrator: Integrator,
 ) -> Pipeline {
-    let rgen = match integrator {
-        Integrator::DIRECT => include_shader!("direct.rgen").to_vec(),
-        Integrator::PATH_TRACE => include_shader!("path_trace.rgen").to_vec(),
-    };
     let miss = include_shader!("raytrace_miss.rmiss");
     let miss_shadow = include_shader!("occlusion_tester.rmiss");
     let main_cstr = CString::new("main".as_bytes()).unwrap();
@@ -410,12 +407,41 @@ pub fn build_raytracing_pipeline(
             p_specialization_info: ptr::null(),
         };
     // raygen is always index 0
-    // miss is always index 1 (direct rays) and 2 (shadow rays)
-    let mut shader_stages = vec![
-        create_ci(&rgen, vk::ShaderStageFlags::RAYGEN_KHR),
-        create_ci(miss, vk::ShaderStageFlags::MISS_KHR),
-        create_ci(miss_shadow, vk::ShaderStageFlags::MISS_KHR),
-    ];
+    // miss is index 1 (direct rays) and 2 (shadow rays) when not bdpt, 3 and 4 otherwise
+    let mut shader_stages = match integrator {
+        Integrator::BDPT => vec![
+            create_ci(
+                include_shader!("bdpt_first_step.rgen"),
+                vk::ShaderStageFlags::RAYGEN_KHR,
+            ),
+            create_ci(
+                include_shader!("bdpt_iterative_step.rgen"),
+                vk::ShaderStageFlags::RAYGEN_KHR,
+            ),
+            create_ci(
+                include_shader!("bdpt_connect.rgen"),
+                vk::ShaderStageFlags::RAYGEN_KHR,
+            ),
+            create_ci(miss, vk::ShaderStageFlags::MISS_KHR),
+            create_ci(miss_shadow, vk::ShaderStageFlags::MISS_KHR),
+        ],
+        Integrator::PATH_TRACE => vec![
+            create_ci(
+                include_shader!("path_trace.rgen"),
+                vk::ShaderStageFlags::RAYGEN_KHR,
+            ),
+            create_ci(miss, vk::ShaderStageFlags::MISS_KHR),
+            create_ci(miss_shadow, vk::ShaderStageFlags::MISS_KHR),
+        ],
+        Integrator::DIRECT => vec![
+            create_ci(
+                include_shader!("direct.rgen"),
+                vk::ShaderStageFlags::RAYGEN_KHR,
+            ),
+            create_ci(miss, vk::ShaderStageFlags::MISS_KHR),
+            create_ci(miss_shadow, vk::ShaderStageFlags::MISS_KHR),
+        ],
+    };
     let mut shader_groups = vec![
         vk::RayTracingShaderGroupCreateInfoKHR {
             s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,

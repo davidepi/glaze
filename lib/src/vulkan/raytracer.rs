@@ -2,7 +2,7 @@ use super::cmd::CommandManager;
 use super::descriptor::DescriptorSetManager;
 use super::instance::Instance;
 use super::memory::AllocatedBuffer;
-use super::raytrace_structures::{BDPTPath, RTFrameData};
+use super::raytrace_structures::{BDPTPath, RTFrameData, BDPT_PATH_LEN};
 use super::scene::{padding, RayTraceScene};
 use super::sync::{create_fence, create_semaphore};
 use super::{export, AllocatedImage, Descriptor, UnfinishedExecutions};
@@ -30,17 +30,19 @@ use std::sync::Arc;
 pub enum Integrator {
     DIRECT,
     PATH_TRACE,
+    BDPT,
 }
 
 impl Integrator {
-    pub fn values() -> [Integrator; 2] {
-        [Integrator::DIRECT, Integrator::PATH_TRACE]
+    pub fn values() -> [Integrator; 3] {
+        [Integrator::DIRECT, Integrator::PATH_TRACE, Integrator::BDPT]
     }
 
     pub fn name(&self) -> &'static str {
         match self {
             Integrator::DIRECT => "Direct light only",
             Integrator::PATH_TRACE => "Path tracing",
+            Integrator::BDPT => "Bidirectional Path Tracing",
         }
     }
 }
@@ -52,11 +54,37 @@ impl Default for Integrator {
 }
 
 struct ShaderBindingTable {
-    rgen_addr: vk::StridedDeviceAddressRegionKHR,
+    rgen_addrs: Vec<vk::StridedDeviceAddressRegionKHR>,
     miss_addr: vk::StridedDeviceAddressRegionKHR,
     hit_addr: vk::StridedDeviceAddressRegionKHR,
     call_addr: vk::StridedDeviceAddressRegionKHR,
     _buffer: AllocatedBuffer,
+}
+
+struct BdptState {
+    tracing: bool,
+    state: usize,
+}
+
+impl BdptState {
+    fn advance(&mut self) {
+        self.state += 1;
+        if (self.tracing && self.state == BDPT_PATH_LEN)
+            || (!self.tracing && self.state == BDPT_PATH_LEN * BDPT_PATH_LEN)
+        {
+            self.tracing = !self.tracing;
+            self.state = 0;
+        }
+    }
+}
+
+impl Default for BdptState {
+    fn default() -> Self {
+        Self {
+            tracing: true,
+            state: 0,
+        }
+    }
 }
 
 pub struct RayTraceRenderer<T: Instance + Send + Sync> {
@@ -69,7 +97,7 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     out8_img: AllocatedImage,
     integrator: Integrator,
     bdpt_buffer: AllocatedBuffer,
-    bdpt_step: u8,
+    bdpt_step: BdptState,
     sample_scheduler: WorkScheduler,
     request_new_frame: bool,
     // contains also the out_img
@@ -129,6 +157,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             &self.rploader,
             &mut self.tcmdm,
             &pipeline,
+            integrator,
             &mut unf,
         );
         unf.wait_completion();
@@ -153,6 +182,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             &self.rploader,
             &mut self.tcmdm,
             &pipeline,
+            self.integrator,
             &mut unf,
         );
         self.scene = scene;
@@ -336,6 +366,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         let frame_index = frame_no % self.frame_desc.len();
         if self.request_new_frame {
             self.sample_scheduler.rewind();
+            self.bdpt_step = Default::default();
         }
         let fd = RTFrameData {
             seed: self.rng.gen(),
@@ -348,10 +379,20 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                 self.scene.meta.scene_centre[0],
                 self.scene.meta.scene_centre[1],
                 self.scene.meta.scene_centre[2],
-                self.bdpt_step as f32,
+                self.bdpt_step.state as f32,
             ],
         };
+        let which_raygen = if self.integrator != Integrator::BDPT
+            || (self.bdpt_step.tracing && self.bdpt_step.state == 0)
+        {
+            0
+        } else if self.bdpt_step.tracing {
+            1
+        } else {
+            2
+        };
         update_frame_data(fd, &mut self.frame_data[frame_index]);
+        self.bdpt_step.advance();
         let queue = device.compute_queue();
         unsafe {
             vkdevice
@@ -392,7 +433,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             );
             self.rploader.cmd_trace_rays(
                 cmd,
-                &self.sbt.rgen_addr,
+                &self.sbt.rgen_addrs[which_raygen],
                 &self.sbt.miss_addr,
                 &self.sbt.hit_addr,
                 &self.sbt.call_addr,
@@ -605,6 +646,7 @@ fn init_rt<T: Instance + Send + Sync>(
         &rploader,
         &mut tcmdm,
         &pipeline,
+        integrator,
         &mut unf,
     );
     let rng = Xoshiro128PlusPlus::from_entropy();
@@ -619,7 +661,7 @@ fn init_rt<T: Instance + Send + Sync>(
         out8_img,
         integrator,
         bdpt_buffer,
-        bdpt_step: 0,
+        bdpt_step: Default::default(),
         sample_scheduler,
         request_new_frame: true,
         frame_desc,
@@ -745,6 +787,7 @@ fn build_sbt<T: Instance>(
     rploader: &RTPipelineLoader,
     tcmdm: &mut CommandManager,
     pipeline: &Pipeline,
+    integrator: Integrator,
     unf: &mut UnfinishedExecutions,
 ) -> ShaderBindingTable {
     let device = instance.device();
@@ -755,33 +798,50 @@ fn build_sbt<T: Instance>(
     let size_handle = properties.shader_group_handle_size as u64;
     let size_handle_aligned = roundup_alignment(size_handle, align_handle);
     let mut data = Vec::new();
+    let mut group_index = 0;
 
     // load single raygen group
-    let rgen_group = unsafe {
-        rploader.get_ray_tracing_shader_group_handles(pipeline.pipeline, 0, 1, size_handle as usize)
+    let group_count = match integrator {
+        Integrator::DIRECT | Integrator::PATH_TRACE => 1,
+        Integrator::BDPT => 3,
+    };
+    let rgen_groups = unsafe {
+        rploader.get_ray_tracing_shader_group_handles(
+            pipeline.pipeline,
+            group_index,
+            group_count,
+            group_count as usize * size_handle as usize,
+        )
     }
     .expect("Failed to retrieve shader handle");
-    data.extend_from_slice(&rgen_group);
-    let missing_bytes = padding(data.len() as u64, align_group) as usize;
-    data.extend(repeat(0).take(missing_bytes));
-    // in the NVIDIA example it's written that stride and size for rgen must be the same
-    let mut rgen_addr = vk::StridedDeviceAddressRegionKHR {
-        device_address: 0,
-        stride: roundup_alignment(align_handle, align_group),
-        size: roundup_alignment(align_handle, align_group),
-    };
-
+    group_index += group_count;
+    let mut rgen_addrs = Vec::with_capacity(group_count as usize);
+    for rgen_group in rgen_groups.chunks_exact(size_handle as usize) {
+        rgen_addrs.push(
+            // in the NVIDIA example it's written that stride and size for rgen must be the same
+            vk::StridedDeviceAddressRegionKHR {
+                device_address: data.len() as u64,
+                stride: roundup_alignment(align_handle, align_group),
+                size: roundup_alignment(align_handle, align_group),
+            },
+        );
+        data.extend_from_slice(rgen_group);
+        //slightly different from the miss/hit/callable: each rgen is treated as a single group
+        let missing_bytes = padding(data.len() as u64, align_group) as usize;
+        data.extend(repeat(0).take(missing_bytes));
+    }
     // load two miss groups: normal ray and shadow ray miss
     let miss_offset = data.len() as u64;
     let miss_groups = unsafe {
         rploader.get_ray_tracing_shader_group_handles(
             pipeline.pipeline,
-            1,
+            group_index,
             2,
             2 * size_handle as usize,
         )
     }
     .expect("Failed to retrieve shader handle");
+    group_index += 2;
     for miss_group in miss_groups.chunks_exact(size_handle as usize) {
         data.extend_from_slice(miss_group);
         // ensures every member is aligned properly
@@ -803,12 +863,13 @@ fn build_sbt<T: Instance>(
     let shader_group = unsafe {
         rploader.get_ray_tracing_shader_group_handles(
             pipeline.pipeline,
-            3,
+            group_index,
             1,
-            2 * size_handle as usize,
+            2 * size_handle as usize, // 1 group but has 2 shaders
         )
     }
     .expect("Failed to retrieve shader handle");
+    group_index += 1;
     for hit in shader_group.chunks_exact(size_handle as usize) {
         data.extend_from_slice(hit);
         if align_handle != size_handle as u64 {
@@ -826,12 +887,11 @@ fn build_sbt<T: Instance>(
 
     // load multiple callables. Retrieve them all at once
     let call_offset = data.len() as u64;
-    let callables_base_index = 4;
     let total_call = SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE + SBT_MATERIAL_TYPES * SBT_MATERIAL_STRIDE;
     let callables_group = unsafe {
         rploader.get_ray_tracing_shader_group_handles(
             pipeline.pipeline,
-            callables_base_index,
+            group_index,
             total_call as u32,
             total_call * size_handle as usize,
         )
@@ -896,12 +956,14 @@ fn build_sbt<T: Instance>(
         buffer: gpu_buf.buffer,
     };
     let base_addr = unsafe { device.logical().get_buffer_device_address(&sbt_addr_info) };
-    rgen_addr.device_address += base_addr;
+    for rgen_addr in &mut rgen_addrs {
+        rgen_addr.device_address += base_addr;
+    }
     miss_addr.device_address += base_addr;
     hit_addr.device_address += base_addr;
     call_addr.device_address += base_addr;
     ShaderBindingTable {
-        rgen_addr,
+        rgen_addrs,
         miss_addr,
         hit_addr,
         call_addr,

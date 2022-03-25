@@ -73,7 +73,7 @@ pub struct RTLight {
     pub shader: u32,
 }
 
-const BDPT_PATH_LEN: usize = 5;
+pub const BDPT_PATH_LEN: usize = 5;
 
 #[repr(C, align(16))]
 #[derive(Debug, Copy, Clone)]
