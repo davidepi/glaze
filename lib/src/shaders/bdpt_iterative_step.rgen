@@ -78,12 +78,13 @@ void main()
   bsdf.rand_sample = rand3(rng);
   bsdf.shading = new_shading_space(hit.dpdu, hit.shading_normal);
   bsdf.material_index = sh.ids.y;
+  executeCallableEXT(mat.bsdf_index+1, 1);
   bsdfpdf.material_index = bsdf.material_index;
   bsdfpdf.uv = bsdf.uv;
-  bsdfpdf.woW = bsdf.woW;
   bsdfpdf.shading = bsdf.shading;
-  executeCallableEXT(mat.bsdf_index+1, 1);
-  bsdfpdf.wiW = bsdf.wiW;
+  bsdfpdf.wiW = bsdf.woW; //inverted because it's the reverse pdf
+  bsdfpdf.woW = bsdf.wiW;
+  executeCallableEXT(mat.bsdf_index+2, 2);
   executeCallableEXT(mat.bsdf_index+2, 2);
   weight = abs(dot(bsdf.wiW, hit.shading_normal))/bsdf.pdf;
   current.col0 = Bdpt.paths[path_id].camera[step_no-1].color0;
@@ -100,6 +101,11 @@ void main()
   Bdpt.paths[path_id].camera[step_no-1].pdf_bwd = pdf_bwd;
   Bdpt.paths[path_id].last_wo_camera = vec4(-bsdf.wiW, 0.0);
   traceRayEXT(scene, 0, 0xFF, 0, 0, 0, hit.point, 0.0001, bsdf.wiW, INFINITY, 0);
+  surface_hit_to_vertex(sh, Bdpt.paths[path_id].camera[step_no]);
+  //propagate miss (thank you &= for not working)
+  Bdpt.paths[path_id].camera[step_no].miss =
+                          Bdpt.paths[path_id].camera[step_no].miss &&
+                          Bdpt.paths[path_id].camera[step_no-1].miss;
 
   /// LIGHT PATH ///
   vertex_to_surface_hit(Bdpt.paths[path_id].light[step_no-1], sh);
@@ -110,12 +116,12 @@ void main()
   bsdf.rand_sample = rand3(rng);
   bsdf.shading = new_shading_space(hit.dpdu, hit.shading_normal);
   bsdf.material_index = sh.ids.y;
+  executeCallableEXT(mat.bsdf_index+1, 1);
   bsdfpdf.material_index = bsdf.material_index;
   bsdfpdf.uv = bsdf.uv;
-  bsdfpdf.woW = bsdf.woW;
   bsdfpdf.shading = bsdf.shading;
-  executeCallableEXT(mat.bsdf_index+1, 1);
-  bsdfpdf.wiW = bsdf.wiW;
+  bsdfpdf.wiW = bsdf.woW; //inverted because it's the reverse pdf
+  bsdfpdf.woW = bsdf.wiW;
   executeCallableEXT(mat.bsdf_index+2, 2);
   weight = abs(dot(bsdf.wiW, hit.shading_normal))/bsdf.pdf;
   current.col0 = Bdpt.paths[path_id].light[step_no-1].color0;
@@ -132,4 +138,9 @@ void main()
   Bdpt.paths[path_id].light[step_no-1].pdf_bwd = pdf_bwd;
   Bdpt.paths[path_id].last_wo_light = vec4(-bsdf.wiW, 0.0);
   traceRayEXT(scene, 0, 0xFF, 0, 0, 0, hit.point, 0.0001, bsdf.wiW, INFINITY, 0);
+  surface_hit_to_vertex(sh, Bdpt.paths[path_id].light[step_no]);
+  //propagate miss (thank you &= for not working)
+  Bdpt.paths[path_id].light[step_no].miss =
+                          Bdpt.paths[path_id].light[step_no].miss &&
+                          Bdpt.paths[path_id].light[step_no-1].miss;
 }

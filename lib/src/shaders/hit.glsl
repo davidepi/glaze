@@ -57,4 +57,22 @@ struct SurfaceHit {
   }                                                                             \
 }
 
+#define EXPAND_HIT_POINT_ONLY(X, POINT)                                         \
+{                                                                               \
+  const vec3 barycentric = vec3(                                                \
+      1.0 - X.attribs.x - X.attribs.y,                                          \
+      X.attribs.x,                                                              \
+      X.attribs.y                                                               \
+    );                                                                          \
+  uint triangle_id = X.ids.x;                                                   \
+  Triangle tris = IndexBuffer.indices[triangle_id];                             \
+  Vertex v0 = from_packed(VertexBuffer.vertices[tris.x]);                       \
+  Vertex v1 = from_packed(VertexBuffer.vertices[tris.y]);                       \
+  Vertex v2 = from_packed(VertexBuffer.vertices[tris.z]);                       \
+  POINT = v0.position * barycentric.x +                                         \
+          v1.position * barycentric.y +                                         \
+          v2.position * barycentric.z;                                          \
+}
+
+
 #endif

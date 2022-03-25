@@ -111,7 +111,6 @@ void main()
   const vec2 ndc = vec2(-1.0)+2.0*uv;
   vec3 origin = ray_origin();
   vec3 direction = ray_dir(ndc);
-  vec4 cumulative_val = imageLoad(accumulate_image, ivec2(gl_LaunchIDEXT.xy));
   Spectrum power = SPECTRUM_ONE;
   Spectrum L = SPECTRUM_ZERO;
   float rrprob = 1.0;
@@ -161,6 +160,7 @@ void main()
     origin = hit.point;
     direction = bsdfsampleval.wiW;
   }
+  vec4 cumulative_val = imageLoad(accumulate_image, ivec2(gl_LaunchIDEXT.xy));
   cumulative_val.xyz += xyz(L);
   cumulative_val.w += 1.0;
   vec3 rgb = rgb(vec3(cumulative_val.xyz*FrameData.data.exposure/cumulative_val.w));

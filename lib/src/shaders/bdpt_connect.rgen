@@ -1,0 +1,160 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier: require
+
+#include "random.glsl"
+#include "constants.glsl"
+#include "spectrum.glsl"
+#include "hit.glsl"
+#include "bdpt_utils.glsl"
+#include "raytrace_structures.glsl"
+#include "raytrace_commons.glsl"
+
+layout(location=0) rayPayloadEXT bool shadow_ray_hit;
+layout(location=1) callableDataEXT BsdfValue bsdf;
+
+layout(push_constant) uniform readonly pc {
+  mat4 camera2world;
+  mat4 screen2camera;
+} Camera;
+layout(set=0, binding=0) uniform readonly frameData {
+  RTFrameData data;
+} FrameData;
+layout(std430, set=0, binding=1) buffer bdpt {
+  BDPTPath paths[];
+} Bdpt;
+layout(set=0, binding=2, rgba32f) uniform image2D accumulate_image;
+layout(set=0, binding=3, rgba32f) uniform writeonly image2D result_image;
+layout(set=1, binding=0) uniform accelerationStructureEXT scene;
+layout(std430, set=1, binding=1) readonly buffer vertexBuffer {
+  VertexPacked vertices[];
+} VertexBuffer;
+layout(std430, set=1, binding=2) readonly buffer indexBuffer {
+  Triangle indices[];
+} IndexBuffer;
+layout(std430, set=1, binding=4) readonly buffer materialBuffer {
+  RTMaterial materials[];
+} MaterialBuffer;
+layout(std430, set=1, binding=5) readonly buffer lightBuffer {
+  RTLight lights[];
+} LightBuffer;
+layout(set=1, binding=6) uniform sampler2D textures[];
+layout(set=1, binding=7) readonly buffer derivativeBuffer {
+  Derivatives d[];
+}DerivativeBuffer;
+
+void main()
+{
+  if(FrameData.data.lights_no == 0)
+  {
+    return;
+  }
+  uint path_id = uint(gl_LaunchIDEXT.y*gl_LaunchSizeEXT.x+gl_LaunchIDEXT.x);
+  uint step_no = uint(FrameData.data.center_and_bdpt_step.w);
+  uint camera_step = step_no/BDPT_PATH_LEN;
+  uint light_step = step_no%BDPT_PATH_LEN;
+  // get camera
+  uint rng = srand(vec3(FrameData.data.seed, gl_LaunchIDEXT.xy));
+  SurfaceHit camera_sh;
+  HitData camera_hit;
+  RTMaterial camera_mat;
+  vertex_to_surface_hit(Bdpt.paths[path_id].camera[camera_step], camera_sh);
+  // get light
+  SurfaceHit light_sh;
+  HitData light_hit;
+  RTMaterial light_mat;
+  vertex_to_surface_hit(Bdpt.paths[path_id].light[light_step], light_sh);
+  // bail out early if specular or the path missed, avoids tracing shadow ray
+  if(camera_mat.is_specular==1 || light_mat.is_specular==1 || camera_sh.miss || light_sh.miss)
+  {
+    return;
+  }
+  vec3 wo;
+
+  // CAMERA STEP
+  EXPAND_HIT(camera_sh, camera_hit, camera_mat);
+  if(camera_step == 0)
+  {
+    wo = normalize(camera_hit.point - Bdpt.paths[path_id].origin_camera.xyz);
+  }
+  else
+  {
+    vec3 prev_hit;
+    EXPAND_HIT_POINT_ONLY(Bdpt.paths[path_id].camera[camera_step-1], prev_hit)
+    wo = normalize(camera_hit.point - prev_hit);
+  }
+  bsdf.woW = wo;
+  bsdf.wiW = normalize(light_hit.point - camera_hit.point);
+  bsdf.geometric_normal = camera_hit.geometric_normal;
+  bsdf.uv = camera_hit.uv;
+  bsdf.rand_sample = rand(rng);
+  bsdf.shading = new_shading_space(camera_hit.dpdu, camera_hit.shading_normal);
+  bsdf.material_index = camera_mat.bsdf_index;
+  executeCallableEXT(bsdf.material_index, 1);
+  Spectrum camera_value = bsdf.value;
+  float camera_pdf = bsdf.pdf;
+
+  // LIGHT STEP
+  EXPAND_HIT(light_sh, light_hit, light_mat);
+  if(light_step == 0)
+  {
+    wo = normalize(light_hit.point - Bdpt.paths[path_id].origin_light.xyz);
+  }
+  else
+  {
+    vec3 prev_hit;
+    EXPAND_HIT_POINT_ONLY(Bdpt.paths[path_id].light[light_step-1], prev_hit)
+    wo = normalize(light_hit.point - prev_hit);
+  }
+  bsdf.woW = wo;
+  bsdf.wiW = normalize(camera_hit.point - light_hit.point);
+  bsdf.geometric_normal = light_hit.geometric_normal;
+  bsdf.uv = light_hit.uv;
+  bsdf.rand_sample = rand(rng);
+  bsdf.shading = new_shading_space(light_hit.dpdu, light_hit.shading_normal);
+  bsdf.material_index = light_mat.bsdf_index;
+  executeCallableEXT(bsdf.material_index, 1);
+  Spectrum light_value = bsdf.value;
+  float light_pdf = bsdf.pdf;
+
+  // CONNECT
+  if(light_pdf*camera_pdf != 0.0)
+  {
+    Spectrum power_camera = Spectrum(
+      Bdpt.paths[path_id].camera[camera_step].color0,
+      Bdpt.paths[path_id].camera[camera_step].color1,
+      Bdpt.paths[path_id].camera[camera_step].color2,
+      Bdpt.paths[path_id].camera[camera_step].color3
+    );
+    Spectrum power_light = Spectrum(
+      Bdpt.paths[path_id].light[light_step].color0,
+      Bdpt.paths[path_id].light[light_step].color1,
+      Bdpt.paths[path_id].light[light_step].color2,
+      Bdpt.paths[path_id].light[light_step].color3
+    );
+    Spectrum L = mul(power_camera, mul(power_light, mul(camera_value, light_value)));
+    // shadow ray
+    vec3 dir = camera_hit.point - light_hit.point;
+    vec3 norm_dir = normalize(dir);
+    shadow_ray_hit = true;
+    traceRayEXT(scene,
+               gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT,
+               0xFF, 0, 0, 1, light_hit.point, 0.001, norm_dir,
+               distance(camera_hit.point, light_hit.point)-1E-3, 0);
+    if(!shadow_ray_hit)
+    {
+      float attenuation = abs(dot(norm_dir, camera_hit.shading_normal)) *
+                          abs(dot(norm_dir, light_hit.shading_normal))  /
+                          dot(dir, dir);
+      float weight = 1.0/light_pdf*camera_pdf;
+      L = mul(L, attenuation*weight);
+      // update image
+      vec4 cumulative_val = imageLoad(accumulate_image, ivec2(gl_LaunchIDEXT.xy));
+      cumulative_val.xyz += xyz(L);
+      cumulative_val.w += 1.0;
+      vec3 rgb = rgb(vec3(cumulative_val.xyz*FrameData.data.exposure/cumulative_val.w));
+      imageStore(accumulate_image, ivec2(gl_LaunchIDEXT.xy), cumulative_val);
+      imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(rgb, 1.0));
+    }
+  }
+}
