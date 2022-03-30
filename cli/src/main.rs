@@ -110,12 +110,9 @@ fn main() {
                 pb.set_style(sty);
                 pb.set_message(stage_msg.clone());
                 let render_start = Instant::now();
-                let image = renderer.draw(
-                    args.spp,
-                    Some(|| {
-                        pb.inc(1);
-                    }),
-                );
+                let image = renderer.draw(args.spp, || {
+                    pb.inc(1);
+                });
                 let render_end = Instant::now();
                 pb.finish_with_message(format!(
                     "{}{} ({} ms)",

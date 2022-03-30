@@ -45,6 +45,14 @@ impl Integrator {
             Integrator::BDPT => "Bidirectional Path Tracing",
         }
     }
+
+    pub fn steps_per_sample(&self) -> usize {
+        match self {
+            Integrator::DIRECT => 1,
+            Integrator::PATH_TRACE => 1,
+            Integrator::BDPT => BDPT_PATH_LEN + BDPT_PATH_LEN * BDPT_PATH_LEN,
+        }
+    }
 }
 
 impl Default for Integrator {
@@ -485,7 +493,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         }
     }
 
-    pub fn draw<F>(&mut self, spp: usize, callback: Option<F>) -> image::RgbaImage
+    pub fn draw<F>(&mut self, spp: usize, callback: F) -> image::RgbaImage
     where
         F: Fn(),
     {
@@ -499,7 +507,8 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             })
             .collect::<VecDeque<_>>();
         let mut last_semaphore = vk::Semaphore::null();
-        for i in 0..spp {
+        let substep = spp * self.integrator.steps_per_sample();
+        for i in 0..substep {
             let (signal_sem, signal_fence) = sync.pop_front().unwrap();
             unsafe {
                 self.instance
@@ -520,10 +529,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             }
             last_semaphore = signal_sem;
             sync.push_back((signal_sem, signal_fence));
-            if let Some(callback) = &callback {
-                // This is called when the CPU finish setting up the command and not when the GPU
-                // ends the execution, but the counter will be wrong by at most FRAMES_IN_FLIGHT
-                // frames
+            if i % self.integrator.steps_per_sample() == 0 {
                 callback();
             }
         }
@@ -1101,7 +1107,7 @@ mod tests {
             let parsed = init(Arc::clone(&instance));
             let mut renderer =
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
-            let _ = renderer.draw(1, None);
+            let _ = renderer.draw(1, || {});
         } else {
             // SKIPPED does not exists in cargo test...
         }
@@ -1116,7 +1122,7 @@ mod tests {
             let file = dir.path().join("save.png");
             let mut renderer =
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
-            let image = renderer.draw(1, None);
+            let image = renderer.draw(1, || {});
             image.save(file.clone()).unwrap();
             assert!(file.exists());
         } else {
@@ -1133,7 +1139,7 @@ mod tests {
             let mut renderer =
                 RayTraceRenderer::<RayTraceInstance>::new(Arc::clone(&instance), parsed, 2, 2);
             renderer.change_resolution(4, 4);
-            let image = renderer.draw(1, None);
+            let image = renderer.draw(1, || {});
             assert_eq!(image.width(), 4);
             assert_eq!(image.height(), 4);
         } else {
