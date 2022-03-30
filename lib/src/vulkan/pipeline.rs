@@ -442,12 +442,46 @@ pub fn build_raytracing_pipeline(
             create_ci(miss_shadow, vk::ShaderStageFlags::MISS_KHR),
         ],
     };
-    let mut shader_groups = vec![
+    let mut shader_groups = vec![vk::RayTracingShaderGroupCreateInfoKHR {
+        s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+        p_next: ptr::null(),
+        ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+        general_shader: 0,
+        closest_hit_shader: vk::SHADER_UNUSED_KHR,
+        any_hit_shader: vk::SHADER_UNUSED_KHR,
+        intersection_shader: vk::SHADER_UNUSED_KHR,
+        p_shader_group_capture_replay_handle: ptr::null(),
+    }];
+    if integrator == Integrator::BDPT {
+        shader_groups.extend([
+            vk::RayTracingShaderGroupCreateInfoKHR {
+                s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+                p_next: ptr::null(),
+                ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+                general_shader: 1,
+                closest_hit_shader: vk::SHADER_UNUSED_KHR,
+                any_hit_shader: vk::SHADER_UNUSED_KHR,
+                intersection_shader: vk::SHADER_UNUSED_KHR,
+                p_shader_group_capture_replay_handle: ptr::null(),
+            },
+            vk::RayTracingShaderGroupCreateInfoKHR {
+                s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+                p_next: ptr::null(),
+                ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+                general_shader: 2,
+                closest_hit_shader: vk::SHADER_UNUSED_KHR,
+                any_hit_shader: vk::SHADER_UNUSED_KHR,
+                intersection_shader: vk::SHADER_UNUSED_KHR,
+                p_shader_group_capture_replay_handle: ptr::null(),
+            },
+        ]);
+    }
+    shader_groups.extend([
         vk::RayTracingShaderGroupCreateInfoKHR {
             s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
             p_next: ptr::null(),
             ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
-            general_shader: 0,
+            general_shader: (shader_stages.len() - 2) as u32,
             closest_hit_shader: vk::SHADER_UNUSED_KHR,
             any_hit_shader: vk::SHADER_UNUSED_KHR,
             intersection_shader: vk::SHADER_UNUSED_KHR,
@@ -457,23 +491,13 @@ pub fn build_raytracing_pipeline(
             s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
             p_next: ptr::null(),
             ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
-            general_shader: 1,
+            general_shader: (shader_stages.len() - 1) as u32,
             closest_hit_shader: vk::SHADER_UNUSED_KHR,
             any_hit_shader: vk::SHADER_UNUSED_KHR,
             intersection_shader: vk::SHADER_UNUSED_KHR,
             p_shader_group_capture_replay_handle: ptr::null(),
         },
-        vk::RayTracingShaderGroupCreateInfoKHR {
-            s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
-            p_next: ptr::null(),
-            ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
-            general_shader: 2,
-            closest_hit_shader: vk::SHADER_UNUSED_KHR,
-            any_hit_shader: vk::SHADER_UNUSED_KHR,
-            intersection_shader: vk::SHADER_UNUSED_KHR,
-            p_shader_group_capture_replay_handle: ptr::null(),
-        },
-    ];
+    ]);
     let chit = include_shader!("raytrace_hit.rchit");
     let ahit = include_shader!("raytrace_hit.rahit");
     // chit is shader stage 3, ahit is shader stage 4, but they are both in group 3
@@ -485,8 +509,8 @@ pub fn build_raytracing_pipeline(
         p_next: ptr::null(),
         ty: vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP,
         general_shader: vk::SHADER_UNUSED_KHR,
-        closest_hit_shader: 3,
-        any_hit_shader: 4,
+        closest_hit_shader: (shader_stages.len() - 2) as u32,
+        any_hit_shader: (shader_stages.len() - 1) as u32,
         intersection_shader: vk::SHADER_UNUSED_KHR,
         p_shader_group_capture_replay_handle: ptr::null(),
     });
