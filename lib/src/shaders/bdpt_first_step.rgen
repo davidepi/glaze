@@ -73,14 +73,13 @@ void main()
   camera_vertex.color3 = vec4(1.0);
 
   /// LIGHT PATH ///
-  uint light_id = uint(min(rand(rng)*FrameData.data.lights_no, FrameData.data.lights_no-1));
-  RTLight light = LightBuffer.lights[light_id];
-  float light_pdf = 1.0/FrameData.data.lights_no;
-  ph.light_id = light_id;
+  ph.light_id = uint(min(rand(rng)*FrameData.data.lights_no, FrameData.data.lights_no-1));
+  RTLight light = LightBuffer.lights[ph.light_id];
+  float light_sel_pdf = 1.0/FrameData.data.lights_no;
   ph.rand_sample = rand2(rng);
   executeCallableEXT(light.shader+1, 1);
   float weight = abs(dot(ph.normal, ph.direction));
-  weight /= (light_pdf*ph.pdf_pos*ph.pdf_dir);
+  weight /= (light_sel_pdf*ph.pdf_pos*ph.pdf_dir);
   ph.emission = mul(ph.emission, weight);
   traceRayEXT(scene, 0, 0xFF, 0, 0, 0, ph.origin, 0.0001, ph.direction, INFINITY, 0);
   BDPTPathVertex light_vertex;

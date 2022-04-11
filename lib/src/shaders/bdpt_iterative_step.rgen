@@ -85,7 +85,6 @@ void main()
   bsdfpdf.wiW = bsdf.woW; //inverted because it's the reverse pdf
   bsdfpdf.woW = bsdf.wiW;
   executeCallableEXT(mat.bsdf_index+2, 2);
-  executeCallableEXT(mat.bsdf_index+2, 2);
   weight = abs(dot(bsdf.wiW, hit.shading_normal))/bsdf.pdf;
   current.col0 = Bdpt.paths[path_id].camera[step_no-1].color0;
   current.col1 = Bdpt.paths[path_id].camera[step_no-1].color1;
