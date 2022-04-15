@@ -50,7 +50,10 @@ impl Integrator {
         match self {
             Integrator::DIRECT => 1,
             Integrator::PATH_TRACE => 1,
-            Integrator::BDPT => BDPT_PATH_LEN + BDPT_PATH_LEN * BDPT_PATH_LEN,
+            // BDPT_PATH_LEN - each step traces a light and a camera point
+            // BDPT_PATH_LEN * (BDPT_PATH_LEN+1) - connect a single light and camera point, plus
+            //                                     the direct light connection (hence the +1)
+            Integrator::BDPT => BDPT_PATH_LEN + BDPT_PATH_LEN * (BDPT_PATH_LEN + 1),
         }
     }
 }
@@ -78,7 +81,7 @@ impl BdptState {
     fn advance(&mut self) {
         self.state += 1;
         if (self.tracing && self.state == BDPT_PATH_LEN)
-            || (!self.tracing && self.state == BDPT_PATH_LEN * BDPT_PATH_LEN)
+            || (!self.tracing && self.state == BDPT_PATH_LEN * (BDPT_PATH_LEN + 1))
         {
             self.tracing = !self.tracing;
             self.state = 0;
@@ -261,7 +264,6 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         &self.out8_img
     }
 
-    #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn draw_frame(
         &mut self,
         wait: &[vk::Semaphore],
@@ -396,8 +398,10 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             0
         } else if self.bdpt_step.tracing {
             1
-        } else {
+        } else if self.bdpt_step.state % (BDPT_PATH_LEN + 1) == 0 {
             2
+        } else {
+            3
         };
         update_frame_data(fd, &mut self.frame_data[frame_index]);
         self.bdpt_step.advance();
@@ -809,7 +813,7 @@ fn build_sbt<T: Instance>(
     // load single raygen group
     let group_count = match integrator {
         Integrator::DIRECT | Integrator::PATH_TRACE => 1,
-        Integrator::BDPT => 3,
+        Integrator::BDPT => 4,
     };
     let rgen_groups = unsafe {
         rploader.get_ray_tracing_shader_group_handles(

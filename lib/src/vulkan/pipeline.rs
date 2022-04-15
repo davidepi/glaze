@@ -419,6 +419,10 @@ pub fn build_raytracing_pipeline(
                 vk::ShaderStageFlags::RAYGEN_KHR,
             ),
             create_ci(
+                include_shader!("bdpt_forward.rgen"),
+                vk::ShaderStageFlags::RAYGEN_KHR,
+            ),
+            create_ci(
                 include_shader!("bdpt_connect.rgen"),
                 vk::ShaderStageFlags::RAYGEN_KHR,
             ),
@@ -469,6 +473,16 @@ pub fn build_raytracing_pipeline(
                 p_next: ptr::null(),
                 ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
                 general_shader: 2,
+                closest_hit_shader: vk::SHADER_UNUSED_KHR,
+                any_hit_shader: vk::SHADER_UNUSED_KHR,
+                intersection_shader: vk::SHADER_UNUSED_KHR,
+                p_shader_group_capture_replay_handle: ptr::null(),
+            },
+            vk::RayTracingShaderGroupCreateInfoKHR {
+                s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+                p_next: ptr::null(),
+                ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+                general_shader: 3,
                 closest_hit_shader: vk::SHADER_UNUSED_KHR,
                 any_hit_shader: vk::SHADER_UNUSED_KHR,
                 intersection_shader: vk::SHADER_UNUSED_KHR,

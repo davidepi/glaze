@@ -51,8 +51,9 @@ void main()
   }
   uint path_id = uint(gl_LaunchIDEXT.y*gl_LaunchSizeEXT.x+gl_LaunchIDEXT.x);
   uint step_no = uint(FrameData.data.center_and_bdpt_step.w);
-  uint camera_step = step_no/BDPT_PATH_LEN;
-  uint light_step = step_no%BDPT_PATH_LEN;
+  uint camera_step = step_no/(BDPT_PATH_LEN+1);
+  // the light_step 0 is handled by another shader (bdpt_forward)
+  uint light_step = (step_no%(BDPT_PATH_LEN+1))-1;
   // get camera
   uint rng = srand(vec3(FrameData.data.seed, gl_LaunchIDEXT.xy));
   SurfaceHit camera_sh;
@@ -81,13 +82,13 @@ void main()
   EXPAND_HIT(camera_sh, camera_hit, camera_mat);
   if(camera_step == 0)
   {
-    wo = normalize(camera_hit.point - Bdpt.paths[path_id].origin_camera.xyz);
+    wo = normalize(Bdpt.paths[path_id].origin_camera.xyz - camera_hit.point);
   }
   else
   {
     vec3 prev_hit;
     EXPAND_HIT_POINT_ONLY(Bdpt.paths[path_id].camera[camera_step-1], prev_hit)
-    wo = normalize(camera_hit.point - prev_hit);
+    wo = normalize(prev_hit - camera_hit.point);
   }
   bsdf.woW = wo;
   bsdf.wiW = normalize(light_hit.point - camera_hit.point);
@@ -104,13 +105,13 @@ void main()
   EXPAND_HIT(light_sh, light_hit, light_mat);
   if(light_step == 0)
   {
-    wo = normalize(light_hit.point - Bdpt.paths[path_id].origin_light.xyz);
+    wo = normalize(Bdpt.paths[path_id].origin_light.xyz - light_hit.point);
   }
   else
   {
     vec3 prev_hit;
     EXPAND_HIT_POINT_ONLY(Bdpt.paths[path_id].light[light_step-1], prev_hit)
-    wo = normalize(light_hit.point - prev_hit);
+    wo = normalize(prev_hit - light_hit.point);
   }
   bsdf.woW = wo;
   bsdf.wiW = normalize(camera_hit.point - light_hit.point);
