@@ -44,14 +44,57 @@ layout(set=1, binding=7) readonly buffer derivativeBuffer {
 
 float compute_pdf_bwd(in float pdf, in vec3 point, in BDPTPathVertex prev)
 {
-  RTMaterial prev_mat;
-  HitData prev_hit;
   SurfaceHit prev_sh;
+  vec3 prev_point;
+  vec3 geometric_normal;
   vertex_to_surface_hit(prev, prev_sh);
-  EXPAND_HIT(prev_sh, prev_hit, prev_mat);
-  vec3 w = prev_hit.point - point;
+  EXPAND_HIT_POINT_AND_GN_ONLY(prev_sh, prev_point, geometric_normal);
+  vec3 w = prev_point - point;
   float inv_dist2 = 1.0/dot(w,w);
-  return pdf * abs(dot(prev_hit.geometric_normal, w * sqrt(inv_dist2))) * inv_dist2;
+  return pdf * abs(dot(geometric_normal, w * sqrt(inv_dist2))) * inv_dist2;
+}
+
+void compute_next_step(inout BDPTPathVertex prev,
+                       out   BDPTPathVertex next,
+                       inout vec4 last_wo,
+                       inout uint rng)
+{
+  RTMaterial mat;
+  HitData hit;
+  vertex_to_surface_hit(prev, sh);
+  EXPAND_HIT(sh, hit, mat);
+  bsdf.woW = last_wo.xyz;
+  bsdf.uv = hit.uv;
+  bsdf.geometric_normal = hit.geometric_normal;
+  bsdf.rand_sample = rand3(rng);
+  bsdf.shading = new_shading_space(hit.dpdu, hit.shading_normal);
+  bsdf.material_index = sh.ids.y;
+  executeCallableEXT(mat.bsdf_index+1, 1);
+  float weight = abs(dot(bsdf.wiW, hit.shading_normal))/bsdf.pdf;
+  Spectrum current = Spectrum(prev.color0,
+                              prev.color1,
+                              prev.color2,
+                              prev.color3);
+  current = mul(current, mul(bsdf.value, weight));
+  // calculate reverse pdf
+  bsdfpdf.material_index = bsdf.material_index;
+  bsdfpdf.uv = bsdf.uv;
+  bsdfpdf.shading = bsdf.shading;
+  bsdfpdf.wiW = bsdf.woW; //inverted because it's the reverse pdf
+  bsdfpdf.woW = bsdf.wiW;
+  executeCallableEXT(mat.bsdf_index+2, 2);
+  float pdf_bwd = compute_pdf_bwd(bsdfpdf.pdf, hit.point, prev);
+  // trace and fill value for next point
+  traceRayEXT(scene, 0, 0xFF, 0, 0, 0, hit.point, 0.0001, bsdf.wiW, INFINITY, 0);
+  surface_hit_to_vertex(sh, next);
+  next.color0 = current.col0;
+  next.color1 = current.col1;
+  next.color2 = current.col2;
+  next.color3 = current.col3;
+  next.miss = next.miss && prev.miss; // propagate miss
+  next.pdf_fwd = bsdf.pdf;
+  prev.pdf_bwd = pdf_bwd;
+  last_wo = vec4(-bsdf.wiW, 0.0);
 }
 
 void main()
@@ -63,83 +106,16 @@ void main()
   uint path_id = uint(gl_LaunchIDEXT.y*gl_LaunchSizeEXT.x+gl_LaunchIDEXT.x);
   uint step_no = uint(FrameData.data.center_and_bdpt_step.w);
   uint rng = srand(vec3(FrameData.data.seed, gl_LaunchIDEXT.xy));
-  RTMaterial mat;
-  HitData hit;
-  float weight;
-  float pdf_bwd;
-  Spectrum current;
-
-  /// CAMERA PATH ///
-  vertex_to_surface_hit(Bdpt.paths[path_id].camera[step_no-1], sh);
-  EXPAND_HIT(sh, hit, mat);
-  bsdf.woW = Bdpt.paths[path_id].last_wo_camera.xyz;
-  bsdf.uv = hit.uv;
-  bsdf.geometric_normal = hit.geometric_normal;
-  bsdf.rand_sample = rand3(rng);
-  bsdf.shading = new_shading_space(hit.dpdu, hit.shading_normal);
-  bsdf.material_index = sh.ids.y;
-  executeCallableEXT(mat.bsdf_index+1, 1);
-  bsdfpdf.material_index = bsdf.material_index;
-  bsdfpdf.uv = bsdf.uv;
-  bsdfpdf.shading = bsdf.shading;
-  bsdfpdf.wiW = bsdf.woW; //inverted because it's the reverse pdf
-  bsdfpdf.woW = bsdf.wiW;
-  executeCallableEXT(mat.bsdf_index+2, 2);
-  weight = abs(dot(bsdf.wiW, hit.shading_normal))/bsdf.pdf;
-  current.col0 = Bdpt.paths[path_id].camera[step_no-1].color0;
-  current.col1 = Bdpt.paths[path_id].camera[step_no-1].color1;
-  current.col2 = Bdpt.paths[path_id].camera[step_no-1].color2;
-  current.col3 = Bdpt.paths[path_id].camera[step_no-1].color3;
-  current = mul(current, mul(bsdf.value, weight));
-  pdf_bwd = compute_pdf_bwd(bsdfpdf.pdf, hit.point, Bdpt.paths[path_id].camera[step_no-1]);
-  Bdpt.paths[path_id].camera[step_no].color0 = current.col0;
-  Bdpt.paths[path_id].camera[step_no].color1 = current.col1;
-  Bdpt.paths[path_id].camera[step_no].color2 = current.col2;
-  Bdpt.paths[path_id].camera[step_no].color3 = current.col3;
-  Bdpt.paths[path_id].camera[step_no].pdf_fwd = bsdf.pdf;
-  Bdpt.paths[path_id].camera[step_no-1].pdf_bwd = pdf_bwd;
-  Bdpt.paths[path_id].last_wo_camera = vec4(-bsdf.wiW, 0.0);
-  traceRayEXT(scene, 0, 0xFF, 0, 0, 0, hit.point, 0.0001, bsdf.wiW, INFINITY, 0);
-  surface_hit_to_vertex(sh, Bdpt.paths[path_id].camera[step_no]);
-  //propagate miss (thank you &= for not working)
-  Bdpt.paths[path_id].camera[step_no].miss =
-                          Bdpt.paths[path_id].camera[step_no].miss &&
-                          Bdpt.paths[path_id].camera[step_no-1].miss;
-
-  /// LIGHT PATH ///
-  vertex_to_surface_hit(Bdpt.paths[path_id].light[step_no-1], sh);
-  EXPAND_HIT(sh, hit, mat);
-  bsdf.woW = Bdpt.paths[path_id].last_wo_light.xyz;
-  bsdf.uv = hit.uv;
-  bsdf.geometric_normal = hit.geometric_normal;
-  bsdf.rand_sample = rand3(rng);
-  bsdf.shading = new_shading_space(hit.dpdu, hit.shading_normal);
-  bsdf.material_index = sh.ids.y;
-  executeCallableEXT(mat.bsdf_index+1, 1);
-  bsdfpdf.material_index = bsdf.material_index;
-  bsdfpdf.uv = bsdf.uv;
-  bsdfpdf.shading = bsdf.shading;
-  bsdfpdf.wiW = bsdf.woW; //inverted because it's the reverse pdf
-  bsdfpdf.woW = bsdf.wiW;
-  executeCallableEXT(mat.bsdf_index+2, 2);
-  weight = abs(dot(bsdf.wiW, hit.shading_normal))/bsdf.pdf;
-  current.col0 = Bdpt.paths[path_id].light[step_no-1].color0;
-  current.col1 = Bdpt.paths[path_id].light[step_no-1].color1;
-  current.col2 = Bdpt.paths[path_id].light[step_no-1].color2;
-  current.col3 = Bdpt.paths[path_id].light[step_no-1].color3;
-  current = mul(current, mul(bsdf.value, weight));
-  pdf_bwd = compute_pdf_bwd(bsdfpdf.pdf, hit.point, Bdpt.paths[path_id].light[step_no-1]);
-  Bdpt.paths[path_id].light[step_no].color0 = current.col0;
-  Bdpt.paths[path_id].light[step_no].color1 = current.col1;
-  Bdpt.paths[path_id].light[step_no].color2 = current.col2;
-  Bdpt.paths[path_id].light[step_no].color3 = current.col3;
-  Bdpt.paths[path_id].light[step_no].pdf_fwd = bsdf.pdf;
-  Bdpt.paths[path_id].light[step_no-1].pdf_bwd = pdf_bwd;
-  Bdpt.paths[path_id].last_wo_light = vec4(-bsdf.wiW, 0.0);
-  traceRayEXT(scene, 0, 0xFF, 0, 0, 0, hit.point, 0.0001, bsdf.wiW, INFINITY, 0);
-  surface_hit_to_vertex(sh, Bdpt.paths[path_id].light[step_no]);
-  //propagate miss (thank you &= for not working)
-  Bdpt.paths[path_id].light[step_no].miss =
-                          Bdpt.paths[path_id].light[step_no].miss &&
-                          Bdpt.paths[path_id].light[step_no-1].miss;
+  compute_next_step(
+      Bdpt.paths[path_id].camera[step_no-1],
+      Bdpt.paths[path_id].camera[step_no],
+      Bdpt.paths[path_id].last_wo_camera,
+      rng
+      );
+  compute_next_step(
+      Bdpt.paths[path_id].light[step_no-1],
+      Bdpt.paths[path_id].light[step_no],
+      Bdpt.paths[path_id].last_wo_light,
+      rng
+      );
 }
