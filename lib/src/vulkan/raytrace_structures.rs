@@ -52,7 +52,7 @@ pub struct RTMaterial {
     pub metalness: u32,
     pub opacity: u32,
     pub normal: u32,
-    // callable shader index for the bsdf_value
+    // callable shader index for the bsdf_value. This is not the same as the material index!
     pub bsdf_index: u32,
     pub roughness_mul: f32,
     pub metalness_mul: f32,

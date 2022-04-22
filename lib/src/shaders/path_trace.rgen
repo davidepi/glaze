@@ -79,6 +79,9 @@ Spectrum direct_light(inout uint rng, in vec3 woW, in HitData hit, in ShadingSpa
     bsdfval.uv = hit.uv;
     bsdfval.shading = mat;
     bsdfval.rand_sample = rand(rng);
+    // material_index = index in the RTMaterial array
+    // bsdf_index = index in the SBT table. 
+    // they are different!
     bsdfval.material_index = sh.ids.y;
     executeCallableEXT(material.bsdf_index, 3);
     if(bsdfval.pdf!=0.0)
