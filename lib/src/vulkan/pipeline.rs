@@ -409,26 +409,6 @@ pub fn build_raytracing_pipeline(
     // raygen is always index 0
     // miss is index 1 (direct rays) and 2 (shadow rays) when not bdpt, 3 and 4 otherwise
     let mut shader_stages = match integrator {
-        Integrator::BDPT => vec![
-            create_ci(
-                include_shader!("bdpt_first_step.rgen"),
-                vk::ShaderStageFlags::RAYGEN_KHR,
-            ),
-            create_ci(
-                include_shader!("bdpt_iterative_step.rgen"),
-                vk::ShaderStageFlags::RAYGEN_KHR,
-            ),
-            create_ci(
-                include_shader!("bdpt_forward.rgen"),
-                vk::ShaderStageFlags::RAYGEN_KHR,
-            ),
-            create_ci(
-                include_shader!("bdpt_connect.rgen"),
-                vk::ShaderStageFlags::RAYGEN_KHR,
-            ),
-            create_ci(miss, vk::ShaderStageFlags::MISS_KHR),
-            create_ci(miss_shadow, vk::ShaderStageFlags::MISS_KHR),
-        ],
         Integrator::PATH_TRACE => vec![
             create_ci(
                 include_shader!("path_trace.rgen"),
@@ -456,40 +436,6 @@ pub fn build_raytracing_pipeline(
         intersection_shader: vk::SHADER_UNUSED_KHR,
         p_shader_group_capture_replay_handle: ptr::null(),
     }];
-    if integrator == Integrator::BDPT {
-        shader_groups.extend([
-            vk::RayTracingShaderGroupCreateInfoKHR {
-                s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
-                p_next: ptr::null(),
-                ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
-                general_shader: 1,
-                closest_hit_shader: vk::SHADER_UNUSED_KHR,
-                any_hit_shader: vk::SHADER_UNUSED_KHR,
-                intersection_shader: vk::SHADER_UNUSED_KHR,
-                p_shader_group_capture_replay_handle: ptr::null(),
-            },
-            vk::RayTracingShaderGroupCreateInfoKHR {
-                s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
-                p_next: ptr::null(),
-                ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
-                general_shader: 2,
-                closest_hit_shader: vk::SHADER_UNUSED_KHR,
-                any_hit_shader: vk::SHADER_UNUSED_KHR,
-                intersection_shader: vk::SHADER_UNUSED_KHR,
-                p_shader_group_capture_replay_handle: ptr::null(),
-            },
-            vk::RayTracingShaderGroupCreateInfoKHR {
-                s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
-                p_next: ptr::null(),
-                ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
-                general_shader: 3,
-                closest_hit_shader: vk::SHADER_UNUSED_KHR,
-                any_hit_shader: vk::SHADER_UNUSED_KHR,
-                intersection_shader: vk::SHADER_UNUSED_KHR,
-                p_shader_group_capture_replay_handle: ptr::null(),
-            },
-        ]);
-    }
     shader_groups.extend([
         vk::RayTracingShaderGroupCreateInfoKHR {
             s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,

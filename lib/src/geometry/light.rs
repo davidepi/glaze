@@ -1,4 +1,3 @@
-use crate::geometry::{SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
 use crate::{include_shader, Spectrum};
 use cgmath::{Point3, Vector3 as Vec3};
 
@@ -7,6 +6,9 @@ pub enum Light {
     Omni(OmniLight),
     Sun(SunLight),
 }
+
+pub const SBT_LIGHT_TYPES: usize = 2;
+pub const SBT_LIGHT_STRIDE: usize = 1;
 
 /// Used to safely update all the light instances if new lights are added.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,9 +33,7 @@ impl LightType {
     pub(crate) fn callable_shaders() -> [Vec<u8>; SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE] {
         [
             include_shader!("light_omni_sample_visible.rcall").to_vec(),
-            include_shader!("light_omni_gen_photon.rcall").to_vec(),
             include_shader!("light_sun_sample_visible.rcall").to_vec(),
-            include_shader!("light_sun_gen_photon.rcall").to_vec(),
         ]
     }
 

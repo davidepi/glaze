@@ -2,7 +2,7 @@ use super::cmd::CommandManager;
 use super::descriptor::DescriptorSetManager;
 use super::instance::Instance;
 use super::memory::AllocatedBuffer;
-use super::raytrace_structures::{BDPTPath, RTFrameData, BDPT_PATH_LEN};
+use super::raytrace_structures::RTFrameData;
 use super::scene::{padding, RayTraceScene};
 use super::sync::{create_fence, create_semaphore};
 use super::{export, AllocatedImage, Descriptor, UnfinishedExecutions};
@@ -30,19 +30,17 @@ use std::sync::Arc;
 pub enum Integrator {
     DIRECT,
     PATH_TRACE,
-    BDPT,
 }
 
 impl Integrator {
-    pub fn values() -> [Integrator; 3] {
-        [Integrator::DIRECT, Integrator::PATH_TRACE, Integrator::BDPT]
+    pub fn values() -> [Integrator; 2] {
+        [Integrator::DIRECT, Integrator::PATH_TRACE]
     }
 
     pub fn name(&self) -> &'static str {
         match self {
             Integrator::DIRECT => "Direct light only",
             Integrator::PATH_TRACE => "Path tracing",
-            Integrator::BDPT => "Bidirectional Path Tracing",
         }
     }
 
@@ -50,10 +48,6 @@ impl Integrator {
         match self {
             Integrator::DIRECT => 1,
             Integrator::PATH_TRACE => 1,
-            // BDPT_PATH_LEN - each step traces a light and a camera point
-            // BDPT_PATH_LEN * (BDPT_PATH_LEN+1) - connect a single light and camera point, plus
-            //                                     the direct light connection (hence the +1)
-            Integrator::BDPT => BDPT_PATH_LEN + BDPT_PATH_LEN * (BDPT_PATH_LEN + 1),
         }
     }
 }
@@ -72,32 +66,6 @@ struct ShaderBindingTable {
     _buffer: AllocatedBuffer,
 }
 
-struct BdptState {
-    tracing: bool,
-    state: usize,
-}
-
-impl BdptState {
-    fn advance(&mut self) {
-        self.state += 1;
-        if (self.tracing && self.state == BDPT_PATH_LEN)
-            || (!self.tracing && self.state == BDPT_PATH_LEN * (BDPT_PATH_LEN + 1))
-        {
-            self.tracing = !self.tracing;
-            self.state = 0;
-        }
-    }
-}
-
-impl Default for BdptState {
-    fn default() -> Self {
-        Self {
-            tracing: true,
-            state: 0,
-        }
-    }
-}
-
 pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     scene: RayTraceScene<T>,
     push_constants: [u8; 128],
@@ -107,8 +75,6 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     out32_img: AllocatedImage,
     out8_img: AllocatedImage,
     integrator: Integrator,
-    bdpt_buffer: AllocatedBuffer,
-    bdpt_step: BdptState,
     sample_scheduler: WorkScheduler,
     request_new_frame: bool,
     // contains also the out_img
@@ -153,29 +119,31 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     }
 
     pub fn set_integrator(&mut self, integrator: Integrator) {
-        self.wait_idle();
-        let instance = &self.instance;
-        let device = instance.device();
-        let mut unf = UnfinishedExecutions::new(device);
-        let pipeline = build_raytracing_pipeline(
-            &self.rploader,
-            device.logical_clone(),
-            &[self.frame_desc[0].layout, self.scene.descriptor.layout],
-            integrator,
-        );
-        let sbt = build_sbt(
-            instance.as_ref(),
-            &self.rploader,
-            &mut self.tcmdm,
-            &pipeline,
-            integrator,
-            &mut unf,
-        );
-        unf.wait_completion();
-        self.pipeline = pipeline;
-        self.sbt = sbt;
-        self.integrator = integrator;
-        self.request_new_frame = true;
+        if self.integrator != integrator {
+            self.wait_idle();
+            let instance = &self.instance;
+            let device = instance.device();
+            let mut unf = UnfinishedExecutions::new(device);
+            let pipeline = build_raytracing_pipeline(
+                &self.rploader,
+                device.logical_clone(),
+                &[self.frame_desc[0].layout, self.scene.descriptor.layout],
+                integrator,
+            );
+            let sbt = build_sbt(
+                instance.as_ref(),
+                &self.rploader,
+                &mut self.tcmdm,
+                &pipeline,
+                integrator,
+                &mut unf,
+            );
+            unf.wait_completion();
+            self.pipeline = pipeline;
+            self.sbt = sbt;
+            self.integrator = integrator;
+            self.request_new_frame = true;
+        }
     }
 
     pub fn change_scene(&mut self, scene: RayTraceScene<T>) {
@@ -205,7 +173,6 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
 
     pub fn change_resolution(&mut self, width: u32, height: u32) {
         self.extent = vk::Extent2D { width, height };
-        self.bdpt_buffer = create_bdpt_storage_buffer(self.instance.as_ref(), self.extent);
         let mut unf = UnfinishedExecutions::new(self.instance.device());
         self.out32_img = create_storage_image(
             self.instance.as_ref(),
@@ -232,7 +199,6 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         self.frame_desc = build_descriptor(
             &mut self.dm,
             &self.frame_data,
-            &self.bdpt_buffer,
             &self.cumulative_img,
             &self.out32_img,
         );
@@ -376,7 +342,6 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         let frame_index = frame_no % self.frame_desc.len();
         if self.request_new_frame {
             self.sample_scheduler.rewind();
-            self.bdpt_step = Default::default();
         }
         let fd = RTFrameData {
             seed: self.rng.gen(),
@@ -385,26 +350,15 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             scene_radius: self.scene.meta.scene_radius,
             exposure: self.scene.meta.exposure,
             scene_size: [self.extent.width as f32, self.extent.height as f32],
-            center_and_bdpt_step: [
+            center_and_step: [
                 self.scene.meta.scene_centre[0],
                 self.scene.meta.scene_centre[1],
                 self.scene.meta.scene_centre[2],
-                self.bdpt_step.state as f32,
+                0.0,
             ],
         };
-        let which_raygen = if self.integrator != Integrator::BDPT
-            || (self.bdpt_step.tracing && self.bdpt_step.state == 0)
-        {
-            0
-        } else if self.bdpt_step.tracing {
-            1
-        } else if self.bdpt_step.state % (BDPT_PATH_LEN + 1) == 0 {
-            2
-        } else {
-            3
-        };
+        let which_raygen = 0;
         update_frame_data(fd, &mut self.frame_data[frame_index]);
-        self.bdpt_step.advance();
         let queue = device.compute_queue();
         unsafe {
             vkdevice
@@ -636,14 +590,7 @@ fn init_rt<T: Instance + Send + Sync>(
             )
         })
         .collect::<Vec<_>>();
-    let bdpt_buffer = create_bdpt_storage_buffer(instance.as_ref(), extent);
-    let frame_desc = build_descriptor(
-        &mut dm,
-        &frame_data,
-        &bdpt_buffer,
-        &cumulative_img,
-        &out32_img,
-    );
+    let frame_desc = build_descriptor(&mut dm, &frame_data, &cumulative_img, &out32_img);
     let integrator = Integrator::default();
     let pipeline = build_raytracing_pipeline(
         &rploader,
@@ -670,8 +617,6 @@ fn init_rt<T: Instance + Send + Sync>(
         out32_img,
         out8_img,
         integrator,
-        bdpt_buffer,
-        bdpt_step: Default::default(),
         sample_scheduler,
         request_new_frame: true,
         frame_desc,
@@ -689,7 +634,6 @@ fn init_rt<T: Instance + Send + Sync>(
 fn build_descriptor(
     dm: &mut DescriptorSetManager,
     frame_data: &[AllocatedBuffer],
-    bdpt_buffer: &AllocatedBuffer,
     cumulative_img: &AllocatedImage,
     out_img: &AllocatedImage,
 ) -> Vec<Descriptor> {
@@ -701,11 +645,6 @@ fn build_descriptor(
                     fd,
                     vk::DescriptorType::UNIFORM_BUFFER,
                     vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
-                )
-                .bind_buffer(
-                    bdpt_buffer,
-                    vk::DescriptorType::STORAGE_BUFFER,
-                    vk::ShaderStageFlags::COMPUTE | vk::ShaderStageFlags::RAYGEN_KHR,
                 )
                 .bind_image(
                     cumulative_img,
@@ -813,7 +752,6 @@ fn build_sbt<T: Instance>(
     // load single raygen group
     let group_count = match integrator {
         Integrator::DIRECT | Integrator::PATH_TRACE => 1,
-        Integrator::BDPT => 4,
     };
     let rgen_groups = unsafe {
         rploader.get_ray_tracing_shader_group_handles(
@@ -1004,17 +942,6 @@ fn build_push_constants(camera: &Camera, extent: vk::Extent2D) -> [u8; 128] {
         }
     }
     retval
-}
-
-fn create_bdpt_storage_buffer<T: Instance>(instance: &T, extent: vk::Extent2D) -> AllocatedBuffer {
-    let allocator = instance.allocator();
-    let size = (extent.width * extent.height) as u64 * std::mem::size_of::<BDPTPath>() as u64;
-    allocator.create_buffer(
-        "BDPT storage",
-        size,
-        vk::BufferUsageFlags::STORAGE_BUFFER,
-        MemoryLocation::GpuOnly,
-    )
 }
 
 fn update_frame_data(fd: RTFrameData, buf: &mut AllocatedBuffer) {

@@ -7,7 +7,7 @@ pub struct RTFrameData {
     pub scene_radius: f32,
     pub exposure: f32,
     pub scene_size: [f32; 2],
-    pub center_and_bdpt_step: [f32; 4],
+    pub center_and_step: [f32; 4],
 }
 
 impl Default for RTFrameData {
@@ -19,7 +19,7 @@ impl Default for RTFrameData {
             exposure: 1.0,
             pixel_offset: [0.0; 2],
             scene_size: [0.0; 2],
-            center_and_bdpt_step: [0.0; 4],
+            center_and_step: [0.0; 4],
         }
     }
 }
@@ -71,32 +71,4 @@ pub struct RTLight {
     pub pos: [f32; 4],
     pub dir: [f32; 4],
     pub shader: u32,
-}
-
-pub const BDPT_PATH_LEN: usize = 5;
-
-#[repr(C, align(16))]
-#[derive(Debug, Copy, Clone)]
-pub struct BDPTPathVertex {
-    pub distance: f32,
-    pub miss: bool,
-    pub pdf_fwd: f32,
-    pub pdf_bwd: f32,
-    pub attribs: [f32; 2],
-    pub ids: [u32; 2],
-    pub color0: [f32; 4],
-    pub color1: [f32; 4],
-    pub color2: [f32; 4],
-    pub color3: [f32; 4],
-}
-
-#[repr(C, align(16))]
-#[derive(Debug, Copy, Clone)]
-pub struct BDPTPath {
-    pub light: [BDPTPathVertex; BDPT_PATH_LEN],
-    pub camera: [BDPTPathVertex; BDPT_PATH_LEN],
-    pub origin_light: [f32; 4],
-    pub origin_camera: [f32; 4],
-    pub last_wo_light: [f32; 4],
-    pub last_wo_camera: [f32; 4],
 }
