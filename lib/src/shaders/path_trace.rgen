@@ -22,8 +22,11 @@ layout(push_constant) uniform readonly pc {
 layout(set=0, binding=0) uniform readonly frameData {
   RTFrameData data;
 } FrameData;
-layout(set=0, binding=1, rgba32f) uniform image2D accumulate_image;
-layout(set=0, binding=2, rgba32f) uniform writeonly image2D result_image;
+layout(set=0, binding=1) buffer ptData {
+  PTLastVertex last[];
+} PTData;
+layout(set=0, binding=2, rgba32f) uniform image2D accumulate_image;
+layout(set=0, binding=3, rgba32f) uniform writeonly image2D result_image;
 layout(set=1, binding=0) uniform accelerationStructureEXT scene;
 layout(std430, set=1, binding=1) readonly buffer vertexBuffer {
   VertexPacked vertices[];
@@ -63,9 +66,10 @@ vec3 ray_dir(vec2 ndc)
   return direction.xyz;
 }
 
-Spectrum direct_light(inout uint rng, in vec3 woW, in HitData hit, in ShadingSpace mat, in RTMaterial material)
+float direct_light(inout uint rng, in vec3 woW, in HitData hit, in ShadingSpace mat, in RTMaterial material, out Spectrum radiance)
 {
-  Spectrum L = SPECTRUM_ZERO;
+  float valid_path = 0.0;
+  radiance = SPECTRUM_ZERO;
   // choose a random light to sample
   sam.light_index = uint(min(rand(rng)*FrameData.data.lights_no, FrameData.data.lights_no-1));
   sam.position = hit.point;
@@ -84,7 +88,7 @@ Spectrum direct_light(inout uint rng, in vec3 woW, in HitData hit, in ShadingSpa
     // they are different!
     bsdfval.material_index = sh.ids.y;
     executeCallableEXT(material.bsdf_index, 3);
-    if(bsdfval.pdf!=0.0)
+    if(bsdfval.pdf > 0.0)
     {
       // trace shadow ray
       shadow_ray_hit = true;
@@ -92,79 +96,81 @@ Spectrum direct_light(inout uint rng, in vec3 woW, in HitData hit, in ShadingSpa
           0xFF, 0, 0, 1, hit.point, 0.001, sam.wiW, sam.distance-1E-3, 1);
       float weight = float(!shadow_ray_hit);
       weight *= abs(dot(bsdfval.wiW, hit.shading_normal))/sam.pdf;
-      L = mul(mul(bsdfval.value, sam.emission), weight);
+      weight *= float(FrameData.data.lights_no);
+      radiance = mul(mul(bsdfval.value, sam.emission), weight);
+      valid_path = 1.0;
     }
   }
-  return mul(L, float(FrameData.data.lights_no));
+  return valid_path;
 }
 
 void main()
 {
-  if (FrameData.data.lights_no == 0)
+  if(FrameData.data.lights_no == 0)
   {
-    // not even worth dealing with the accumulation
-    imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(0.0, 0.0, 0.0, 1.0));
+    // prevents out of bounds access
     return;
   }
   uint rng = srand(vec3(FrameData.data.seed, gl_LaunchIDEXT.xy));
+  uint path_id = uint(gl_LaunchIDEXT.y*gl_LaunchSizeEXT.x+gl_LaunchIDEXT.x);
   const vec2 pixel = gl_LaunchIDEXT.xy + FrameData.data.pixel_offset;
   const vec2 uv = pixel / gl_LaunchSizeEXT.xy;
   const vec2 ndc = vec2(-1.0)+2.0*uv;
+#ifdef PATH_INIT
   vec3 origin = ray_origin();
   vec3 direction = ray_dir(ndc);
-  Spectrum power = SPECTRUM_ONE;
-  Spectrum L = SPECTRUM_ZERO;
-  float rrprob = 1.0;
-  for(int i=0; i<5; i++)
+  Spectrum importance = SPECTRUM_ONE;
+#else
+  if(PTData.last[path_id].hit.w == 0.0)
   {
-    traceRayEXT(scene, 0, 0xFF, 0, 0, 0, origin, 0.0001, direction, INFINITY, 0);
-    if (sh.miss)
-    {
-      break;
-    }
-    HitData hit;
-    RTMaterial material;
-    EXPAND_HIT(sh, hit, material);
-    vec3 woW = -direction;
-    ShadingSpace matrix = new_shading_space(hit.dpdu, hit.shading_normal);
-    if(material.is_specular==0)
-    {
-      Spectrum direct = direct_light(rng, woW, hit, matrix, material);
-      L = add(L, mul(direct, power));
-    }
-    if(i>3)
-    {
-      float term = min(luminance(power), 0.5);
-      if(rand(rng) < term || i==4) // don't sample next direction if it's the last iteration
-      {
-        break;
-      }
-      else
-      {
-        rrprob = term;
-      }
-    }
-    bsdfsampleval.uv = hit.uv;
-    bsdfsampleval.woW = woW;
-    bsdfsampleval.geometric_normal = hit.geometric_normal;
-    bsdfsampleval.rand_sample = rand3(rng);
-    bsdfsampleval.shading = matrix;
-    bsdfsampleval.material_index = sh.ids.y;
-    executeCallableEXT(material.bsdf_index+1, 4);
-    if(bsdfsampleval.pdf == 0.0 || is_black(bsdfsampleval.value))
-    {
-      break;
-    }
-    float weight = abs(dot(bsdfsampleval.wiW, hit.shading_normal));
-    weight /= bsdfsampleval.pdf*rrprob;
-    power = mul(power, mul(bsdfsampleval.value, weight));
-    origin = hit.point;
-    direction = bsdfsampleval.wiW;
+    // path is invalid.
+    return;
   }
+  vec3 origin = PTData.last[path_id].hit.xyz;
+  vec3 direction = PTData.last[path_id].wi.xyz;
+  Spectrum importance = PTData.last[path_id].importance;
+#endif
+  Spectrum radiance = SPECTRUM_ZERO;
+  traceRayEXT(scene, 0, 0xFF, 0, 0, 0, origin, 0.0001, direction, INFINITY, 0);
+  if(sh.miss)
+  {
+    PTData.last[path_id].hit.w = 0.0; // mark the path as invalid
+    return;
+  }
+  HitData hit;
+  RTMaterial material;
+  EXPAND_HIT(sh, hit, material);
+  vec3 woW = -direction;
+  ShadingSpace matrix = new_shading_space(hit.dpdu, hit.shading_normal);
+  float valid_radiance = 0.0;
+  if(material.is_specular==0)
+  {
+    Spectrum direct;
+    valid_radiance = direct_light(rng, woW, hit, matrix, material, direct);
+    radiance = mul(direct, importance);
+  }
+  bsdfsampleval.uv = hit.uv;
+  bsdfsampleval.woW = woW;
+  bsdfsampleval.geometric_normal = hit.geometric_normal;
+  bsdfsampleval.rand_sample = rand3(rng);
+  bsdfsampleval.shading = matrix;
+  bsdfsampleval.material_index = sh.ids.y;
+  executeCallableEXT(material.bsdf_index+1, 4);
+  if(bsdfsampleval.pdf == 0.0)
+  {
+    PTData.last[path_id].hit.w = 0.0; // mark the path as invalid
+    return;
+  }
+  float weight = abs(dot(bsdfsampleval.wiW, hit.shading_normal));
+  weight /= bsdfsampleval.pdf;
+  PTData.last[path_id].importance = mul(importance, mul(bsdfsampleval.value, weight));
+  PTData.last[path_id].hit = vec4(hit.point, 1.0); // hit.w marks the path as valid
+  PTData.last[path_id].wi = vec4(bsdfsampleval.wiW, 1.0);
+  // stores the current result
   vec4 cumulative_val = imageLoad(accumulate_image, ivec2(gl_LaunchIDEXT.xy));
-  cumulative_val.xyz += xyz(L);
-  cumulative_val.w += 1.0;
-  vec3 rgb = rgb(vec3(cumulative_val.xyz*FrameData.data.exposure/cumulative_val.w));
+  cumulative_val.xyz += rgb(radiance);
+  cumulative_val.w += valid_radiance;
+  vec3 rgb = vec3(cumulative_val.xyz*FrameData.data.exposure/cumulative_val.w);
   imageStore(accumulate_image, ivec2(gl_LaunchIDEXT.xy), cumulative_val);
   imageStore(result_image, ivec2(gl_LaunchIDEXT.xy), vec4(rgb, 1.0));
 }

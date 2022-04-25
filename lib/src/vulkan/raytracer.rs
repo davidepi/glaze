@@ -2,7 +2,7 @@ use super::cmd::CommandManager;
 use super::descriptor::DescriptorSetManager;
 use super::instance::Instance;
 use super::memory::AllocatedBuffer;
-use super::raytrace_structures::RTFrameData;
+use super::raytrace_structures::{PTLastVertex, RTFrameData, PT_STEPS};
 use super::scene::{padding, RayTraceScene};
 use super::sync::{create_fence, create_semaphore};
 use super::{export, AllocatedImage, Descriptor, UnfinishedExecutions};
@@ -44,10 +44,18 @@ impl Integrator {
         }
     }
 
+    // how many raygen shaders are necessary for each integrator
+    fn raygen_count(&self) -> u32 {
+        match self {
+            Integrator::DIRECT => 1,
+            Integrator::PATH_TRACE => 2,
+        }
+    }
+
     pub fn steps_per_sample(&self) -> usize {
         match self {
             Integrator::DIRECT => 1,
-            Integrator::PATH_TRACE => 1,
+            Integrator::PATH_TRACE => PT_STEPS,
         }
     }
 }
@@ -75,6 +83,8 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     out32_img: AllocatedImage,
     out8_img: AllocatedImage,
     integrator: Integrator,
+    integrator_data: AllocatedBuffer,
+    integrator_step: u32,
     sample_scheduler: WorkScheduler,
     request_new_frame: bool,
     // contains also the out_img
@@ -138,6 +148,15 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                 integrator,
                 &mut unf,
             );
+            self.integrator_data =
+                create_integrator_data(self.instance.as_ref(), integrator, self.extent);
+            self.frame_desc = build_descriptor(
+                &mut self.dm,
+                &self.frame_data,
+                &self.integrator_data,
+                &self.cumulative_img,
+                &self.out32_img,
+            );
             unf.wait_completion();
             self.pipeline = pipeline;
             self.sbt = sbt;
@@ -179,7 +198,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             &mut self.tcmdm,
             self.extent,
             &mut unf,
-            false,
+            true,
         );
         self.out8_img = self.instance.allocator().create_image_gpu(
             "32bit image raytracer",
@@ -196,9 +215,12 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             &mut unf,
             true,
         );
+        self.integrator_data =
+            create_integrator_data(self.instance.as_ref(), self.integrator, self.extent);
         self.frame_desc = build_descriptor(
             &mut self.dm,
             &self.frame_data,
+            &self.integrator_data,
             &self.cumulative_img,
             &self.out32_img,
         );
@@ -341,6 +363,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         };
         let frame_index = frame_no % self.frame_desc.len();
         if self.request_new_frame {
+            self.integrator_step = 0;
             self.sample_scheduler.rewind();
         }
         let fd = RTFrameData {
@@ -354,11 +377,19 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                 self.scene.meta.scene_centre[0],
                 self.scene.meta.scene_centre[1],
                 self.scene.meta.scene_centre[2],
-                0.0,
+                self.integrator_step as f32,
             ],
         };
-        let which_raygen = 0;
+        let which_raygen = if self.integrator == Integrator::DIRECT
+            || (self.integrator == Integrator::PATH_TRACE && self.integrator_step == 0)
+        {
+            0
+        } else {
+            1
+        };
         update_frame_data(fd, &mut self.frame_data[frame_index]);
+        self.integrator_step =
+            (self.integrator_step + 1) % self.integrator.steps_per_sample() as u32;
         let queue = device.compute_queue();
         unsafe {
             vkdevice
@@ -372,6 +403,13 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                 vkdevice.cmd_clear_color_image(
                     cmd,
                     self.cumulative_img.image,
+                    vk::ImageLayout::GENERAL,
+                    &color,
+                    &[subresource_range],
+                );
+                vkdevice.cmd_clear_color_image(
+                    cmd,
+                    self.out32_img.image,
                     vk::ImageLayout::GENERAL,
                     &color,
                     &[subresource_range],
@@ -409,7 +447,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             );
             vkdevice.cmd_pipeline_barrier(
                 cmd,
-                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::DependencyFlags::empty(),
                 &[],
@@ -590,8 +628,15 @@ fn init_rt<T: Instance + Send + Sync>(
             )
         })
         .collect::<Vec<_>>();
-    let frame_desc = build_descriptor(&mut dm, &frame_data, &cumulative_img, &out32_img);
     let integrator = Integrator::default();
+    let integrator_data = create_integrator_data(instance.as_ref(), integrator, extent);
+    let frame_desc = build_descriptor(
+        &mut dm,
+        &frame_data,
+        &integrator_data,
+        &cumulative_img,
+        &out32_img,
+    );
     let pipeline = build_raytracing_pipeline(
         &rploader,
         device.logical_clone(),
@@ -617,6 +662,8 @@ fn init_rt<T: Instance + Send + Sync>(
         out32_img,
         out8_img,
         integrator,
+        integrator_data,
+        integrator_step: 0,
         sample_scheduler,
         request_new_frame: true,
         frame_desc,
@@ -634,6 +681,7 @@ fn init_rt<T: Instance + Send + Sync>(
 fn build_descriptor(
     dm: &mut DescriptorSetManager,
     frame_data: &[AllocatedBuffer],
+    integrator_data: &AllocatedBuffer,
     cumulative_img: &AllocatedImage,
     out_img: &AllocatedImage,
 ) -> Vec<Descriptor> {
@@ -645,6 +693,11 @@ fn build_descriptor(
                     fd,
                     vk::DescriptorType::UNIFORM_BUFFER,
                     vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
+                )
+                .bind_buffer(
+                    integrator_data,
+                    vk::DescriptorType::STORAGE_BUFFER,
+                    vk::ShaderStageFlags::RAYGEN_KHR,
                 )
                 .bind_image(
                     cumulative_img,
@@ -749,10 +802,7 @@ fn build_sbt<T: Instance>(
     let mut data = Vec::new();
     let mut group_index = 0;
 
-    // load single raygen group
-    let group_count = match integrator {
-        Integrator::DIRECT | Integrator::PATH_TRACE => 1,
-    };
+    let group_count = integrator.raygen_count();
     let rgen_groups = unsafe {
         rploader.get_ray_tracing_shader_group_handles(
             pipeline.pipeline,
@@ -942,6 +992,32 @@ fn build_push_constants(camera: &Camera, extent: vk::Extent2D) -> [u8; 128] {
         }
     }
     retval
+}
+
+fn create_integrator_data<T: Instance>(
+    instance: &T,
+    integrator: Integrator,
+    extent: vk::Extent2D,
+) -> AllocatedBuffer {
+    let allocator = instance.allocator();
+    match integrator {
+        Integrator::DIRECT => allocator.create_buffer(
+            "unused",
+            1,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            MemoryLocation::GpuOnly,
+        ),
+        Integrator::PATH_TRACE => {
+            let size =
+                (extent.width * extent.height) as u64 * std::mem::size_of::<PTLastVertex>() as u64;
+            allocator.create_buffer(
+                "PT storage",
+                size,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                MemoryLocation::GpuOnly,
+            )
+        }
+    }
 }
 
 fn update_frame_data(fd: RTFrameData, buf: &mut AllocatedBuffer) {

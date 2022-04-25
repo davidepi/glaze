@@ -80,6 +80,11 @@ vec3 rgb(vec3 xyz)
   return rgb;
 }
 
+vec3 rgb(Spectrum sp)
+{
+  return rgb(xyz(sp));
+}
+
 Spectrum add(Spectrum sp, float f)
 {
   Spectrum res;

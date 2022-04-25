@@ -30,7 +30,7 @@ impl Default for RTFrameData {
 /// Used to retrieve the mesh attributes in a raytracing context.
 /// Unlike MeshInstance and VulkanMesh it MUST be indexed by its position in the array.
 /// The index must correspond to the MeshInstance index passed to the acceleration structure.
-#[repr(C)]
+#[repr(C, align(4))]
 pub struct RTInstance {
     pub index_offset: u32,
     pub index_count: u32,
@@ -64,4 +64,14 @@ pub struct RTLight {
     pub pos: [f32; 4],
     pub dir: [f32; 4],
     pub shader: u32,
+}
+
+pub const PT_STEPS: usize = 6;
+
+#[repr(C, align(16))]
+#[derive(Debug, Copy, Clone)]
+pub struct PTLastVertex {
+    pub importance: Spectrum,
+    pub wi: [f32; 4],
+    pub hit: [f32; 4], //hit.z indicates if the path is still valid or not
 }

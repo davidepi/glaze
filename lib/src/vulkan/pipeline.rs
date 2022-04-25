@@ -411,6 +411,10 @@ pub fn build_raytracing_pipeline(
     let mut shader_stages = match integrator {
         Integrator::PATH_TRACE => vec![
             create_ci(
+                include_shader!("path_trace_init.rgen"),
+                vk::ShaderStageFlags::RAYGEN_KHR,
+            ),
+            create_ci(
                 include_shader!("path_trace.rgen"),
                 vk::ShaderStageFlags::RAYGEN_KHR,
             ),
@@ -419,7 +423,7 @@ pub fn build_raytracing_pipeline(
         ],
         Integrator::DIRECT => vec![
             create_ci(
-                include_shader!("direct.rgen"),
+                include_shader!("path_trace_init.rgen"),
                 vk::ShaderStageFlags::RAYGEN_KHR,
             ),
             create_ci(miss, vk::ShaderStageFlags::MISS_KHR),
@@ -436,6 +440,18 @@ pub fn build_raytracing_pipeline(
         intersection_shader: vk::SHADER_UNUSED_KHR,
         p_shader_group_capture_replay_handle: ptr::null(),
     }];
+    if integrator == Integrator::PATH_TRACE {
+        shader_groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
+            s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
+            p_next: ptr::null(),
+            ty: vk::RayTracingShaderGroupTypeKHR::GENERAL,
+            general_shader: 1,
+            closest_hit_shader: vk::SHADER_UNUSED_KHR,
+            any_hit_shader: vk::SHADER_UNUSED_KHR,
+            intersection_shader: vk::SHADER_UNUSED_KHR,
+            p_shader_group_capture_replay_handle: ptr::null(),
+        });
+    }
     shader_groups.extend([
         vk::RayTracingShaderGroupCreateInfoKHR {
             s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,

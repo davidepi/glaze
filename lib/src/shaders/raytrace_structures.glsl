@@ -5,6 +5,7 @@
 #define _RAYTRACE_STRUCTURES_GLSL_
 #include "spectrum.glsl"
 
+#define PT_STEPS 6
 
 struct RTFrameData
 {
@@ -48,6 +49,13 @@ struct RTLight
   vec4 pos;
   vec4 dir;
   uint shader;
+};
+
+struct PTLastVertex
+{
+  Spectrum importance;
+  vec4 wi;
+  vec4 hit;
 };
 
 #endif
