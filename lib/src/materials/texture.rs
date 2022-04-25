@@ -199,10 +199,19 @@ impl Texture {
 
     /// Returns the size in bytes of a specific MIP map level.
     pub fn size_bytes(&self, level: usize) -> usize {
-        match self {
-            Texture::Rgba(t) => t.data[level].len(), // len already returns the bytes
-            Texture::Gray(t) => t.data[level].len(),
-        }
+        let (w, h) = self.dimensions(level);
+        w as usize * h as usize * self.bytes_per_pixel()
+    }
+
+    /// Returns the number of possible MIP maps.
+    ///
+    /// Note, this is *not* the number of actual MIP maps contained in the textures.
+    pub fn max_mipmap_levels(&self) -> usize {
+        let (w, h) = match self {
+            Texture::Rgba(t) => (t.info.width, t.info.height),
+            Texture::Gray(t) => (t.info.width, t.info.height),
+        };
+        1 + ilog2(std::cmp::max(w as u32, h as u32)) as usize
     }
 
     /// Returns the number of bytes per pixel in the texture.
@@ -213,14 +222,9 @@ impl Texture {
         }
     }
 
-    /// Returns true if the texture contains MIP maps.
-    ///
-    /// This method is equivalent to `[Texture::levels()] > 1`.
+    /// Returns true if the texture contains all MIP maps.
     pub fn has_mipmaps(&self) -> bool {
-        match self {
-            Texture::Rgba(img) => img.data.len() > 1,
-            Texture::Gray(img) => img.data.len() > 1,
-        }
+        self.mipmap_levels() == self.max_mipmap_levels()
     }
 
     /// Generates the MIP maps for this texture.

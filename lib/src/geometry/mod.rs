@@ -9,4 +9,9 @@ pub use self::color::{ColorRGB, ColorXYZ};
 mod spectrum;
 pub use self::spectrum::Spectrum;
 mod light;
-pub use self::light::{Light, LightType, SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
+pub use self::light::{Light, LightType};
+
+#[cfg(feature = "vulkan")]
+pub use self::light::SBT_LIGHT_STRIDE;
+#[cfg(feature = "vulkan")]
+pub use self::light::SBT_LIGHT_TYPES;

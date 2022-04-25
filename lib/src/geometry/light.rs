@@ -1,4 +1,6 @@
-use crate::{include_shader, Spectrum};
+#[cfg(feature = "vulkan")]
+use crate::include_shader;
+use crate::Spectrum;
 use cgmath::{Point3, Vector3 as Vec3};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -7,7 +9,9 @@ pub enum Light {
     Sun(SunLight),
 }
 
+#[cfg(feature = "vulkan")]
 pub const SBT_LIGHT_TYPES: usize = 2;
+#[cfg(feature = "vulkan")]
 pub const SBT_LIGHT_STRIDE: usize = 1;
 
 /// Used to safely update all the light instances if new lights are added.
@@ -19,7 +23,7 @@ pub enum LightType {
 }
 
 impl LightType {
-    pub fn all() -> [Self; SBT_LIGHT_TYPES] {
+    pub fn all() -> [Self; 2] {
         [Self::OMNI, Self::SUN]
     }
 
@@ -30,6 +34,7 @@ impl LightType {
         }
     }
 
+    #[cfg(feature = "vulkan")]
     pub(crate) fn callable_shaders() -> [Vec<u8>; SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE] {
         [
             include_shader!("light_omni_sample_visible.rcall").to_vec(),
@@ -37,6 +42,7 @@ impl LightType {
         ]
     }
 
+    #[cfg(feature = "vulkan")]
     pub(crate) fn sbt_callable_index(&self) -> u32 {
         let light_index = match self {
             LightType::OMNI => 0,

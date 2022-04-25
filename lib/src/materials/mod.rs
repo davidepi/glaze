@@ -12,5 +12,7 @@ pub use self::texture::{Texture, TextureFormat, TextureGray, TextureInfo, Textur
 pub const DEFAULT_TEXTURE_ID: u16 = 0;
 pub const DEFAULT_MATERIAL_ID: u16 = 0;
 
+#[cfg(feature = "vulkan")]
 pub const SBT_MATERIAL_STRIDE: usize = 2;
+#[cfg(feature = "vulkan")]
 pub const SBT_MATERIAL_TYPES: usize = 6;

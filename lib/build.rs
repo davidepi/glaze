@@ -3,13 +3,16 @@ use shaderc::{
     CompileOptions, Compiler, EnvVersion, IncludeCallbackResult, IncludeType, OptimizationLevel,
     ResolvedInclude, ShaderKind, TargetEnv,
 };
+#[cfg(feature = "vulkan")]
 use std::collections::HashMap;
 #[cfg(feature = "vulkan")]
 use std::env;
 use std::error::Error;
+#[cfg(feature = "vulkan")]
 use std::path::Path;
 #[cfg(feature = "vulkan")]
 use std::path::PathBuf;
+#[cfg(feature = "vulkan")]
 use syn::{Expr, Item, ItemConst, Lit, Type, TypeArray, TypePath};
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -30,6 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 // variants is an array of tuples (input_file_name, define, output_file_name)
 // if a file matches the first element in the tuple, the second element will be the list of defines
 // and the third the output filename. This will replace the default "empty defines" variant.
+#[cfg(feature = "vulkan")]
 fn compile_spirv(variants: &[(&str, &str, &str)]) -> Result<(), Box<dyn Error>> {
     let is_debug = cfg!(debug_assertions);
     // specifying different folders is not necessary with OUT_DIR, cargo handles this automatically
@@ -119,6 +123,7 @@ fn handle_includes(name: &str, _: IncludeType, _: &str, _: usize) -> IncludeCall
     }
 }
 
+#[cfg(feature = "vulkan")]
 fn gen_shared_structures(files: &[&str]) -> Result<(), Box<dyn Error>> {
     for file in files {
         let content = std::fs::read_to_string(file)?;
@@ -167,6 +172,7 @@ fn gen_shared_structures(files: &[&str]) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[cfg(feature = "vulkan")]
 fn path_type_to_c_type(path: TypePath, field_name: String) -> String {
     let last = path.path.segments.last().unwrap();
     let name = last.ident.to_string();
@@ -187,6 +193,7 @@ fn path_type_to_c_type(path: TypePath, field_name: String) -> String {
     format!("  {ty} {field_name};\n")
 }
 
+#[cfg(feature = "vulkan")]
 fn array_type_to_c_type(array: TypeArray, field_name: String) -> String {
     let inner_type = match *array.elem {
         Type::Path(tp) => tp,
@@ -225,6 +232,7 @@ fn array_type_to_c_type(array: TypeArray, field_name: String) -> String {
     }
 }
 
+#[cfg(feature = "vulkan")]
 fn const_to_c_define(con: ItemConst) -> String {
     match *con.ty {
         Type::Path(_) => {

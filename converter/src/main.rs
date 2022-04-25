@@ -53,6 +53,9 @@ struct Args {
     /// Perform a reading benchmark on the input scene
     #[clap(short, long)]
     benchmark: bool,
+    /// Calculate and store the mip-maps inside the scene file
+    #[clap(long = "gen-mipmaps")]
+    gen_mipmaps: bool,
 }
 
 fn main() {
@@ -63,7 +66,7 @@ fn main() {
         match preprocess_input(&args.input) {
             Ok(scene) => {
                 println!("{} Converting scene...", style("[2/3]").bold().dim());
-                match convert_input(scene, &args.input) {
+                match convert_input(scene, &args.input, args.gen_mipmaps) {
                     Ok(scene) => {
                         println!("{} Compressing file...", style("[3/3]").bold().dim());
                         match write_output(scene, ParserVersion::V1, &output) {
@@ -76,7 +79,7 @@ fn main() {
             }
             Err(e) => error!("Failed to preprocess input", e),
         }
-    } else if let Err(error) = benchmark(&args.input, ParserVersion::V1) {
+    } else if let Err(error) = benchmark(&args.input, ParserVersion::V1, args.gen_mipmaps) {
         error!("Failed to benchmark scene", error);
     };
 }
@@ -111,7 +114,11 @@ fn vertex_to_bytes(vert: &Vertex) -> Vec<u8> {
         .collect()
 }
 
-fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, std::io::Error> {
+fn convert_input(
+    scene: RussimpScene,
+    original_path: &str,
+    gen_mm: bool,
+) -> Result<TempScene, std::io::Error> {
     let mpb = MultiProgress::new();
     let style = ProgressStyle::default_bar()
         .progress_chars("#>-")
@@ -134,12 +141,14 @@ fn convert_input(scene: RussimpScene, original_path: &str) -> Result<TempScene, 
     let material_thread = thread::spawn(move || convert_materials(&material_data, mat_pb, &path));
     let mesh_thread = thread::spawn(move || convert_meshes(&mesh_data, mesh_pb));
     let lights = lights_thread.join().unwrap();
-    let (materials, textures) = material_thread.join().unwrap()?;
-    let mm_pb = mpb.add(ProgressBar::new(1));
-    mm_pb.set_style(style);
-    let tex_mm_thread = thread::spawn(move || gen_mipmaps(textures, mm_pb));
+    let (materials, mut textures) = material_thread.join().unwrap()?;
+    if gen_mm {
+        let mm_pb = mpb.add(ProgressBar::new(1));
+        mm_pb.set_style(style);
+        let tex_mm_thread = thread::spawn(move || gen_mipmaps(textures, mm_pb));
+        textures = tex_mm_thread.join().unwrap();
+    }
     let (vertices, meshes) = mesh_thread.join().unwrap()?;
-    let textures = tex_mm_thread.join().unwrap();
     let (transforms, instances) = if let Some(root) = scene.root {
         convert_transforms_and_instances(&root)
     } else {
@@ -593,7 +602,11 @@ fn write_output(
         .serialize()
 }
 
-fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std::error::Error>> {
+fn benchmark(
+    input: &str,
+    version: ParserVersion,
+    gen_mm: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     // the benchmark is simple on purpose. This method will take seconds if not minutes to run.
     let dir = tempdir()?;
     let file;
@@ -604,7 +617,7 @@ fn benchmark(input: &str, version: ParserVersion) -> Result<(), Box<dyn std::err
         let preprocess_start = Instant::now();
         let preprocessed = preprocess_input(input)?;
         let preprocess_end = Instant::now();
-        let conversion = convert_input(preprocessed, input)?;
+        let conversion = convert_input(preprocessed, input, gen_mm)?;
         let conversion_end = Instant::now();
         let _ = write_output(conversion, version, file.to_str().unwrap())?;
         let compression_end = Instant::now();
@@ -672,7 +685,7 @@ mod tests {
             .join("resources")
             .join("cube.obj");
         let scene = super::preprocess_input(path.to_str().unwrap()).unwrap();
-        let scene = super::convert_input(scene, path.to_str().unwrap()).unwrap();
+        let scene = super::convert_input(scene, path.to_str().unwrap(), false).unwrap();
         let dir = tempdir()?;
         let file = dir.path().join("serializer.bin");
         assert!(
@@ -694,10 +707,67 @@ mod tests {
             assert_eq!(parsed.transforms()?.len(), 1);
             assert_eq!(parsed.instances()?.len(), 1);
             assert_eq!(parsed.cameras()?.len(), 1);
-            assert_eq!(parsed.materials()?.len(), 2);
-            let textures = parsed.textures()?;
-            assert_eq!(textures[0].mipmap_levels(), 10);
+            assert_eq!(parsed.materials()?.len(), 3);
+            assert_eq!(parsed.textures()?.len(), 2);
             assert_eq!(parsed.vertices()?.len(), 24);
+        } else {
+            panic!("Failed to parse back scene")
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_mipmap_generation() -> Result<(), Box<dyn Error>> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("resources")
+            .join("cube.obj");
+        let scene = super::preprocess_input(path.to_str().unwrap()).unwrap();
+        let scene = super::convert_input(scene, path.to_str().unwrap(), true).unwrap();
+        let dir = tempdir()?;
+        let file = dir.path().join("serializer_with_mipmap.bin");
+        assert!(
+            Serializer::new(file.to_str().unwrap(), glaze::ParserVersion::V1)
+                .with_textures(&scene.textures)
+                .serialize()
+                .is_ok()
+        );
+        let parsed = parse(&file);
+        assert!(parsed.is_ok());
+        if let Ok(parsed) = parsed {
+            let textures = parsed.textures()?;
+            assert!(textures[1].has_mipmaps());
+            assert_eq!(textures[1].mipmap_levels(), 10);
+        } else {
+            panic!("Failed to parse back scene")
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_mipmap_skip() -> Result<(), Box<dyn Error>> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("resources")
+            .join("cube.obj");
+        let scene = super::preprocess_input(path.to_str().unwrap()).unwrap();
+        let scene = super::convert_input(scene, path.to_str().unwrap(), false).unwrap();
+        let dir = tempdir()?;
+        let file = dir.path().join("serializer_no_mipmap.bin");
+        assert!(
+            Serializer::new(file.to_str().unwrap(), glaze::ParserVersion::V1)
+                .with_textures(&scene.textures)
+                .serialize()
+                .is_ok()
+        );
+        let parsed = parse(&file);
+        assert!(parsed.is_ok());
+        if let Ok(parsed) = parsed {
+            let textures = parsed.textures()?;
+            assert!(!textures[1].has_mipmaps());
+            assert_eq!(textures[1].mipmap_levels(), 1);
         } else {
             panic!("Failed to parse back scene")
         }
@@ -712,7 +782,7 @@ mod tests {
             .join("resources")
             .join("test.fbx");
         let scene = super::preprocess_input(path.to_str().unwrap()).unwrap();
-        let scene = super::convert_input(scene, path.to_str().unwrap()).unwrap();
+        let scene = super::convert_input(scene, path.to_str().unwrap(), false).unwrap();
         let dir = tempdir()?;
         let file = dir.path().join("instances.bin");
         assert!(
