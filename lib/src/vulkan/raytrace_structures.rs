@@ -1,3 +1,5 @@
+use crate::Spectrum;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct RTFrameData {
@@ -39,14 +41,8 @@ pub struct RTInstance {
 #[derive(Debug, Default, Copy, Clone)]
 pub struct RTMaterial {
     pub diffuse_mul: [f32; 4],
-    pub ior0: [f32; 4],
-    pub ior1: [f32; 4],
-    pub ior2: [f32; 4],
-    pub ior3: [f32; 4],
-    pub metal_fresnel0: [f32; 4],
-    pub metal_fresnel1: [f32; 4],
-    pub metal_fresnel2: [f32; 4],
-    pub metal_fresnel3: [f32; 4],
+    pub metal_ior: Spectrum,
+    pub metal_fresnel: Spectrum,
     pub diffuse: u32,
     pub roughness: u32,
     pub metalness: u32,
@@ -64,10 +60,7 @@ pub struct RTMaterial {
 #[repr(C, align(16))]
 #[derive(Debug, Copy, Clone)]
 pub struct RTLight {
-    pub color0: [f32; 4],
-    pub color1: [f32; 4],
-    pub color2: [f32; 4],
-    pub color3: [f32; 4],
+    pub color: Spectrum,
     pub pos: [f32; 4],
     pub dir: [f32; 4],
     pub shader: u32,

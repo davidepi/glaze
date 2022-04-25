@@ -39,11 +39,9 @@ void main()
     wi = -normalize(reflect(wo, wh));
     float dotwowh = dot(wo,wh);
     float dotwiwh = dot(wi,wh);
-    Spectrum metal_ior = Spectrum(mat.ior0, mat.ior1, mat.ior2, mat.ior3);
-    Spectrum metal_fresnel = Spectrum(mat.metal_fresnel0,mat.metal_fresnel1,mat.metal_fresnel2,mat.metal_fresnel3);
     float costi = dot(wi, sign(dot(wh,vec3(0,0,1)))*wh);
     Spectrum fd = spectrum_uniform(fresnel_dielectric(costi, etai, etat));
-    Spectrum fc = fresnel_conductor(costi, metal_ior, metal_fresnel);
+    Spectrum fc = fresnel_conductor(costi, mat.metal_ior, mat.metal_fresnel);
     Spectrum f = mix(fd, fc, metalness);
     float costwo = abs(wo.z);
     float costwi = abs(wi.z);

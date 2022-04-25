@@ -3,6 +3,7 @@
 
 #ifndef _RAYTRACE_STRUCTURES_GLSL_
 #define _RAYTRACE_STRUCTURES_GLSL_
+#include "spectrum.glsl"
 
 
 struct RTFrameData
@@ -26,14 +27,8 @@ struct RTInstance
 struct RTMaterial
 {
   vec4 diffuse_mul;
-  vec4 ior0;
-  vec4 ior1;
-  vec4 ior2;
-  vec4 ior3;
-  vec4 metal_fresnel0;
-  vec4 metal_fresnel1;
-  vec4 metal_fresnel2;
-  vec4 metal_fresnel3;
+  Spectrum metal_ior;
+  Spectrum metal_fresnel;
   uint diffuse;
   uint roughness;
   uint metalness;
@@ -49,10 +44,7 @@ struct RTMaterial
 
 struct RTLight
 {
-  vec4 color0;
-  vec4 color1;
-  vec4 color2;
-  vec4 color3;
+  Spectrum color;
   vec4 pos;
   vec4 dir;
   uint shader;

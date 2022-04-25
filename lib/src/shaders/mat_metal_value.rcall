@@ -27,9 +27,7 @@ void main()
   bool same_hemisphere = wo.z*wi.z > 0.0;
   if(same_hemisphere) // can't use a step function due to NaNs propagation
   {
-    Spectrum metal_ior = Spectrum(mat.ior0, mat.ior1, mat.ior2, mat.ior3);
-    Spectrum metal_fresnel = Spectrum(mat.metal_fresnel0,mat.metal_fresnel1,mat.metal_fresnel2,mat.metal_fresnel3);
-    Spectrum F = fresnel_conductor(dot(wi, wh), metal_ior, metal_fresnel);
+    Spectrum F = fresnel_conductor(dot(wi, wh), mat.metal_ior, mat.metal_fresnel);
     float sampled_roughness = texture(textures[nonuniformEXT(mat.roughness)], bsdf.uv).r;
     vec2 a = to_anisotropic(sampled_roughness*mat.roughness_mul, mat.anisotropy);
     float d = ggx_d(wh, a);

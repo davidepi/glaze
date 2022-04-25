@@ -14,7 +14,7 @@ use super::UnfinishedExecutions;
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{
     include_shader, Camera, Light, Material, Mesh, MeshInstance, Meta, Metal, ParsedScene,
-    RayTraceInstance, Vertex,
+    RayTraceInstance, Spectrum, Vertex,
 };
 #[cfg(feature = "vulkan-interactive")]
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
@@ -1216,14 +1216,8 @@ fn load_raytrace_materials_to_gpu(
             let fresnel = (ior * ior) + (k * k);
             RTMaterial {
                 diffuse_mul: col_int_to_f32(mat.diffuse_mul),
-                ior0: ior.wavelength[0..4].try_into().unwrap(),
-                ior1: ior.wavelength[4..8].try_into().unwrap(),
-                ior2: ior.wavelength[8..12].try_into().unwrap(),
-                ior3: ior.wavelength[12..16].try_into().unwrap(),
-                metal_fresnel0: fresnel.wavelength[0..4].try_into().unwrap(),
-                metal_fresnel1: fresnel.wavelength[4..8].try_into().unwrap(),
-                metal_fresnel2: fresnel.wavelength[8..12].try_into().unwrap(),
-                metal_fresnel3: fresnel.wavelength[12..16].try_into().unwrap(),
+                metal_ior: ior,
+                metal_fresnel: fresnel,
                 diffuse: mat.diffuse as u32,
                 roughness: mat.roughness as u32,
                 metalness: mat.metalness as u32,
@@ -1258,7 +1252,6 @@ fn load_raytrace_lights_to_gpu(
     let mut data = lights
         .iter()
         .map(|l| {
-            let w = l.emission().wavelength;
             let pos = l.position();
             let mut dir = l.direction();
             if dir.x == 0.0 && dir.y == 0.0 && dir.z == 0.0 {
@@ -1266,10 +1259,7 @@ fn load_raytrace_lights_to_gpu(
                 dir.y = 1.0;
             }
             RTLight {
-                color0: [w[0], w[1], w[2], w[3]],
-                color1: [w[4], w[5], w[6], w[7]],
-                color2: [w[8], w[9], w[10], w[11]],
-                color3: [w[12], w[13], w[14], w[15]],
+                color: l.emission(),
                 pos: [pos.x, pos.y, pos.z, 0.0],
                 dir: [dir.x, dir.y, dir.z, 0.0],
                 shader: l.ltype().sbt_callable_index(),
@@ -1280,10 +1270,7 @@ fn load_raytrace_lights_to_gpu(
         // push an empty light to avoid having a zero sized buffer
         // since there is no "default" light
         data.push(RTLight {
-            color0: [0.0; 4],
-            color1: [0.0; 4],
-            color2: [0.0; 4],
-            color3: [0.0; 4],
+            color: Spectrum::black(),
             pos: [0.0, 0.0, 0.0, 0.0],
             dir: [0.0, 0.0, 0.0, 0.0],
             shader: 0,

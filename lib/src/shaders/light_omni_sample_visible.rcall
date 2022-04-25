@@ -21,6 +21,5 @@ void main()
     (light.pos.z-sam.position.z)*(light.pos.z-sam.position.z);
   sam.distance = sqrt(distance2);
   sam.pdf = 1.0;
-  Spectrum c = Spectrum(light.color0, light.color1, light.color2, light.color3);
-  sam.emission = div(c, distance2);
+  sam.emission = div(light.color, distance2);
 }
