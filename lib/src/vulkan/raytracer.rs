@@ -233,17 +233,11 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         self.request_new_frame = true;
     }
 
-    pub fn update_materials(&mut self, materials: &[Material]) {
+    // materials and lights must be handled together because of emissive materials.
+    pub fn update_materials_and_lights(&mut self, materials: &[Material], lights: &[Light]) {
         let mut unf = UnfinishedExecutions::new(self.instance.device());
         self.scene
-            .update_materials(materials, &mut self.tcmdm, &mut unf);
-        unf.wait_completion();
-        self.request_new_frame = true;
-    }
-
-    pub fn update_lights(&mut self, lights: &[Light]) {
-        let mut unf = UnfinishedExecutions::new(self.instance.device());
-        self.scene.update_lights(lights, &mut self.tcmdm, &mut unf);
+            .update_materials_and_lights(materials, lights, &mut self.tcmdm, &mut unf);
         unf.wait_completion();
         self.request_new_frame = true;
     }

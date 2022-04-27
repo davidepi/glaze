@@ -140,8 +140,9 @@ fn convert_input(
     let lights_thread = thread::spawn(move || convert_lights(&light_data, light_pb));
     let material_thread = thread::spawn(move || convert_materials(&material_data, mat_pb, &path));
     let mesh_thread = thread::spawn(move || convert_meshes(&mesh_data, mesh_pb));
-    let lights = lights_thread.join().unwrap();
-    let (materials, mut textures) = material_thread.join().unwrap()?;
+    let mut lights = lights_thread.join().unwrap();
+    let (materials, mut textures, mut area_lights) = material_thread.join().unwrap()?;
+    lights.append(&mut area_lights);
     if gen_mm {
         let mm_pb = mpb.add(ProgressBar::new(1));
         mm_pb.set_style(style);
@@ -288,7 +289,7 @@ fn convert_lights(lights: &[russimp::light::Light], pb: ProgressBar) -> Vec<Ligh
         let position = russimp_vec_to_point(light.pos);
         retval_lights.push(match light.light_source_type {
             russimp::light::LightSourceType::Point => {
-                Light::new_omni(light.name.clone(), spectrum, position)
+                Light::new_omni(light.name.clone(), spectrum, position, 1.0)
             }
             russimp::light::LightSourceType::Directional => Light::new_sun(
                 light.name.clone(),
@@ -405,13 +406,14 @@ fn convert_materials(
     materials: &[russimp::material::Material],
     pb: ProgressBar,
     original_path: &str,
-) -> Result<(Vec<Material>, Vec<Texture>), std::io::Error> {
+) -> Result<(Vec<Material>, Vec<Texture>, Vec<Light>), std::io::Error> {
     let effort = materials.len();
     pb.set_length(effort as u64);
     pb.set_message("Converting materials and textures");
     let mut used_textures = HashMap::new();
     let mut retval_textures = Vec::new();
     let mut retval_materials = Vec::new();
+    let mut retval_lights = Vec::new();
     // add default texture
     retval_textures.push(Texture::default());
     retval_materials.push(Material::default());
@@ -457,12 +459,19 @@ fn convert_materials(
             }
         }
         // build material
-        let material = convert_material(&material.properties, &used_textures);
+        let (material, light) = convert_material(
+            &material.properties,
+            &used_textures,
+            retval_materials.len() as u16,
+        );
         retval_materials.push(material);
+        if let Some(light) = light {
+            retval_lights.push(light);
+        }
         pb.inc(1);
     }
     pb.finish();
-    Ok((retval_materials, retval_textures))
+    Ok((retval_materials, retval_textures, retval_lights))
 }
 
 fn convert_texture(
@@ -517,12 +526,23 @@ fn convert_texture(
     }
 }
 
-fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, u16>) -> Material {
+fn convert_material(
+    props: &[MaterialProperty],
+    used_textures: &HashMap<String, u16>,
+    mat_id: u16,
+) -> (Material, Option<Light>) {
     let mut retval = Material::default();
+    let mut light = None;
     for property in props {
         match property.key.as_str() {
             "?mat.name" => retval.name = matprop_to_str(property),
             "$clr.diffuse" => retval.diffuse_mul = fcol_to_ucol(matprop_to_fvec(property)),
+            "$clr.emissive" => {
+                let color = fcol_to_ucol(matprop_to_fvec(property));
+                if color[0] > 0 || color[1] > 0 || color[2] > 0 {
+                    light = Some(color);
+                }
+            }
             "$tex.file" => {
                 let prop_name = matprop_to_str(property);
                 let format = match property.semantic {
@@ -547,7 +567,13 @@ fn convert_material(props: &[MaterialProperty], used_textures: &HashMap<String, 
             _ => {} // super ugly...
         }
     }
-    retval
+    if let Some(light) = light {
+        retval.diffuse_mul = light; // use emissive as diffuse. I don't support both.
+        let light = Light::new_area(retval.name.clone(), mat_id as u32, 1.0);
+        (retval, Some(light))
+    } else {
+        (retval, None)
+    }
 }
 
 fn used_name(name: &str, format: TextureFormat) -> String {

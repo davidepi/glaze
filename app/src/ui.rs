@@ -1,3 +1,5 @@
+// separates better imgui logic (button clicked) from the program logic
+#![allow(clippy::collapsible_if)]
 use cgmath::Point3;
 use glaze::{
     parse, Camera, ColorRGB, Integrator, Light, LightType, Metal, OrthographicCam, PerspectiveCam,
@@ -589,11 +591,11 @@ fn window_materials(
                 }
             }
             if let Some(new_mat) = new_mat {
-                renderer.change_material(*selected, new_mat.clone());
+                renderer.change_material(*selected, new_mat);
                 if let Some(raytracer) = raytracer.as_mut() {
-                    let mut materials = renderer.scene().materials().to_vec();
-                    materials[*selected as usize] = new_mat;
-                    raytracer.update_materials(&materials);
+                    let materials = renderer.scene().materials().to_vec();
+                    let lights = renderer.scene().lights().to_vec();
+                    raytracer.update_materials_and_lights(&materials, &lights);
                 }
             }
         }
@@ -664,6 +666,7 @@ fn window_lights(
                 format!("Light{}", scene.lights().len()),
                 Spectrum::from_blackbody(2500.0),
                 Point3::<f32>::new(0.0, 0.0, 0.0),
+                1.0,
             );
             update_lights = true;
             add = Some(dflt_light);
@@ -674,9 +677,7 @@ fn window_lights(
         let header = [
             imgui::TableColumnSetup::new("Name"),
             imgui::TableColumnSetup::new("Type"),
-            imgui::TableColumnSetup::new("Color"),
         ];
-        // if let Some(table) = ui.begin_table("lighttable", 3) {
         if let Some(table) =
             ui.begin_table_header_with_flags("lighttable", header, imgui::TableFlags::ROW_BG)
         {
@@ -692,83 +693,107 @@ fn window_lights(
                 ui.table_next_column();
                 ui.text(light.ltype().name());
                 ui.table_next_column();
-                let spectrum_rgb = light.emission().to_xyz().to_rgb();
-                imgui::ColorButton::new(format!("spectrum{light_id}"), spectrum_rgb.into())
-                    .build(ui);
             }
             table.end();
         }
         if let Some(selected) = state.light_selected {
-            let light = &scene.lights()[selected];
-            let mut updated_current = false;
-            let mut new_name = light.name().to_string();
-            let mut new_type = light.ltype();
-            let mut new_color = light.emission();
-            let mut new_pos = light.position();
-            let mut new_dir = light.direction();
-            ui.spacing();
-            if imgui::InputText::new(ui, "Light Name", &mut new_name)
-                .enter_returns_true(true)
-                .build()
-            {
-                updated_current = true;
-            }
-            ComboBox::new("Light type")
-                .preview_value(new_type.name())
-                .build(ui, || {
-                    for light_type in LightType::all() {
-                        if Selectable::new(light_type.name()).build(ui) {
-                            updated_current = true;
-                            new_type = light_type;
-                        }
-                    }
-                });
-            if state.spectrum_temperature {
-                let mut temperature = 1500.0;
-                if imgui::InputFloat::new(ui, "Temperature (K)", &mut temperature).build() {
-                    updated_current = true;
-                    new_color = Spectrum::from_blackbody(temperature);
-                }
-            } else {
-                let mut current: [f32; 3] = new_color.to_xyz().to_rgb().into();
-                if imgui::ColorPicker::new("Spectrum color", &mut current)
-                    .small_preview(false)
-                    .side_preview(false)
-                    .build(ui)
+            // in some cases (area lights removed by the renderer) the selected is not None but
+            // points to an invalid light. So i need this double check.
+            if let Some(light) = &scene.lights().get(selected) {
+                let mut updated_current = false;
+                let mut new_name = light.name().to_string();
+                let mut new_type = light.ltype();
+                let mut new_color = light.emission();
+                let mut new_pos = light.position();
+                let mut new_dir = light.direction();
+                let mut new_intensity = light.intensity();
+                ui.spacing();
+                if imgui::InputText::new(ui, "Light Name", &mut new_name)
+                    .enter_returns_true(true)
+                    .build()
                 {
                     updated_current = true;
-                    new_color = Spectrum::from_rgb(ColorRGB::from(current), true);
                 }
-            }
-            ui.same_line();
-            if imgui::ColorButton::new("spectrum_current", new_color.to_xyz().to_rgb().into())
-                .tooltip(false)
-                .build(ui)
-            {
-                state.spectrum_temperature = !state.spectrum_temperature;
-            }
-            match new_type {
-                LightType::OMNI => {
+                // non-delta lights cannot be modified in type
+                if new_type.is_delta() {
+                    ComboBox::new("Light type")
+                        .preview_value(new_type.name())
+                        .build(ui, || {
+                            // area light should be set using the emissive material and not the light UI
+                            for light_type in
+                                LightType::all().iter().filter(|x| x.is_delta()).copied()
+                            {
+                                if Selectable::new(light_type.name()).build(ui) {
+                                    updated_current = true;
+                                    new_type = light_type;
+                                }
+                            }
+                        });
+                }
+                if new_type.has_spectrum() {
+                    if state.spectrum_temperature {
+                        let mut temperature = 1500.0;
+                        if imgui::InputFloat::new(ui, "Temperature (K)", &mut temperature).build() {
+                            updated_current = true;
+                            new_color = Spectrum::from_blackbody(temperature);
+                        }
+                    } else {
+                        let mut current: [f32; 3] = new_color.to_xyz().to_rgb().into();
+                        if imgui::ColorPicker::new("Spectrum color", &mut current)
+                            .small_preview(false)
+                            .side_preview(false)
+                            .build(ui)
+                        {
+                            updated_current = true;
+                            new_color = Spectrum::from_rgb(ColorRGB::from(current), true);
+                        }
+                    }
+                    ui.same_line();
+                    if imgui::ColorButton::new(
+                        "spectrum_current",
+                        new_color.to_xyz().to_rgb().into(),
+                    )
+                    .tooltip(false)
+                    .build(ui)
+                    {
+                        state.spectrum_temperature = !state.spectrum_temperature;
+                    }
+                }
+                if new_type.has_position() {
                     if imgui::InputFloat3::new(ui, "Position", new_pos.as_mut()).build() {
                         updated_current = true;
                     }
                 }
-                LightType::SUN => {
+                if new_type.has_direction() {
                     if imgui::InputFloat3::new(ui, "Direction", new_dir.as_mut()).build() {
                         updated_current = true;
                     }
                 }
-            }
-            if ui.button("Remove") {
-                remove = Some(selected);
-                update_lights = true;
-            } else if updated_current {
-                let new_light = match new_type {
-                    LightType::OMNI => Light::new_omni(new_name, new_color, new_pos),
-                    LightType::SUN => Light::new_sun(new_name, new_color, new_dir),
-                };
-                update = Some((selected, new_light));
-                update_lights = true;
+                if new_type.has_intensity() {
+                    if imgui::Slider::new("Intensity", 1E-2, 1E2)
+                        .flags(SliderFlags::ALWAYS_CLAMP | SliderFlags::LOGARITHMIC)
+                        .build(ui, &mut new_intensity)
+                    {
+                        updated_current = true;
+                    }
+                }
+                // only delta lights can be removed by the user
+                if new_type.is_delta() && ui.button("Remove") {
+                    remove = Some(selected);
+                    update_lights = true;
+                } else if updated_current {
+                    let new_light = match new_type {
+                        LightType::OMNI => {
+                            Light::new_omni(new_name, new_color, new_pos, new_intensity)
+                        }
+                        LightType::SUN => Light::new_sun(new_name, new_color, new_dir),
+                        LightType::AREA => {
+                            Light::new_area(new_name, light.material_id(), new_intensity)
+                        }
+                    };
+                    update = Some((selected, new_light));
+                    update_lights = true;
+                }
             }
         }
         if update_exposure {
@@ -780,6 +805,7 @@ fn window_lights(
         window.end();
         if update_lights {
             let mut lights = renderer.scene().lights().to_vec();
+            let materials = renderer.scene().materials().to_vec();
             if let Some(new) = add {
                 lights.push(new);
             } else if let Some((old, new)) = update {
@@ -790,7 +816,7 @@ fn window_lights(
             }
             renderer.update_light(&lights);
             if let Some(raytracer) = raytracer.as_mut() {
-                raytracer.update_lights(&lights);
+                raytracer.update_materials_and_lights(&materials, &lights);
             }
         }
     }

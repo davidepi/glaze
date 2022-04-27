@@ -36,6 +36,8 @@ pub enum ShaderMat {
     FROSTED,
     /// Generic physically based material.
     UBER,
+    /// Light-emitting material.
+    EMISSIVE,
     /// Flat shading.
     /// Internal version, used for two-sided polygons and polygons with opacity maps.
     /// This version is automatically assigned by the engine and **SHOULD NOT** be used.
@@ -55,6 +57,7 @@ impl ShaderMat {
             ShaderMat::METAL => "Metal",
             ShaderMat::FROSTED => "Frosted",
             ShaderMat::UBER => "Generic (GGX)",
+            ShaderMat::EMISSIVE => "Emissive",
         }
     }
 
@@ -70,6 +73,7 @@ impl ShaderMat {
             4 => Ok(ShaderMat::METAL),
             5 => Ok(ShaderMat::FROSTED),
             6 => Ok(ShaderMat::UBER),
+            7 => Ok(ShaderMat::EMISSIVE),
             _ => Err(format!("Unknown shader id: {}", id).into()),
         }
     }
@@ -84,13 +88,14 @@ impl ShaderMat {
             ShaderMat::METAL => 4,
             ShaderMat::FROSTED => 5,
             ShaderMat::UBER => 6,
+            ShaderMat::EMISSIVE => 7,
             _ => panic!("Internal shaders have no ID assigned"),
         }
     }
 
     /// Iterates all the possible assignable shaders.
     /// Shaders used internally by the engine are skipped.
-    pub fn all_values() -> [ShaderMat; 7] {
+    pub fn all_values() -> [ShaderMat; 8] {
         [
             ShaderMat::UBER,
             ShaderMat::FLAT,
@@ -99,6 +104,7 @@ impl ShaderMat {
             ShaderMat::GLASS,
             ShaderMat::METAL,
             ShaderMat::FROSTED,
+            ShaderMat::EMISSIVE,
         ]
     }
 
@@ -116,6 +122,7 @@ impl ShaderMat {
             ShaderMat::METAL => false,
             ShaderMat::FROSTED => false,
             ShaderMat::UBER => false,
+            ShaderMat::EMISSIVE => false,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
     }
@@ -130,6 +137,7 @@ impl ShaderMat {
             ShaderMat::METAL => false,
             ShaderMat::FROSTED => false,
             ShaderMat::UBER => true,
+            ShaderMat::EMISSIVE => true,
             ShaderMat::INTERNAL_FLAT_2SIDED => true,
         }
     }
@@ -144,6 +152,7 @@ impl ShaderMat {
             ShaderMat::METAL => true,
             ShaderMat::FROSTED => true,
             ShaderMat::UBER => true,
+            ShaderMat::EMISSIVE => false,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
     }
@@ -158,6 +167,7 @@ impl ShaderMat {
             ShaderMat::METAL => false,
             ShaderMat::FROSTED => false,
             ShaderMat::UBER => true,
+            ShaderMat::EMISSIVE => false,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
     }
@@ -172,18 +182,25 @@ impl ShaderMat {
             ShaderMat::METAL => true,
             ShaderMat::FROSTED => true,
             ShaderMat::UBER => true,
+            ShaderMat::EMISSIVE => false,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
     }
 
     /// Returns true if the shader can use a normal map.
     pub fn use_normal(&self) -> bool {
-        true
+        match self {
+            ShaderMat::EMISSIVE => false,
+            _ => true,
+        }
     }
 
     /// Returns true if the shader can use an opacity map.
     pub fn use_opacity(&self) -> bool {
-        true
+        match self {
+            ShaderMat::EMISSIVE => false,
+            _ => true,
+        }
     }
 
     /// Returns true if the shader can model a Fresnel conductor.
@@ -196,6 +213,7 @@ impl ShaderMat {
             ShaderMat::METAL => true,
             ShaderMat::FROSTED => false,
             ShaderMat::UBER => true,
+            ShaderMat::EMISSIVE => false,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
     }
@@ -210,6 +228,7 @@ impl ShaderMat {
             ShaderMat::METAL => false,
             ShaderMat::FROSTED => true,
             ShaderMat::UBER => true,
+            ShaderMat::EMISSIVE => false,
             ShaderMat::INTERNAL_FLAT_2SIDED => false,
         }
     }
@@ -251,7 +270,7 @@ impl ShaderMat {
     pub(crate) fn sbt_callable_index(&self) -> u32 {
         let base_index = SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE; // lights before mats
         let shader_index = match self {
-            ShaderMat::FLAT | ShaderMat::LAMBERT => 0,
+            ShaderMat::FLAT | ShaderMat::LAMBERT | ShaderMat::EMISSIVE => 0,
             ShaderMat::MIRROR => 1,
             ShaderMat::GLASS => 2,
             ShaderMat::METAL => 3,

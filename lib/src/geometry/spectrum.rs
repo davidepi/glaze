@@ -182,7 +182,7 @@ impl Spectrum {
     }
 
     /// Converts the spectrum to an array of bytes
-    pub fn to_bytes(self) -> [u8; Spectrum::SAMPLES * 4] {
+    pub fn to_le_bytes(self) -> [u8; Spectrum::SAMPLES * 4] {
         let mut retval = [0; Spectrum::SAMPLES * 4];
         let mut index = 0;
         for val in self.wavelength {
@@ -824,7 +824,7 @@ mod tests {
     #[test]
     fn spectrum_from_to_bytes() {
         let sp = SPECTRUM_CYAN;
-        let bytes = sp.to_bytes();
+        let bytes = sp.to_le_bytes();
         let from = Spectrum::from_bytes(bytes);
         for i in 0..Spectrum::SAMPLES {
             assert_eq!(sp.wavelength[i], from.wavelength[i])

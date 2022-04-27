@@ -1,7 +1,9 @@
 use super::{write_header, Meta, ParsedScene, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
 use crate::materials::{TextureFormat, TextureInfo};
-use crate::{Light, Material, MeshInstance, Metal, ShaderMat, Spectrum, Texture, Transform};
+use crate::{
+    Light, LightType, Material, MeshInstance, Metal, ShaderMat, Spectrum, Texture, Transform,
+};
 use cgmath::{Point2, Point3, Vector3 as Vec3};
 use fnv::FnvHashMap;
 use image::png::{CompressionType, FilterType, PngDecoder, PngEncoder};
@@ -811,7 +813,10 @@ fn u8_to_format(format: u8) -> Result<TextureFormat, Error> {
         1 => Ok(TextureFormat::Gray),
         2 => Ok(TextureFormat::RgbaSrgb),
         3 => Ok(TextureFormat::RgbaNorm),
-        _ => panic!("Texture format unexpected"),
+        _ => Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Unexpected texture format",
+        )),
     }
 }
 
@@ -958,60 +963,78 @@ fn bytes_to_instance(data: [u8; 4]) -> MeshInstance {
 
 /// Converts a Light to a vector of bytes.
 fn light_to_bytes(light: &Light) -> Vec<u8> {
-    let ltype = match light {
-        Light::Omni(_) => 0,
-        Light::Sun(_) => 1,
-    };
-    let color = light.emission().to_bytes();
-    let posdir = match light {
+    let ltype = u8::from(light.ltype());
+    let data = match light {
         Light::Omni(l) => {
             let pos: [f32; 3] = l.position.into();
+            let color = light.emission().to_le_bytes();
+            let intensity = light.intensity().to_le_bytes();
             pos.into_iter()
                 .flat_map(|x| x.to_le_bytes())
+                .chain(color)
+                .chain(intensity)
                 .collect::<Vec<_>>()
         }
         Light::Sun(l) => {
             let dir: [f32; 3] = l.direction.into();
+            let color = light.emission().to_le_bytes();
             dir.into_iter()
                 .flat_map(|x| x.to_le_bytes())
+                .chain(color)
                 .collect::<Vec<_>>()
+        }
+        Light::Area(l) => {
+            let instance_id = l.material_id.to_le_bytes();
+            let intensity = light.intensity().to_le_bytes();
+            instance_id.into_iter().chain(intensity).collect::<Vec<_>>()
         }
     };
     let name_len = light.name().bytes().len();
-    let mut retval = Vec::with_capacity(1 + color.len() + posdir.len() + name_len);
+    let mut retval = Vec::with_capacity(1 + data.len() + name_len);
     retval.push(ltype);
-    retval.extend(color);
-    retval.extend(posdir);
+    retval.extend(data);
     retval.extend(light.name().bytes());
     retval
 }
 
 /// Converts a vector of bytes to a Light.
 fn bytes_to_light(data: &[u8]) -> Light {
-    let color = Spectrum::from_bytes(data[1..65].try_into().unwrap());
-    let mut index = 65;
-    match data[0] {
-        0 => {
+    let mut index = 1;
+    match LightType::try_from(data[0]).expect("Failed to parse light") {
+        LightType::OMNI => {
             let position = Point3::new(
                 f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
                 f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
                 f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
             );
             index += 12;
+            let color = Spectrum::from_bytes(data[index..index + 64].try_into().unwrap());
+            index += 64;
+            let intensity = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+            index += 4;
             let name = String::from_utf8(data[index..].to_vec()).unwrap();
-            Light::new_omni(name, color, position)
+            Light::new_omni(name, color, position, intensity)
         }
-        1 => {
+        LightType::SUN => {
             let direction = Vec3::new(
                 f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
                 f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
                 f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
             );
             index += 12;
+            let color = Spectrum::from_bytes(data[index..index + 64].try_into().unwrap());
+            index += 64;
             let name = String::from_utf8(data[index..].to_vec()).unwrap();
             Light::new_sun(name, color, direction)
         }
-        _ => panic!(),
+        LightType::AREA => {
+            let instance_id = u32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+            index += 4;
+            let intensity = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+            index += 4;
+            let name = String::from_utf8(data[index..].to_vec()).unwrap();
+            Light::new_area(name, instance_id, intensity)
+        }
     }
 }
 
@@ -1063,7 +1086,8 @@ mod tests {
     };
     use crate::parser::{parse, Meta, ParserVersion, HEADER_LEN};
     use crate::{
-        Light, Material, MeshInstance, Metal, Serializer, ShaderMat, Spectrum, Texture, Transform,
+        Light, LightType, Material, MeshInstance, Metal, Serializer, ShaderMat, Spectrum, Texture,
+        Transform,
     };
     use cgmath::{Matrix4, Point2, Point3, Vector3 as Vec3};
     use image::GenericImageView;
@@ -1298,12 +1322,23 @@ mod tests {
                 .map(char::from)
                 .collect::<String>();
             let color = Spectrum::from_blackbody(rng.gen_range(800.0..10000.0));
-            let light = if rng.gen_bool(0.5) {
-                let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-                Light::new_omni(name, color, position)
-            } else {
-                let direction = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-                Light::new_sun(name, color, direction)
+            let ltype =
+                LightType::try_from(rng.gen_range(0..LightType::all().len() as u8)).unwrap();
+            let light = match ltype {
+                LightType::OMNI => {
+                    let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+                    let intensity = rng.gen();
+                    Light::new_omni(name, color, position, intensity)
+                }
+                LightType::SUN => {
+                    let direction = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
+                    Light::new_sun(name, color, direction)
+                }
+                LightType::AREA => {
+                    let instance_id = rng.gen();
+                    let intensity = rng.gen();
+                    Light::new_area(name, instance_id, intensity)
+                }
             };
             data.push(light);
         }

@@ -13,8 +13,8 @@ use super::UnfinishedExecutions;
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{
-    include_shader, Camera, Light, Material, Mesh, MeshInstance, Meta, Metal, ParsedScene,
-    RayTraceInstance, Spectrum, Vertex,
+    include_shader, Camera, Light, LightType, Material, Mesh, MeshInstance, Meta, Metal,
+    ParsedScene, RayTraceInstance, Spectrum, Vertex,
 };
 #[cfg(feature = "vulkan-interactive")]
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
@@ -148,6 +148,7 @@ impl VulkanScene {
         let materials = parsed
             .materials()
             .unwrap_or_else(|_| vec![Material::default()]);
+        let lights = parsed.lights().unwrap_or_default();
         let params_buffer = load_materials_parameters(device, &materials, mm, &mut tcmdm, &mut unf);
         unf.wait_completion();
         let materials_desc = materials
@@ -171,7 +172,6 @@ impl VulkanScene {
             .unwrap_or_default()
             .pop()
             .unwrap_or_default();
-        let lights = parsed.lights().unwrap_or_default();
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
             "Material update transfer buffer",
@@ -274,6 +274,21 @@ impl VulkanScene {
                 ],
             )
         });
+        // keep the list of lights aligned
+        let old = self.materials[mat_id as usize].shader;
+        if new.shader == ShaderMat::EMISSIVE || old == ShaderMat::EMISSIVE {
+            if new.shader == ShaderMat::EMISSIVE && old != ShaderMat::EMISSIVE {
+                // lights should be added
+                self.lights
+                    .push(Light::new_area(new.name.clone(), mat_id as u32, 1.0));
+            } else if new.shader != ShaderMat::EMISSIVE && old == ShaderMat::EMISSIVE {
+                // light should be removed
+                self.lights
+                    .retain(|x| x.ltype() != LightType::AREA || x.material_id() != mat_id as u32);
+            }
+            // no need to update lights buffer because FOR NOW lights are not
+            // rendered in the realtime preview
+        }
         // replace the old material
         self.materials[mat_id as usize] = new;
         self.materials_desc[mat_id as usize] = (new_shader, new_desc);
@@ -983,7 +998,7 @@ fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
 
 // sort mehses by shader id (first) and then material id (second) to minimize binding changes
 #[cfg(feature = "vulkan-interactive")]
-fn sort_meshes(meshes: &mut Vec<VulkanMesh>, mats: &[(ShaderMat, Descriptor)]) {
+fn sort_meshes(meshes: &mut [VulkanMesh], mats: &[(ShaderMat, Descriptor)]) {
     meshes.sort_unstable_by(|a, b| {
         let (_, desc_a) = &mats[a.material as usize];
         let (_, desc_b) = &mats[b.material as usize];
@@ -1067,12 +1082,12 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         let materials = parsed
             .materials()
             .unwrap_or_else(|_| vec![Material::default()]);
+        let lights = parsed.lights().unwrap_or_default();
         let mut dm = DescriptorSetManager::new(
             instance.device().logical_clone(),
             &Self::AVG_DESC,
             instance.desc_layout_cache(),
         );
-        let lights = parsed.lights().unwrap_or_default();
         let vertex_buffer = load_vertices_to_gpu(
             device,
             mm,
@@ -1161,46 +1176,24 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
     }
 
     #[cfg(feature = "vulkan-interactive")]
-    pub(crate) fn update_materials(
+    pub(crate) fn update_materials_and_lights(
         &mut self,
         materials: &[Material],
-        tcmdm: &mut CommandManager,
-        unf: &mut UnfinishedExecutions,
-    ) {
-        let mm = self.instance.allocator();
-        let mut new_buffer =
-            load_raytrace_materials_to_gpu(self.instance.device(), mm, tcmdm, unf, materials);
-        // cannot drop yet, the loading is not finished yet
-        std::mem::swap(&mut self.material_buffer, &mut new_buffer);
-        unf.add_buffer(new_buffer);
-        self.descriptor = build_raytrace_descriptor(
-            &mut self.dm,
-            &self.acc,
-            &self.vertex_buffer,
-            &self.index_buffer,
-            &self.instance_buffer,
-            &self.material_buffer,
-            &self.light_buffer,
-            &self.derivative_buffer,
-            &self.textures,
-            self.sampler,
-        );
-    }
-
-    #[cfg(feature = "vulkan-interactive")]
-    pub(crate) fn update_lights(
-        &mut self,
         lights: &[Light],
         tcmdm: &mut CommandManager,
         unf: &mut UnfinishedExecutions,
     ) {
         let mm = self.instance.allocator();
-        let mut new_buffer =
+        let mut mat_buffer =
+            load_raytrace_materials_to_gpu(self.instance.device(), mm, tcmdm, unf, materials);
+        let mut light_buffer =
             load_raytrace_lights_to_gpu(self.instance.device(), mm, tcmdm, unf, lights);
         // cannot drop yet, the loading is not finished yet
-        std::mem::swap(&mut self.light_buffer, &mut new_buffer);
+        std::mem::swap(&mut self.material_buffer, &mut mat_buffer);
+        std::mem::swap(&mut self.light_buffer, &mut light_buffer);
+        unf.add_buffer(mat_buffer);
+        unf.add_buffer(light_buffer);
         self.lights_no = lights.len() as u32;
-        unf.add_buffer(new_buffer);
         self.descriptor = build_raytrace_descriptor(
             &mut self.dm,
             &self.acc,
