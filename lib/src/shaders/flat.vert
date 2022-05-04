@@ -12,12 +12,17 @@ layout(set=0, binding=0) uniform fd {
     float frame_time;
 } FrameData;
 
-layout(set=2, binding=0) uniform od {
-  mat4 model;
+layout(set=2, binding=0) readonly buffer od {
+  mat4 model[];
 } ObjectData;
 
+layout(push_constant) uniform readonly pc {
+  uint index;
+} PushConstant;
+
 void main() {
-    mat4 mvp = FrameData.projview * ObjectData.model;
+    uint transform_index = PushConstant.index;
+    mat4 mvp = FrameData.projview * ObjectData.model[transform_index];
     gl_Position = mvp * vec4(in_vv, 1.0);
     out_vn = in_vn;
     out_vt = in_vt;

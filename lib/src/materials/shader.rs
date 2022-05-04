@@ -316,6 +316,7 @@ mod pipelines {
         let fragment_shader = include_shader!("flat.frag");
         pipeline.push_shader(vertex_shader, "main", ash::vk::ShaderStageFlags::VERTEX);
         pipeline.push_shader(fragment_shader, "main", ash::vk::ShaderStageFlags::FRAGMENT);
+        pipeline.push_constants(4, vk::ShaderStageFlags::VERTEX);
         pipeline
     }
 
@@ -326,6 +327,7 @@ mod pipelines {
         let fragment_shader = include_shader!("flat_twosided.frag");
         pipeline.push_shader(vertex_shader, "main", ash::vk::ShaderStageFlags::VERTEX);
         pipeline.push_shader(fragment_shader, "main", ash::vk::ShaderStageFlags::FRAGMENT);
+        pipeline.push_constants(4, vk::ShaderStageFlags::VERTEX);
         pipeline.rasterizer.cull_mode = vk::CullModeFlags::NONE;
         pipeline
     }

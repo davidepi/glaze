@@ -574,15 +574,21 @@ unsafe fn draw_objects(
         }
         let empty_vec = Vec::with_capacity(0);
         let instances = scene.instances.get(&obj.mesh_id).unwrap_or(&empty_vec);
+        device.cmd_bind_descriptor_sets(
+            cmd,
+            vk::PipelineBindPoint::GRAPHICS,
+            pipeline.layout,
+            0,
+            &[frame_data.descriptor.set, desc.set, scene.scene_desc.set],
+            &[],
+        );
         for instance in instances {
-            let (_, po_desc) = scene.transforms[*instance as usize];
-            device.cmd_bind_descriptor_sets(
+            device.cmd_push_constants(
                 cmd,
-                vk::PipelineBindPoint::GRAPHICS,
                 pipeline.layout,
+                vk::ShaderStageFlags::VERTEX,
                 0,
-                &[frame_data.descriptor.set, desc.set, po_desc.set],
-                &[],
+                &(*instance as u32).to_ne_bytes(),
             );
             device.cmd_draw_indexed(cmd, obj.index_count, 1, obj.index_offset, 0, 0);
             stats.done_draw_call();

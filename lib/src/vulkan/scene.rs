@@ -64,9 +64,11 @@ pub struct VulkanScene {
     /// All textures in the scene.
     pub(super) textures: Arc<Vec<TextureLoaded>>,
     /// All the transforms in the scene.
-    pub(super) transforms: Vec<(AllocatedBuffer, Descriptor)>,
+    transforms: AllocatedBuffer,
     /// All the instances in the scene in form (Mesh ID, Vec<Transform ID>).
     pub(super) instances: FnvHashMap<u16, Vec<u16>>,
+    /// Scene level descriptor set
+    pub(super) scene_desc: Descriptor,
     /// All the lights in the scene.
     lights: Vec<Light>,
     /// Instance storing this scene.
@@ -101,6 +103,7 @@ impl VulkanScene {
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 5);
         let avg_desc = [
             (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
+            (vk::DescriptorType::STORAGE_BUFFER, 1.0),
             (vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.5),
         ];
         let mut dm = DescriptorSetManager::new(
@@ -120,7 +123,6 @@ impl VulkanScene {
             device,
             mm,
             &mut tcmdm,
-            &mut dm,
             &mut unf,
             &parsed
                 .transforms()
@@ -172,6 +174,14 @@ impl VulkanScene {
             .unwrap_or_default()
             .pop()
             .unwrap_or_default();
+        let scene_desc = dm
+            .new_set()
+            .bind_buffer(
+                &transforms,
+                vk::DescriptorType::STORAGE_BUFFER,
+                vk::ShaderStageFlags::VERTEX,
+            )
+            .build();
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
             "Material update transfer buffer",
@@ -183,6 +193,7 @@ impl VulkanScene {
         let meta = parsed.meta().unwrap_or_default();
         VulkanScene {
             file: parsed,
+            meta,
             current_cam,
             vertex_buffer: Arc::new(vertex_buffer),
             index_buffer: Arc::new(index_buffer),
@@ -197,9 +208,9 @@ impl VulkanScene {
             textures,
             transforms,
             instances,
+            scene_desc,
             lights,
             instance,
-            meta,
         }
     }
 
@@ -267,11 +278,7 @@ impl VulkanScene {
                 device.logical_clone(),
                 rpass,
                 render_size,
-                &[
-                    frame_desc_layout,
-                    new_desc.layout,
-                    self.transforms[0].1.layout,
-                ],
+                &[frame_desc_layout, new_desc.layout, self.scene_desc.layout],
             )
         });
         // keep the list of lights aligned
@@ -315,7 +322,7 @@ impl VulkanScene {
                     &[
                         frame_desc_layout,
                         desc.layout,
-                        self.transforms[0].1.layout, // pick the first per-object transform
+                        self.scene_desc.layout, // pick the first per-object transform
                     ],
                 )
             });
@@ -444,32 +451,17 @@ fn load_transforms_to_gpu(
     device: &Device,
     mm: &MemoryManager,
     tcmdm: &mut CommandManager,
-    dm: &mut DescriptorSetManager,
     unf: &mut UnfinishedExecutions,
     transforms: &[Transform],
-) -> Vec<(AllocatedBuffer, Descriptor)> {
-    transforms
-        .iter()
-        .map(|transform| {
-            //TODO: maybe a single buffer would be better, considering that I will probably never edit
-            // transforms. I should also consider removing the FnvHashMap and use a Vec given that I am
-            // the one assigning indices to the transforms so I know for sure they are contiguous.
-            let gpu_buffer = upload_buffer(
-                device,
-                mm,
-                tcmdm,
-                vk::BufferUsageFlags::UNIFORM_BUFFER,
-                unf,
-                &[transform.clone()],
-            );
-            let desc = dm.new_set().bind_buffer(
-                &gpu_buffer,
-                vk::DescriptorType::UNIFORM_BUFFER,
-                vk::ShaderStageFlags::VERTEX,
-            );
-            (gpu_buffer, desc.build())
-        })
-        .collect()
+) -> AllocatedBuffer {
+    upload_buffer(
+        device,
+        mm,
+        tcmdm,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        unf,
+        transforms,
+    )
 }
 
 /// Loads all indices to GPU.
