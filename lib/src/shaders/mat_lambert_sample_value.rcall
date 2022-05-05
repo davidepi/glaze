@@ -30,7 +30,7 @@ float lambert_sample_value(in vec2 rand_sample, in vec3 wo, out vec3 wi, out flo
 
 void main()
 {
-  RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
+  RTMaterial mat = MaterialBuffer.materials[bsdf.material_id];
   vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
   vec3 wi;
   float value = lambert_sample_value(bsdf.rand_sample.xy, wo, wi, bsdf.pdf);

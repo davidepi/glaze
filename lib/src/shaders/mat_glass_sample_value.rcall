@@ -34,7 +34,7 @@ Spectrum glass_refractive_sample_value(in vec3 wo, out vec3 wi, in float fresnel
 void main()
 {
   vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
-  RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
+  RTMaterial mat = MaterialBuffer.materials[bsdf.material_id];
   float costi = wo.z;
   float from_outside = step(0.0, costi);
   float etai = mix(mat.ior_dielectric, DEFAULT_IOR, from_outside);

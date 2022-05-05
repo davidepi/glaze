@@ -25,7 +25,7 @@ void main()
   vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
   vec3 wi = to_shading_space(bsdf.wiW, bsdf.shading);
   float same_hemi = step(0.0, wo.z*wi.z);
-  RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
+  RTMaterial mat = MaterialBuffer.materials[bsdf.material_id];
   float value = INV_PI;
   vec3 sampled_texel = texture(textures[nonuniformEXT(mat.diffuse)], bsdf.uv).rgb;
   vec3 diffuse_mul = mat.diffuse_mul.xyz;

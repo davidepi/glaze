@@ -20,7 +20,7 @@ layout(set=1, binding=6) uniform sampler2D textures[];
 
 void main()
 {
-  RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
+  RTMaterial mat = MaterialBuffer.materials[bsdf.material_id];
   vec3 wo = to_shading_space(bsdf.woW, bsdf.shading);
   float sampled_roughness = texture(textures[nonuniformEXT(mat.roughness)], bsdf.uv).r;
   float roughness = sampled_roughness*mat.roughness_mul;

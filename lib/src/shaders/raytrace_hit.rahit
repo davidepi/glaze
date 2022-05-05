@@ -2,7 +2,6 @@
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_nonuniform_qualifier: require
 
-#include "hit.glsl"
 #include "raytrace_structures.glsl"
 #include "raytrace_commons.glsl"
 
@@ -11,19 +10,15 @@ hitAttributeEXT vec2 attrib;
 layout(std430, set=1, binding=1) readonly buffer vertexBuffer {
   VertexPacked vertices[];
 } VertexBuffer;
-
 layout(std430, set=1, binding=2) readonly buffer indexBuffer {
   Triangle indices[];
 } IndexBuffer;
-
 layout(std430, set=1, binding=3) readonly buffer instanceBuffer {
   RTInstance instances[];
 } InstanceBuffer;
-
 layout(std430, set=1, binding=4) readonly buffer materialBuffer {
   RTMaterial materials[];
 } MaterialBuffer;
-
 layout(set=1, binding=6) uniform sampler2D textures[];
 
 void main()

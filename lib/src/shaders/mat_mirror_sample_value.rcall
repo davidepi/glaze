@@ -18,7 +18,7 @@ Spectrum mirror_sample_value(in vec3 wo, out vec3 wi, out float pdf)
   wi.x = -wo.x;
   wi.y = -wo.y;
   wi.z = wo.z;
-  RTMaterial mat = MaterialBuffer.materials[bsdf.material_index];
+  RTMaterial mat = MaterialBuffer.materials[bsdf.material_id];
   Spectrum fresnel = fresnel_conductor(wo.z, mat.metal_ior, mat.metal_fresnel);
   pdf = 1.0;
   return div(fresnel, abs(wo.z));

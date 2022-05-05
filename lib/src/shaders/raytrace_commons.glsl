@@ -37,6 +37,18 @@ struct Derivatives
   vec4 dpdv;
 };
 
+struct HitData
+{
+  vec3 point;
+  vec3 shading_normal;
+  vec3 geometric_normal;
+  vec3 dpdu;
+  vec3 dpdv;
+  vec2 uv;
+  uint material_id;
+  float distance;
+};
+
 struct SampledLight
 {
   Spectrum emission;
@@ -68,7 +80,7 @@ struct BsdfValue
   float rand_sample;
   ShadingSpace shading;
   Spectrum value;
-  uint material_index;
+  uint material_id;
   float pdf;
 };
 
@@ -80,7 +92,7 @@ struct BsdfSampleValue
   vec2 uv;
   ShadingSpace shading;
   Spectrum value;
-  uint material_index;
+  uint material_id;
   vec3 rand_sample;
   float pdf;
 };
@@ -91,7 +103,7 @@ struct BsdfPdf
   vec3 woW;
   float pdf;
   vec3 wiW;
-  uint material_index;
+  uint material_id;
   vec2 uv;
 };
 
