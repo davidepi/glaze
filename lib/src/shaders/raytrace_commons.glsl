@@ -56,6 +56,7 @@ struct SampledLight
   float pdf;
   vec3 wiW;
   float distance;
+  vec3 rand_sample;
   uint light_index;
 };
 

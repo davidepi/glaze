@@ -7,10 +7,58 @@
 
 layout(location = 0)  callableDataInEXT SampledLight sam;
 
+layout(std430, set=1, binding=1) readonly buffer vertexBuffer {
+  VertexPacked vertices[];
+} VertexBuffer;
+layout(std430, set=1, binding=2) readonly buffer indexBuffer {
+  Triangle indices[];
+} IndexBuffer;
+layout(std430, set=1, binding=3) readonly buffer instanceBuffer {
+  RTInstance instances[];
+} InstanceBuffer;
+layout(std430, set=1, binding=4) readonly buffer materialBuffer {
+  RTMaterial materials[];
+} MaterialBuffer;
 layout(std430, set=1, binding=5) readonly buffer lightBuffer {
   RTLight lights[];
 } LightBuffer;
+layout(std430, set=1, binding=8) readonly buffer transformBuffer {
+  mat4 transforms[];
+} TransformBuffer;
 
 void main()
 {
+  RTLight light = LightBuffer.lights[sam.light_index];
+  // select random triangle
+  // this is not uniform sampling, but weighting the distribution of samples
+  // based on the triangle area is not convenient on the GPU. sorry.
+  RTInstance instance = InstanceBuffer.instances[light.instance_id];
+  uint triangle_id = uint(min(sam.rand_sample.x*instance.index_count/3, instance.index_count/3-1));
+  uint transform_id = instance.transform_id;
+  triangle_id += instance.index_offset/3;
+  // retrieve the triangle and vertices
+  Triangle tris = IndexBuffer.indices[triangle_id];
+  vec3 v0 = from_packed(VertexBuffer.vertices[tris.x]).position;
+  vec3 v1 = from_packed(VertexBuffer.vertices[tris.y]).position;
+  vec3 v2 = from_packed(VertexBuffer.vertices[tris.z]).position;
+  float triangle_area = 0.5*cross(v1-v0, v2-v0).length();
+  // sample a point on the triangle and calculate wiW
+  float sqr_u = sqrt(sam.rand_sample.y);
+  vec2 rand_uv = vec2(1.0 - sqr_u, sam.rand_sample.z * sqr_u);
+  vec3 rand_point = rand_uv.x * v0 + rand_uv.y * v1 + (1-rand_uv.x-rand_uv.y)*v2;
+  rand_point = (TransformBuffer.transforms[transform_id] * vec4(rand_point, 1.0)).xyz;
+  sam.wiW = normalize(sam.position - rand_point);
+  float distance2 =
+    (rand_point.x-sam.position.x)*(rand_point.x-sam.position.x)+
+    (rand_point.y-sam.position.y)*(rand_point.y-sam.position.y)+
+    (rand_point.z-sam.position.z)*(rand_point.z-sam.position.z);
+  sam.distance = sqrt(distance2); //not exactly correct (may be sampling a backface) but a good
+                                  //approximation
+  // emission based on material
+  RTMaterial mat = MaterialBuffer.materials[instance.material_id];
+  vec3 diffuse_mul = mat.diffuse_mul.xyz;
+  sam.emission = div(from_surface_color(diffuse_mul), distance2/light.intensity);
+  float select_pdf = 1.0/(instance.index_count/3);
+  float area_pdf = 1.0/triangle_area;
+  sam.pdf = select_pdf*area_pdf;
 }

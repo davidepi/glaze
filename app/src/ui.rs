@@ -481,15 +481,21 @@ fn window_materials(
                 }
             }
             if current.shader.use_diffuse() {
-                let (diff, diff_clicked) = texture_selector(ui, "Diffuse", current.diffuse, scene);
-                if diff != current.diffuse {
-                    let mut new = current.clone();
-                    new.diffuse = diff;
-                    new_mat = Some(new);
-                }
-                if diff_clicked {
-                    state.textures_selected = Some(diff);
-                    state.textures_window = true;
+                // emissive materials have only the color, not the texture
+                // otherwise I need to correctly sample based not only on the arelight shape but
+                // also on the texture colors...
+                if current.shader != ShaderMat::EMISSIVE {
+                    let (diff, diff_clicked) =
+                        texture_selector(ui, "Diffuse", current.diffuse, scene);
+                    if diff != current.diffuse {
+                        let mut new = current.clone();
+                        new.diffuse = diff;
+                        new_mat = Some(new);
+                    }
+                    if diff_clicked {
+                        state.textures_selected = Some(diff);
+                        state.textures_window = true;
+                    }
                 }
                 let mut color = [
                     current.diffuse_mul[0] as f32 / 255.0,

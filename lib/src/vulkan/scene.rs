@@ -20,7 +20,7 @@ use crate::{
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
-use cgmath::Vector3 as Vec3;
+use cgmath::{InnerSpace, Vector3 as Vec3};
 #[cfg(feature = "vulkan-interactive")]
 use fnv::{FnvBuildHasher, FnvHashMap};
 use gpu_allocator::MemoryLocation;
@@ -64,7 +64,7 @@ pub struct VulkanScene {
     /// All textures in the scene.
     pub(super) textures: Arc<Vec<TextureLoaded>>,
     /// All the transforms in the scene.
-    transforms: AllocatedBuffer,
+    transforms: Arc<AllocatedBuffer>,
     /// All the instances in the scene in form (Mesh ID, Vec<Transform ID>).
     pub(super) instances: FnvHashMap<u16, Vec<u16>>,
     /// Scene level descriptor set
@@ -119,7 +119,7 @@ impl VulkanScene {
             &parsed.vertices().unwrap_or_default(),
             with_raytrace,
         );
-        let transforms = load_transforms_to_gpu(
+        let transforms = Arc::new(load_transforms_to_gpu(
             device,
             mm,
             &mut tcmdm,
@@ -127,7 +127,7 @@ impl VulkanScene {
             &parsed
                 .transforms()
                 .unwrap_or_else(|_| vec![Transform::default()]),
-        );
+        ));
         let (mut meshes, index_buffer) = load_indices_to_gpu(
             device,
             mm,
@@ -1040,6 +1040,9 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     material_buffer: AllocatedBuffer,
     light_buffer: AllocatedBuffer,
     derivative_buffer: AllocatedBuffer,
+    transforms_buffer: Arc<AllocatedBuffer>,
+    // (material_id, transform_ids)
+    material_instance_ids: FnvHashMap<u16, Vec<u16>>,
     pub(crate) lights_no: u32,
     pub(crate) meta: Meta,
     textures: Arc<Vec<TextureLoaded>>,
@@ -1105,6 +1108,8 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &vertex_buffer,
             &mut unf,
         );
+        let transforms_buffer =
+            load_transforms_to_gpu(device, mm, &mut tcmdm, &mut unf, &transforms);
         let textures = Arc::new(
             parsed
                 .textures()
@@ -1113,6 +1118,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
                 .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
                 .collect::<Vec<_>>(),
         );
+        let material_instance_ids = map_materials_to_instances(&meshes, &instances);
         let builder = SceneASBuilder::new(
             device,
             loader,
@@ -1132,7 +1138,14 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             load_raytrace_instances_to_gpu(device, mm, &mut tcmdm, &mut unf, &meshes, &instances);
         let material_buffer =
             load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
-        let light_buffer = load_raytrace_lights_to_gpu(device, mm, &mut tcmdm, &mut unf, &lights);
+        let light_buffer = load_raytrace_lights_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            &lights,
+            &material_instance_ids,
+        );
         let sampler = create_sampler(device);
         let descriptor = build_raytrace_descriptor(
             &mut dm,
@@ -1143,6 +1156,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &material_buffer,
             &light_buffer,
             &derivative_buffer,
+            &transforms_buffer,
             &textures,
             sampler,
         );
@@ -1158,6 +1172,8 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             material_buffer,
             light_buffer,
             derivative_buffer,
+            transforms_buffer: Arc::new(transforms_buffer),
+            material_instance_ids,
             lights_no: lights.len() as u32,
             meta,
             textures,
@@ -1178,8 +1194,14 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         let mm = self.instance.allocator();
         let mut mat_buffer =
             load_raytrace_materials_to_gpu(self.instance.device(), mm, tcmdm, unf, materials);
-        let mut light_buffer =
-            load_raytrace_lights_to_gpu(self.instance.device(), mm, tcmdm, unf, lights);
+        let mut light_buffer = load_raytrace_lights_to_gpu(
+            self.instance.device(),
+            mm,
+            tcmdm,
+            unf,
+            lights,
+            &self.material_instance_ids,
+        );
         // cannot drop yet, the loading is not finished yet
         std::mem::swap(&mut self.material_buffer, &mut mat_buffer);
         std::mem::swap(&mut self.light_buffer, &mut light_buffer);
@@ -1195,6 +1217,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.material_buffer,
             &self.light_buffer,
             &self.derivative_buffer,
+            &self.transforms_buffer,
             &self.textures,
             self.sampler,
         );
@@ -1238,6 +1261,7 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
         let materials = scene.materials().to_vec();
         let vertex_buffer = Arc::clone(&scene.vertex_buffer);
         let index_buffer = Arc::clone(&scene.index_buffer);
+        let transforms_buffer = Arc::clone(&scene.transforms);
         let textures = Arc::clone(&scene.textures);
         let derivative_buffer = calculate_geometric_derivatives(
             instance.as_ref(),
@@ -1248,6 +1272,7 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             &vertex_buffer,
             &mut unf,
         );
+        let material_instance_ids = map_materials_to_instances(&scene.meshes, &instances);
         let builder = SceneASBuilder::new(
             device,
             loader,
@@ -1268,8 +1293,14 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
         );
         let material_buffer =
             load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
-        let light_buffer =
-            load_raytrace_lights_to_gpu(device, mm, &mut tcmdm, &mut unf, &scene.lights);
+        let light_buffer = load_raytrace_lights_to_gpu(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            &scene.lights,
+            &material_instance_ids,
+        );
         let sampler = create_sampler(device);
         let descriptor = build_raytrace_descriptor(
             &mut dm,
@@ -1280,6 +1311,7 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             &material_buffer,
             &light_buffer,
             &derivative_buffer,
+            &transforms_buffer,
             &textures,
             sampler,
         );
@@ -1295,6 +1327,8 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             material_buffer,
             light_buffer,
             derivative_buffer,
+            transforms_buffer,
+            material_instance_ids,
             lights_no: scene.lights.len() as u32,
             meta,
             textures,
@@ -1303,6 +1337,25 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             instance,
         }
     }
+}
+
+fn map_materials_to_instances(
+    meshes: &[VulkanMesh],
+    instances: &[MeshInstance],
+) -> FnvHashMap<u16, Vec<u16>> {
+    let materials_by_mesh_id = meshes
+        .iter()
+        .map(|m| (m.mesh_id, m.material))
+        .collect::<FnvHashMap<_, _>>();
+    let mut retval = FnvHashMap::default();
+    for (instance_id, instance) in instances.iter().enumerate() {
+        let material_id = *materials_by_mesh_id.get(&instance.mesh_id).unwrap();
+        retval
+            .entry(material_id)
+            .or_insert(Vec::new())
+            .push(instance_id as u16);
+    }
+    retval
 }
 
 fn load_raytrace_instances_to_gpu(
@@ -1324,6 +1377,7 @@ fn load_raytrace_instances_to_gpu(
                 index_offset: original_mesh.index_offset,
                 index_count: original_mesh.index_count,
                 material_id: original_mesh.material as u32,
+                transform_id: instance.transform_id as u32,
             });
         } else {
             log::warn!(
@@ -1371,6 +1425,11 @@ fn load_raytrace_materials_to_gpu(
                 anisotropy: mat.anisotropy,
                 ior_dielectric: mat.ior,
                 is_specular: if mat.shader.is_specular() { !0x0 } else { 0x0 },
+                is_emissive: if mat.shader == ShaderMat::EMISSIVE {
+                    !0x0
+                } else {
+                    0x0
+                },
             }
         })
         .collect::<Vec<_>>();
@@ -1390,24 +1449,39 @@ fn load_raytrace_lights_to_gpu(
     tcmdm: &mut CommandManager,
     unf: &mut UnfinishedExecutions,
     lights: &[Light],
+    transform_ids: &FnvHashMap<u16, Vec<u16>>,
 ) -> AllocatedBuffer {
-    let mut data = lights
-        .iter()
-        .map(|l| {
-            let pos = l.position();
-            let mut dir = l.direction();
-            if dir.x == 0.0 && dir.y == 0.0 && dir.z == 0.0 {
-                log::warn!("zero length vector was changed to (1.0, 0.0, 0.0)");
-                dir.y = 1.0;
+    let mut data = Vec::new();
+    for l in lights {
+        let pos = l.position();
+        let mut dir = l.direction();
+        if dir.x == 0.0 && dir.y == 0.0 && dir.z == 0.0 {
+            log::warn!("zero length vector was changed to (1.0, 0.0, 0.0)");
+            dir.y = 1.0;
+        }
+        dir.normalize();
+        let mut addlight = RTLight {
+            color: l.emission(),
+            pos: [pos.x, pos.y, pos.z, 0.0],
+            dir: [dir.x, dir.y, dir.z, 0.0],
+            shader: l.ltype().sbt_callable_index(),
+            instance_id: u32::MAX,
+            intensity: l.intensity(),
+            delta: l.ltype().is_delta(),
+        };
+        if l.ltype() == LightType::AREA {
+            // add all the isntances of the material (material_id to isntance_id conversion)
+            let material_id = l.material_id() as u16;
+            let dflt = vec![0];
+            let instances = transform_ids.get(&material_id).unwrap_or(&dflt);
+            for instance in instances {
+                addlight.instance_id = *instance as u32;
+                data.push(addlight);
             }
-            RTLight {
-                color: l.emission(),
-                pos: [pos.x, pos.y, pos.z, 0.0],
-                dir: [dir.x, dir.y, dir.z, 0.0],
-                shader: l.ltype().sbt_callable_index(),
-            }
-        })
-        .collect::<Vec<_>>();
+        } else {
+            data.push(addlight);
+        }
+    }
     if data.is_empty() {
         // push an empty light to avoid having a zero sized buffer
         // since there is no "default" light
@@ -1416,6 +1490,9 @@ fn load_raytrace_lights_to_gpu(
             pos: [0.0, 0.0, 0.0, 0.0],
             dir: [0.0, 0.0, 0.0, 0.0],
             shader: 0,
+            instance_id: u32::MAX,
+            intensity: 1.0,
+            delta: true,
         })
     }
     upload_buffer(
@@ -1575,6 +1652,7 @@ fn build_raytrace_descriptor(
     material_buffer: &AllocatedBuffer,
     light_buffer: &AllocatedBuffer,
     derivative_buffer: &AllocatedBuffer,
+    transforms_buffer: &AllocatedBuffer,
     textures: &[TextureLoaded],
     sampler: vk::Sampler,
 ) -> Descriptor {
@@ -1587,17 +1665,23 @@ fn build_raytrace_descriptor(
         .bind_buffer(
             vertex_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::ANY_HIT_KHR,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR
+                | vk::ShaderStageFlags::ANY_HIT_KHR
+                | vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .bind_buffer(
             index_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::ANY_HIT_KHR,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR
+                | vk::ShaderStageFlags::ANY_HIT_KHR
+                | vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .bind_buffer(
             instance_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::ANY_HIT_KHR,
+            vk::ShaderStageFlags::CLOSEST_HIT_KHR
+                | vk::ShaderStageFlags::ANY_HIT_KHR
+                | vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .bind_buffer(
             material_buffer,
@@ -1624,6 +1708,11 @@ fn build_raytrace_descriptor(
             derivative_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        )
+        .bind_buffer(
+            transforms_buffer,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .build()
 }

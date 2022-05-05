@@ -189,18 +189,12 @@ impl ShaderMat {
 
     /// Returns true if the shader can use a normal map.
     pub fn use_normal(&self) -> bool {
-        match self {
-            ShaderMat::EMISSIVE => false,
-            _ => true,
-        }
+        !matches!(self, ShaderMat::EMISSIVE)
     }
 
     /// Returns true if the shader can use an opacity map.
     pub fn use_opacity(&self) -> bool {
-        match self {
-            ShaderMat::EMISSIVE => false,
-            _ => true,
-        }
+        !matches!(self, ShaderMat::EMISSIVE)
     }
 
     /// Returns true if the shader can model a Fresnel conductor.

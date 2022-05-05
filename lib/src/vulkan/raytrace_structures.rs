@@ -35,6 +35,7 @@ pub struct RTInstance {
     pub index_offset: u32,
     pub index_count: u32,
     pub material_id: u32, // due to how std430 works
+    pub transform_id: u32,
 }
 
 #[repr(C, align(16))]
@@ -55,6 +56,7 @@ pub struct RTMaterial {
     pub anisotropy: f32,
     pub ior_dielectric: f32,
     pub is_specular: u32,
+    pub is_emissive: u32,
 }
 
 #[repr(C, align(16))]
@@ -64,6 +66,9 @@ pub struct RTLight {
     pub pos: [f32; 4],
     pub dir: [f32; 4],
     pub shader: u32,
+    pub instance_id: u32,
+    pub intensity: f32,
+    pub delta: bool,
 }
 
 pub const PT_STEPS: usize = 6;
@@ -72,6 +77,6 @@ pub const PT_STEPS: usize = 6;
 #[derive(Debug, Copy, Clone)]
 pub struct PTLastVertex {
     pub importance: Spectrum,
-    pub wi: [f32; 4],
+    pub wi: [f32; 4],  //wi.z indicates if the last bounce was specular
     pub hit: [f32; 4], //hit.z indicates if the path is still valid or not
 }

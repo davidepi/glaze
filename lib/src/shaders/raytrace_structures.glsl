@@ -23,6 +23,7 @@ struct RTInstance
   uint index_offset;
   uint index_count;
   uint material_id;
+  uint transform_id;
 };
 
 struct RTMaterial
@@ -41,6 +42,7 @@ struct RTMaterial
   float anisotropy;
   float ior_dielectric;
   uint is_specular;
+  uint is_emissive;
 };
 
 struct RTLight
@@ -49,6 +51,9 @@ struct RTLight
   vec4 pos;
   vec4 dir;
   uint shader;
+  uint instance_id;
+  float intensity;
+  bool delta;
 };
 
 struct PTLastVertex
