@@ -61,4 +61,11 @@ void main()
     hit.shading_normal *= sign(dot(hit.geometric_normal, hit.shading_normal));
   }
   hit.distance = gl_HitTEXT;
+  // convert to world space
+  hit.point = gl_ObjectToWorldEXT * vec4(hit.point, 1.0);
+  hit.dpdu = gl_ObjectToWorldEXT * vec4(hit.dpdu, 1.0);
+  hit.dpdv = gl_ObjectToWorldEXT * vec4(hit.dpdv, 1.0);
+  mat3x4 normal_obj_to_world = transpose(gl_WorldToObjectEXT);
+  hit.geometric_normal = (normal_obj_to_world * hit.geometric_normal).xyz;
+  hit.shading_normal = (normal_obj_to_world * hit.shading_normal).xyz;
 }
