@@ -282,13 +282,13 @@ impl VulkanScene {
             )
         });
         // keep the list of lights aligned
-        let old = self.materials[mat_id as usize].shader;
-        if new.shader == ShaderMat::EMISSIVE || old == ShaderMat::EMISSIVE {
-            if new.shader == ShaderMat::EMISSIVE && old != ShaderMat::EMISSIVE {
+        let old = &self.materials[mat_id as usize];
+        if new.emissive_col.is_some() || old.emissive_col.is_some() {
+            if new.emissive_col.is_some() && !old.emissive_col.is_some() {
                 // lights should be added
                 self.lights
                     .push(Light::new_area(new.name.clone(), mat_id as u32, 1.0));
-            } else if new.shader != ShaderMat::EMISSIVE && old == ShaderMat::EMISSIVE {
+            } else if !new.emissive_col.is_some() && old.emissive_col.is_some() {
                 // light should be removed
                 self.lights
                     .retain(|x| x.ltype() != LightType::AREA || x.material_id() != mat_id as u32);
@@ -1424,12 +1424,9 @@ fn load_raytrace_materials_to_gpu(
                 metalness_mul: mat.metalness_mul as f32,
                 anisotropy: mat.anisotropy,
                 ior_dielectric: mat.ior,
-                is_specular: if mat.shader.is_specular() { !0x0 } else { 0x0 },
-                is_emissive: if mat.shader == ShaderMat::EMISSIVE {
-                    !0x0
-                } else {
-                    0x0
-                },
+                is_specular: mat.shader.is_specular() as u32,
+                is_emissive: mat.emissive_col.is_some() as u32,
+                emissive_col: col_int_to_f32(mat.emissive_col.unwrap_or([0, 0, 0])),
             }
         })
         .collect::<Vec<_>>();
@@ -1505,12 +1502,12 @@ fn load_raytrace_lights_to_gpu(
     )
 }
 
-fn col_int_to_f32(col: [u8; 4]) -> [f32; 4] {
+fn col_int_to_f32(col: [u8; 3]) -> [f32; 4] {
     [
         col[0] as f32 / 255.0,
         col[1] as f32 / 255.0,
         col[2] as f32 / 255.0,
-        col[3] as f32 / 255.0,
+        1.0,
     ]
 }
 

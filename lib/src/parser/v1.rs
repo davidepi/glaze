@@ -881,14 +881,20 @@ fn bytes_to_texture(data: &[u8]) -> Result<Texture, Error> {
 /// Converts a Material to a vector of bytes.
 fn material_to_bytes(material: &Material) -> Vec<u8> {
     let str_len = material.name.bytes().len();
-    let total_len = 6 * std::mem::size_of::<u8>() // shader id, metal id, diffuse mul
+    let max_len = 9 * std::mem::size_of::<u8>() // shader id, metal id, diffuse mul, emissive
         + 4 * std::mem::size_of::<f32>() // ior, roughness mul, metal mul, anisotropy
         + 5 * std::mem::size_of::<u16>() // diff, rough, metal, normal, opacity textures
         + str_len; // material name
-    let mut retval = Vec::with_capacity(total_len);
+    let mut retval = Vec::with_capacity(max_len);
     retval.push(material.shader.into());
     retval.push(material.metal.into());
     retval.extend(material.diffuse_mul);
+    if let Some(col) = material.emissive_col {
+        retval.push(0x1);
+        retval.extend(col);
+    } else {
+        retval.push(0x0);
+    }
     retval.extend(f32::to_le_bytes(material.ior));
     retval.extend(f32::to_le_bytes(material.roughness_mul));
     retval.extend(f32::to_le_bytes(material.metalness_mul));
@@ -906,17 +912,37 @@ fn material_to_bytes(material: &Material) -> Vec<u8> {
 fn bytes_to_material(data: &[u8]) -> Material {
     let shader = ShaderMat::from(data[0]);
     let metal = Metal::from(data[1]);
-    let diffuse_mul = data[2..6].try_into().unwrap();
-    let ior = f32::from_le_bytes(data[6..10].try_into().unwrap());
-    let roughness_mul = f32::from_le_bytes(data[10..14].try_into().unwrap());
-    let metalness_mul = f32::from_le_bytes(data[14..18].try_into().unwrap());
-    let anisotropy = f32::from_le_bytes(data[18..22].try_into().unwrap());
-    let diffuse = u16::from_le_bytes(data[22..24].try_into().unwrap());
-    let roughness = u16::from_le_bytes(data[24..26].try_into().unwrap());
-    let metalness = u16::from_le_bytes(data[26..28].try_into().unwrap());
-    let normal = u16::from_le_bytes(data[28..30].try_into().unwrap());
-    let opacity = u16::from_le_bytes(data[30..32].try_into().unwrap());
-    let name = String::from_utf8(data[32..].to_vec()).unwrap();
+    let mut index = 2;
+    let diffuse_mul = data[index..index + 3].try_into().unwrap();
+    index += 3;
+    let emissive_col = if data[index] == 0 {
+        index += 1;
+        None
+    } else {
+        index += 1;
+        let emissive = Some(data[index..index + 3].try_into().unwrap());
+        index += 3;
+        emissive
+    };
+    let ior = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let roughness_mul = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let metalness_mul = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let anisotropy = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let diffuse = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+    index += 2;
+    let roughness = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+    index += 2;
+    let metalness = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+    index += 2;
+    let normal = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+    index += 2;
+    let opacity = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+    index += 2;
+    let name = String::from_utf8(data[index..].to_vec()).unwrap();
     Material {
         name,
         shader,
@@ -931,6 +957,7 @@ fn bytes_to_material(data: &[u8]) -> Material {
         anisotropy,
         opacity,
         normal,
+        emissive_col,
     }
 }
 
@@ -1238,7 +1265,6 @@ mod tests {
                 rng.gen_range(0..255),
                 rng.gen_range(0..255),
                 rng.gen_range(0..255),
-                rng.gen_range(0..255),
             ];
             let opacity = if rng.gen_bool(0.1) {
                 rng.gen_range(0..u16::MAX - 1)
@@ -1249,6 +1275,15 @@ mod tests {
                 rng.gen_range(0..u16::MAX - 1)
             } else {
                 0
+            };
+            let emissive_col = if rng.gen_bool(0.5) {
+                Some([
+                    rng.gen_range(0..255),
+                    rng.gen_range(0..255),
+                    rng.gen_range(0..255),
+                ])
+            } else {
+                None
             };
             let material = Material {
                 name,
@@ -1264,6 +1299,7 @@ mod tests {
                 metalness,
                 metalness_mul,
                 anisotropy,
+                emissive_col,
             };
             data.push(material);
         }

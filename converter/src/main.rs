@@ -532,7 +532,6 @@ fn convert_material(
     mat_id: u16,
 ) -> (Material, Option<Light>) {
     let mut retval = Material::default();
-    let mut light = None;
     for property in props {
         match property.key.as_str() {
             "?mat.name" => retval.name = matprop_to_str(property),
@@ -540,7 +539,7 @@ fn convert_material(
             "$clr.emissive" => {
                 let color = fcol_to_ucol(matprop_to_fvec(property));
                 if color[0] > 0 || color[1] > 0 || color[2] > 0 {
-                    light = Some(color);
+                    retval.emissive_col = Some(color);
                 }
             }
             "$tex.file" => {
@@ -567,8 +566,7 @@ fn convert_material(
             _ => {} // super ugly...
         }
     }
-    if let Some(light) = light {
-        retval.diffuse_mul = light; // use emissive as diffuse. I don't support both.
+    if retval.emissive_col.is_some() {
         let light = Light::new_area(retval.name.clone(), mat_id as u32, 1.0);
         (retval, Some(light))
     } else {
@@ -587,12 +585,11 @@ fn used_name(name: &str, format: TextureFormat) -> String {
     format!("{}{}", name, format_str)
 }
 
-fn fcol_to_ucol(col: [f32; 3]) -> [u8; 4] {
+fn fcol_to_ucol(col: [f32; 3]) -> [u8; 3] {
     [
         (col[0] * 255.0) as u8,
         (col[1] * 255.0) as u8,
         (col[2] * 255.0) as u8,
-        255,
     ]
 }
 

@@ -29,6 +29,7 @@ struct RTInstance
 struct RTMaterial
 {
   vec4 diffuse_mul;
+  vec4 emissive_col;
   Spectrum metal_ior;
   Spectrum metal_fresnel;
   uint diffuse;

@@ -15,7 +15,7 @@ pub struct Material {
     /// 0 if no diffuse.
     pub diffuse: u16,
     /// Multiplier for the diffuse color.
-    pub diffuse_mul: [u8; 4],
+    pub diffuse_mul: [u8; 3],
     /// Index of the texture used to specify the roughness of the material.
     /// 0 if no roughness map.
     pub roughness: u16,
@@ -35,6 +35,8 @@ pub struct Material {
     /// Index of the texture used to determine the normal mapping of the material.
     /// 0 if no normal map.
     pub normal: u16,
+    /// Color of the emitted light
+    pub emissive_col: Option<[u8; 3]>,
 }
 
 impl Default for Material {
@@ -46,7 +48,7 @@ impl Default for Material {
             metal: Metal::SILVER,
             ior: 1.46,
             diffuse: 0,
-            diffuse_mul: [255, 255, 255, 255],
+            diffuse_mul: [255, 255, 255],
             opacity: 0,
             normal: 0,
             roughness: 0,
@@ -54,6 +56,7 @@ impl Default for Material {
             metalness: 0,
             metalness_mul: 0.0,
             anisotropy: 0.0,
+            emissive_col: None,
         }
     }
 }

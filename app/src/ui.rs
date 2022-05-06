@@ -481,27 +481,20 @@ fn window_materials(
                 }
             }
             if current.shader.use_diffuse() {
-                // emissive materials have only the color, not the texture
-                // otherwise I need to correctly sample based not only on the arelight shape but
-                // also on the texture colors...
-                if current.shader != ShaderMat::EMISSIVE {
-                    let (diff, diff_clicked) =
-                        texture_selector(ui, "Diffuse", current.diffuse, scene);
-                    if diff != current.diffuse {
-                        let mut new = current.clone();
-                        new.diffuse = diff;
-                        new_mat = Some(new);
-                    }
-                    if diff_clicked {
-                        state.textures_selected = Some(diff);
-                        state.textures_window = true;
-                    }
+                let (diff, diff_clicked) = texture_selector(ui, "Diffuse", current.diffuse, scene);
+                if diff != current.diffuse {
+                    let mut new = current.clone();
+                    new.diffuse = diff;
+                    new_mat = Some(new);
+                }
+                if diff_clicked {
+                    state.textures_selected = Some(diff);
+                    state.textures_window = true;
                 }
                 let mut color = [
                     current.diffuse_mul[0] as f32 / 255.0,
                     current.diffuse_mul[1] as f32 / 255.0,
                     current.diffuse_mul[2] as f32 / 255.0,
-                    current.diffuse_mul[3] as f32 / 255.0,
                 ];
                 if ColorEdit::new("Diffuse multiplier", &mut color)
                     .inputs(false)
@@ -512,7 +505,6 @@ fn window_materials(
                         (color[0] * 255.0) as u8,
                         (color[1] * 255.0) as u8,
                         (color[2] * 255.0) as u8,
-                        (color[3] * 255.0) as u8,
                     ];
                     new_mat = Some(new);
                 }
@@ -594,6 +586,37 @@ fn window_materials(
                 if opac_clicked {
                     state.textures_selected = Some(opac);
                     state.textures_window = true;
+                }
+            }
+            if current.shader.use_emission() {
+                let mut emissive = current.emissive_col.is_some();
+                if ui.checkbox("Emits light", &mut emissive) {
+                    let mut new = current.clone();
+                    if emissive {
+                        new.emissive_col = Some([255, 255, 255]);
+                    } else {
+                        new.emissive_col = None;
+                    }
+                    new_mat = Some(new);
+                }
+                if let Some(col) = current.emissive_col {
+                    let mut color = [
+                        col[0] as f32 / 255.0,
+                        col[1] as f32 / 255.0,
+                        col[2] as f32 / 255.0,
+                    ];
+                    if ColorEdit::new("Emissive color", &mut color)
+                        .inputs(false)
+                        .build(ui)
+                    {
+                        let mut new = current.clone();
+                        new.emissive_col = Some([
+                            (color[0] * 255.0) as u8,
+                            (color[1] * 255.0) as u8,
+                            (color[2] * 255.0) as u8,
+                        ]);
+                        new_mat = Some(new);
+                    }
                 }
             }
             if let Some(new_mat) = new_mat {

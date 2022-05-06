@@ -42,6 +42,7 @@ pub struct RTInstance {
 #[derive(Debug, Default, Copy, Clone)]
 pub struct RTMaterial {
     pub diffuse_mul: [f32; 4],
+    pub emissive_col: [f32; 4],
     pub metal_ior: Spectrum,
     pub metal_fresnel: Spectrum,
     pub diffuse: u32,
@@ -49,7 +50,7 @@ pub struct RTMaterial {
     pub metalness: u32,
     pub opacity: u32,
     pub normal: u32,
-    // callable shader index for the bsdf_value. This is not the same as the material index!
+    // callable shader index for the bsdf_value.
     pub bsdf_index: u32,
     pub roughness_mul: f32,
     pub metalness_mul: f32,
