@@ -30,7 +30,7 @@ use std::collections::hash_map::Entry;
 use std::ffi::c_void;
 #[cfg(feature = "vulkan-interactive")]
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// A scene optimized to be rendered using this crates vulkan implementation.
 #[cfg(feature = "vulkan-interactive")]
@@ -62,7 +62,11 @@ pub struct VulkanScene {
     /// Map of all shaders in the scene with their pipeline.
     pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
     /// All textures in the scene.
-    pub(super) textures: Arc<Vec<TextureLoaded>>,
+    pub(super) textures: Arc<RwLock<Vec<TextureLoaded>>>,
+    /// Raw textures.
+    raw_textures: Vec<Texture>,
+    /// True if textures has been changed (so they need to be saved again, this takes time)
+    edited_textures: bool,
     /// All the transforms in the scene.
     transforms: Arc<AllocatedBuffer>,
     /// All the instances in the scene in form (Mesh ID, Vec<Transform ID>).
@@ -101,6 +105,7 @@ impl VulkanScene {
         let with_raytrace = instance.supports_raytrace();
         let mut unf = UnfinishedExecutions::new(device);
         let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 5);
+        let mut gcmdm = CommandManager::new(device.logical_clone(), device.graphic_queue().idx, 5);
         let avg_desc = [
             (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
             (vk::DescriptorType::STORAGE_BUFFER, 1.0),
@@ -138,15 +143,17 @@ impl VulkanScene {
         );
         let instances = instances_to_map(&parsed.instances().unwrap_or_default());
         let sampler = create_sampler(device);
-        let scene_textures = parsed
+        let raw_textures = parsed
             .textures()
             .unwrap_or_else(|_| vec![Texture::default()]);
-        let textures = Arc::new(
-            scene_textures
-                .into_iter()
-                .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
+        let textures = Arc::new(RwLock::new(
+            raw_textures
+                .iter()
+                .map(|tex| {
+                    load_texture_to_gpu(Arc::clone(&instance), mm, &mut gcmdm, &mut unf, tex)
+                })
                 .collect::<Vec<_>>(),
-        );
+        ));
         let materials = parsed
             .materials()
             .unwrap_or_else(|_| vec![Material::default()]);
@@ -159,7 +166,7 @@ impl VulkanScene {
             .map(|(id, mat)| {
                 let (shader, desc) = build_mat_desc_set(
                     device,
-                    &textures,
+                    &textures.read().unwrap(),
                     &params_buffer,
                     sampler,
                     id as u16,
@@ -206,6 +213,8 @@ impl VulkanScene {
             materials,
             pipelines,
             textures,
+            raw_textures,
+            edited_textures: false,
             transforms,
             instances,
             scene_desc,
@@ -265,7 +274,7 @@ impl VulkanScene {
         unf.add_fence(fence); // the buffer is always stored in self
         let (new_shader, new_desc) = build_mat_desc_set(
             device,
-            &self.textures,
+            &self.textures.read().unwrap(),
             &self.params_buffer,
             self.sampler,
             mat_id,
@@ -346,16 +355,41 @@ impl VulkanScene {
         &self.materials
     }
 
-    //// Returns a texture in the scene, given its ID.
-    /// Returns None if the texture does not exists.
-    pub fn single_texture(&self, id: u16) -> Option<&TextureLoaded> {
-        self.textures.get(id as usize)
-    }
-
     /// Returns all the textures in the scene.
     /// The position in the array is the texture ID.
-    pub fn textures(&self) -> &[TextureLoaded] {
-        &self.textures
+    pub fn textures(&self) -> &[Texture] {
+        &self.raw_textures
+    }
+
+    /// Returns a texture in the scene, given its ID.
+    /// Returns None if the texture does not exist.
+    pub fn single_texture(&self, id: u16) -> Option<&Texture> {
+        self.raw_textures.get(id as usize)
+    }
+
+    /// Adds a single texture to the scene.
+    pub fn add_texture(&mut self, texture: Texture) {
+        self.edited_textures = true;
+        let device = self.instance.device();
+        let mm = self.instance.allocator();
+        let mut unf = UnfinishedExecutions::new(device);
+        let mut gcmdm = CommandManager::new(device.logical_clone(), device.graphic_queue().idx, 5);
+        let loaded = load_texture_to_gpu(
+            Arc::clone(&self.instance),
+            mm,
+            &mut gcmdm,
+            &mut unf,
+            &texture,
+        );
+        self.raw_textures.push(texture);
+        self.textures.write().unwrap().push(loaded);
+        unf.wait_completion()
+    }
+
+    /// Removes from the scene the texture with the given ID.
+    pub fn remove_texture(&mut self, id: u16) {
+        self.raw_textures.remove(id as usize);
+        self.textures.write().unwrap().remove(id as usize);
     }
 
     /// Returns all the lights in the scene.
@@ -689,9 +723,9 @@ fn load_materials_parameters(
 fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
     instance: Arc<T>,
     mm: &MemoryManager,
-    tcmdm: &mut CommandManager,
+    gcmdm: &mut CommandManager,
     unfinished: &mut UnfinishedExecutions,
-    texture: Texture,
+    texture: &Texture,
 ) -> TextureLoaded {
     let (width, height) = texture.dimensions(0);
     let mip_levels = texture.max_mipmap_levels();
@@ -976,15 +1010,14 @@ fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
             );
         }
     };
-    let cmd = tcmdm.get_cmd_buffer();
+    let cmd = gcmdm.get_cmd_buffer();
     let device = instance.device();
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
     unfinished.add(fence, cpu_buf);
     TextureLoaded {
-        info: texture.to_info(),
+        format: texture.info().format,
         image,
-        instance: instance.clone(),
     }
 }
 
@@ -1045,7 +1078,7 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     material_instance_ids: FnvHashMap<u16, Vec<u16>>,
     pub(crate) lights_no: u32,
     pub(crate) meta: Meta,
-    textures: Arc<Vec<TextureLoaded>>,
+    textures: Arc<RwLock<Vec<TextureLoaded>>>,
     acc: SceneAS,
     dm: DescriptorSetManager,
     instance: Arc<T>,
@@ -1110,14 +1143,14 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         );
         let transforms_buffer =
             load_transforms_to_gpu(device, mm, &mut tcmdm, &mut unf, &transforms);
-        let textures = Arc::new(
+        let textures = Arc::new(RwLock::new(
             parsed
                 .textures()
                 .unwrap_or_else(|_| vec![Texture::default()])
-                .into_iter()
+                .iter()
                 .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
                 .collect::<Vec<_>>(),
-        );
+        ));
         let material_instance_ids = map_materials_to_instances(&meshes, &instances);
         let builder = SceneASBuilder::new(
             device,
@@ -1157,7 +1190,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &light_buffer,
             &derivative_buffer,
             &transforms_buffer,
-            &textures,
+            &textures.read().unwrap(),
             sampler,
         );
         let meta = parsed.meta().unwrap_or_default();
@@ -1218,7 +1251,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.light_buffer,
             &self.derivative_buffer,
             &self.transforms_buffer,
-            &self.textures,
+            &self.textures.read().unwrap(),
             self.sampler,
         );
     }
@@ -1312,7 +1345,7 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             &light_buffer,
             &derivative_buffer,
             &transforms_buffer,
-            &textures,
+            &textures.read().unwrap(),
             sampler,
         );
         let meta = scene.meta;

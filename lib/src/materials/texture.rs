@@ -1,9 +1,7 @@
 #[cfg(feature = "vulkan")]
-use crate::vulkan::{export, AllocatedImage, CommandManager, Instance};
+use crate::vulkan::AllocatedImage;
 use image::imageops::{resize, FilterType};
 use image::{GenericImageView, GrayImage, ImageBuffer, Pixel, RgbaImage};
-#[cfg(feature = "vulkan")]
-use std::sync::Arc;
 
 /// Information about the texture.
 // When loaded on the GPU the image is discarded and so width and height are lost.
@@ -26,29 +24,10 @@ pub struct TextureInfo {
 /// A texture that has been loaded on the GPU.
 #[cfg(feature = "vulkan")]
 pub struct TextureLoaded {
-    /// Information about the texture.
-    pub info: TextureInfo,
+    /// Format of the allocated texture.
+    pub format: TextureFormat,
     /// The allocated buffer in the GPU.
-    pub(crate) image: AllocatedImage,
-    /// The TextureLoaded is exposed outside the crate and cannot outlive the instance.
-    pub(crate) instance: Arc<dyn Instance + Send + Sync>,
-}
-
-#[cfg(feature = "vulkan")]
-impl TextureLoaded {
-    /// Converts the GPU texture into a suitable format to be processed by the CPU
-    pub fn export(&self) -> image::RgbaImage {
-        let device = self.instance.device();
-        let graphic = device.graphic_queue();
-        let mut gcmdm = CommandManager::new(device.logical_clone(), graphic.idx, 1);
-        export(
-            self.instance.as_ref(),
-            &self.image,
-            &mut gcmdm,
-            self.info.width as u32,
-            self.info.height as u32,
-        )
-    }
+    pub image: AllocatedImage,
 }
 
 /// A RGBA texture stored in memory.
@@ -137,10 +116,10 @@ impl Texture {
     }
 
     /// Returns the information about the texture.
-    pub fn to_info(self) -> TextureInfo {
+    pub fn info(&self) -> &TextureInfo {
         match self {
-            Texture::Rgba(img) => img.info,
-            Texture::Gray(img) => img.info,
+            Texture::Rgba(img) => &img.info,
+            Texture::Gray(img) => &img.info,
         }
     }
 

@@ -7,7 +7,8 @@ use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderer::InternalStats;
 use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
-use crate::{include_shader, PresentInstance, TextureFormat, TextureLoaded};
+use crate::materials::TextureLoaded;
+use crate::{include_shader, PresentInstance, TextureFormat};
 use ash::vk;
 use cgmath::Vector2 as Vec2;
 use font_kit::family_name::FamilyName;
@@ -16,7 +17,7 @@ use font_kit::source::SystemSource;
 use gpu_allocator::MemoryLocation;
 use imgui::{DrawCmdParams, FontSource, TextureId};
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// initial buffer size for the imgui vertex buffer
 const INITIAL_VERTEX_SIZE: u64 = 512 * std::mem::size_of::<imgui::DrawVert>() as u64;
@@ -55,7 +56,7 @@ pub struct ImguiRenderer {
     dm: DescriptorSetManager,
     /// Reference to the scene textures, to avoid inconsistent states when the scene is
     /// deallocated.
-    scene_textures: Option<Arc<Vec<TextureLoaded>>>,
+    scene_textures: Option<Arc<RwLock<Vec<TextureLoaded>>>>,
     /// descriptors of the various textures, along with the texture info
     tex_descs: Vec<Descriptor>,
     /// Buffers that cannot be freed immediately, as they require the GPU to finish first.
@@ -224,6 +225,8 @@ impl ImguiRenderer {
     pub(super) fn load_scene_textures(&mut self, scene: &VulkanScene) {
         let scene_textures = Arc::clone(&scene.textures);
         self.tex_descs = scene_textures
+            .read()
+            .unwrap()
             .iter()
             .map(|texture| {
                 self.dm
@@ -420,9 +423,11 @@ impl ImguiRenderer {
                             } else {
                                 // texture_id != FONT_ATLAS_TEXTURE_ID implicitly assumed
                                 let tex_id = texture_id.id();
-                                let tex_info = &self.scene_textures.as_ref().unwrap()[tex_id].info;
+                                let format = self.scene_textures.as_ref().unwrap().read().unwrap()
+                                    [tex_id]
+                                    .format;
                                 let desc = &self.tex_descs[tex_id];
-                                if tex_info.format == TextureFormat::RgbaSrgb && pipeline_bw {
+                                if format == TextureFormat::RgbaSrgb && pipeline_bw {
                                     // set default pipeline
                                     pipeline_bw = false;
                                     unsafe {
@@ -439,7 +444,7 @@ impl ImguiRenderer {
                                             as_u8_slice(&imguipc),
                                         );
                                     }
-                                } else if tex_info.format == TextureFormat::Gray && !pipeline_bw {
+                                } else if format == TextureFormat::Gray && !pipeline_bw {
                                     // set bw pipeline
                                     pipeline_bw = true;
                                     unsafe {

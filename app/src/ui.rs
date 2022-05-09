@@ -335,7 +335,7 @@ fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
     let preview = match &selected {
         Some(id) => {
             let texture = scene.single_texture(*id).unwrap();
-            &texture.info.name
+            &texture.info().name
         }
         _ => "",
     };
@@ -352,14 +352,14 @@ fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
                         .iter()
                         .enumerate()
                         .for_each(|(id, texture)| {
-                            if Selectable::new(&texture.info.name).build(ui) {
+                            if Selectable::new(&texture.info().name).build(ui) {
                                 *selected = Some(id as u16);
                             }
                         });
                 });
             if let Some(selected) = selected {
                 ui.separator();
-                let info = &scene.single_texture(*selected).unwrap().info;
+                let info = &scene.single_texture(*selected).unwrap().info();
                 ui.text(format!("Resolution {}x{}", info.width, info.height));
                 ui.text(format!("Format {}", channels_to_string(info.format)));
                 let window_w = ui.window_size()[0];
@@ -634,10 +634,10 @@ fn window_materials(
 
 fn texture_selector(ui: &Ui, text: &str, mut selected: u16, scene: &VulkanScene) -> (u16, bool) {
     let mut clicked_on_preview = false;
-    let name = &scene.single_texture(selected).unwrap().info.name;
+    let name = &scene.single_texture(selected).unwrap().info().name;
     if let Some(cb) = ComboBox::new(text).preview_value(name).begin(ui) {
         for (id, texture) in scene.textures().iter().enumerate() {
-            if Selectable::new(&texture.info.name).build(ui) {
+            if Selectable::new(&texture.info().name).build(ui) {
                 selected = id as u16;
             }
             if ui.is_item_hovered() {
