@@ -1,17 +1,18 @@
 #[cfg(feature = "vulkan")]
 use crate::include_shader;
 use crate::Spectrum;
-use cgmath::{Point3, Vector3 as Vec3};
+use cgmath::{Matrix4, Point3, Vector3 as Vec3};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Light {
     Omni(OmniLight),
     Sun(SunLight),
     Area(AreaLight),
+    Sky(SkyLight),
 }
 
 #[cfg(feature = "vulkan")]
-pub const SBT_LIGHT_TYPES: usize = 3;
+pub const SBT_LIGHT_TYPES: usize = 4;
 #[cfg(feature = "vulkan")]
 pub const SBT_LIGHT_STRIDE: usize = 1;
 
@@ -22,11 +23,12 @@ pub enum LightType {
     OMNI,
     SUN,
     AREA,
+    SKY,
 }
 
 impl LightType {
-    pub fn all() -> [Self; 3] {
-        [Self::OMNI, Self::SUN, Self::AREA]
+    pub fn all() -> [Self; 4] {
+        [Self::OMNI, Self::SUN, Self::AREA, Self::SKY]
     }
 
     pub fn name(&self) -> &'static str {
@@ -34,6 +36,7 @@ impl LightType {
             LightType::OMNI => "Omni",
             LightType::SUN => "Sun",
             LightType::AREA => "Area",
+            LightType::SKY => "Sky",
         }
     }
 
@@ -41,7 +44,8 @@ impl LightType {
         match self {
             LightType::OMNI => true,
             LightType::SUN => false,
-            LightType::AREA => false, // position for this light is given by the underlying model
+            LightType::AREA => false,
+            LightType::SKY => false,
         }
     }
 
@@ -50,6 +54,7 @@ impl LightType {
             LightType::OMNI => false,
             LightType::SUN => true,
             LightType::AREA => false,
+            LightType::SKY => false,
         }
     }
 
@@ -58,11 +63,17 @@ impl LightType {
             LightType::OMNI => true,
             LightType::SUN => false,
             LightType::AREA => true,
+            LightType::SKY => false,
         }
     }
 
     pub fn has_spectrum(&self) -> bool {
-        !matches!(self, LightType::AREA) // spectrum is given by the material
+        match self {
+            LightType::OMNI => true,
+            LightType::SUN => true,
+            LightType::AREA => false,
+            LightType::SKY => false,
+        }
     }
 
     pub fn is_delta(&self) -> bool {
@@ -70,6 +81,7 @@ impl LightType {
             LightType::OMNI => true,
             LightType::SUN => true,
             LightType::AREA => false,
+            LightType::SKY => false,
         }
     }
 
@@ -79,6 +91,7 @@ impl LightType {
             include_shader!("light_omni_sample_visible.rcall").to_vec(),
             include_shader!("light_sun_sample_visible.rcall").to_vec(),
             include_shader!("light_area_sample_visible.rcall").to_vec(),
+            include_shader!("light_sky_sample_visible.rcall").to_vec(),
         ]
     }
 
@@ -88,6 +101,7 @@ impl LightType {
             LightType::OMNI => 0,
             LightType::SUN => 1,
             LightType::AREA => 2,
+            LightType::SKY => 3,
         };
         (light_index * SBT_LIGHT_STRIDE) as u32
     }
@@ -101,6 +115,7 @@ impl TryFrom<u8> for LightType {
             0 => Ok(LightType::OMNI),
             1 => Ok(LightType::SUN),
             2 => Ok(LightType::AREA),
+            3 => Ok(LightType::SKY),
             _ => Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Invalid enum value for LightType",
@@ -115,6 +130,7 @@ impl From<LightType> for u8 {
             LightType::OMNI => 0,
             LightType::SUN => 1,
             LightType::AREA => 2,
+            LightType::SKY => 3,
         }
     }
 }
@@ -145,11 +161,21 @@ impl Light {
         })
     }
 
+    pub fn new_sky(tex_id: u16, yaw_deg: f32, pitch_deg: f32, roll_deg: f32) -> Self {
+        Light::Sky(SkyLight {
+            yaw_deg,
+            tex_id,
+            pitch_deg,
+            roll_deg,
+        })
+    }
+
     pub fn ltype(&self) -> LightType {
         match self {
             Light::Omni(_) => LightType::OMNI,
             Light::Sun(_) => LightType::SUN,
             Light::Area(_) => LightType::AREA,
+            Light::Sky(_) => LightType::SKY,
         }
     }
 
@@ -158,6 +184,7 @@ impl Light {
             Light::Omni(l) => &l.name,
             Light::Sun(l) => &l.name,
             Light::Area(l) => &l.name,
+            Light::Sky(_) => "Sky",
         }
     }
 
@@ -219,4 +246,31 @@ pub struct AreaLight {
     pub name: String,
     pub material_id: u32,
     pub intensity: f32,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct SkyLight {
+    pub yaw_deg: f32,
+    pub pitch_deg: f32,
+    pub roll_deg: f32,
+    pub tex_id: u16,
+}
+
+impl SkyLight {
+    pub fn rotation_matrix(&self) -> Matrix4<f32> {
+        Matrix4::from_angle_y(cgmath::Deg(self.yaw_deg))
+            * Matrix4::from_angle_z(cgmath::Deg(self.pitch_deg))
+            * Matrix4::from_angle_x(cgmath::Deg(self.roll_deg))
+    }
+}
+
+impl Default for SkyLight {
+    fn default() -> Self {
+        Self {
+            yaw_deg: 0.0,
+            pitch_deg: 90.0,
+            roll_deg: 0.0,
+            tex_id: 0,
+        }
+    }
 }

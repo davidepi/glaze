@@ -10,11 +10,12 @@ use super::pipeline::build_compute_pipeline;
 use super::pipeline::Pipeline;
 use super::raytrace_structures::{RTInstance, RTLight, RTMaterial};
 use super::UnfinishedExecutions;
+use crate::geometry::SkyLight;
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{
     include_shader, Camera, Light, LightType, Material, Mesh, MeshInstance, Meta, Metal,
-    ParsedScene, RayTraceInstance, Spectrum, Vertex,
+    ParsedScene, PipelineBuilder, RayTraceInstance, Spectrum, Vertex,
 };
 #[cfg(feature = "vulkan-interactive")]
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
@@ -73,6 +74,8 @@ pub struct VulkanScene {
     pub(super) instances: FnvHashMap<u16, Vec<u16>>,
     /// Scene level descriptor set
     pub(super) scene_desc: Descriptor,
+    /// skylighy used for the skydome.
+    skylight: Option<(SkyLight, Option<(Descriptor, Pipeline)>)>,
     /// All the lights in the scene.
     lights: Vec<Light>,
     /// Instance storing this scene.
@@ -146,18 +149,14 @@ impl VulkanScene {
         let raw_textures = parsed
             .textures()
             .unwrap_or_else(|_| vec![Texture::default()]);
-        let textures = Arc::new(RwLock::new(
-            raw_textures
-                .iter()
-                .map(|tex| {
-                    load_texture_to_gpu(Arc::clone(&instance), mm, &mut gcmdm, &mut unf, tex)
-                })
-                .collect::<Vec<_>>(),
-        ));
+        let textures = raw_textures
+            .iter()
+            .map(|tex| load_texture_to_gpu(Arc::clone(&instance), mm, &mut gcmdm, &mut unf, tex))
+            .collect::<Vec<_>>();
         let materials = parsed
             .materials()
             .unwrap_or_else(|_| vec![Material::default()]);
-        let lights = parsed.lights().unwrap_or_default();
+        let mut lights = parsed.lights().unwrap_or_default();
         let params_buffer = load_materials_parameters(device, &materials, mm, &mut tcmdm, &mut unf);
         unf.wait_completion();
         let materials_desc = materials
@@ -166,7 +165,7 @@ impl VulkanScene {
             .map(|(id, mat)| {
                 let (shader, desc) = build_mat_desc_set(
                     device,
-                    &textures.read().unwrap(),
+                    &textures,
                     &params_buffer,
                     sampler,
                     id as u16,
@@ -181,14 +180,6 @@ impl VulkanScene {
             .unwrap_or_default()
             .pop()
             .unwrap_or_default();
-        let scene_desc = dm
-            .new_set()
-            .bind_buffer(
-                &transforms,
-                vk::DescriptorType::STORAGE_BUFFER,
-                vk::ShaderStageFlags::VERTEX,
-            )
-            .build();
         let pipelines = FnvHashMap::default();
         let update_buffer = mm.create_buffer(
             "Material update transfer buffer",
@@ -197,7 +188,16 @@ impl VulkanScene {
             MemoryLocation::CpuToGpu,
         );
         sort_meshes(&mut meshes, &materials_desc);
+        let skylight = lights.iter().find_map(|l| match l {
+            Light::Sky(s) => Some((*s, None)),
+            _ => None,
+        });
+        lights = lights
+            .into_iter()
+            .filter(|l| l.ltype() != LightType::SKY)
+            .collect();
         let meta = parsed.meta().unwrap_or_default();
+        let scene_desc = build_realtime_descriptor(&mut dm, &transforms);
         VulkanScene {
             file: parsed,
             meta,
@@ -212,7 +212,7 @@ impl VulkanScene {
             materials_desc,
             materials,
             pipelines,
-            textures,
+            textures: Arc::new(RwLock::new(textures)),
             raw_textures,
             edited_textures: false,
             transforms,
@@ -220,6 +220,7 @@ impl VulkanScene {
             scene_desc,
             lights,
             instance,
+            skylight,
         }
     }
 
@@ -316,13 +317,12 @@ impl VulkanScene {
     pub(super) fn init_pipelines(
         &mut self,
         render_size: vk::Extent2D,
-        device: Arc<ash::Device>,
         renderpass: vk::RenderPass,
         frame_desc_layout: vk::DescriptorSetLayout,
     ) {
         self.pipelines = FnvHashMap::default();
         for (shader, desc) in &self.materials_desc {
-            let device = device.clone();
+            let device = self.instance.device().logical_clone();
             self.pipelines.entry(*shader).or_insert_with(|| {
                 shader.build_viewport_pipeline().build(
                     device,
@@ -336,11 +336,26 @@ impl VulkanScene {
                 )
             });
         }
+        if let Some((sky, data)) = &mut self.skylight {
+            let device = self.instance.device().logical_clone();
+            *data = Some(build_skydome(
+                device,
+                render_size,
+                &mut self.dm,
+                *sky,
+                &self.textures.read().unwrap(),
+                self.sampler,
+                renderpass,
+            ));
+        }
     }
 
     /// Destroys the scene's pipelines.
     pub(super) fn deinit_pipelines(&mut self) {
         self.pipelines.clear();
+        if let Some((_, data)) = &mut self.skylight {
+            *data = None;
+        }
     }
 
     /// Returns a material in the scene, given its ID.
@@ -365,6 +380,45 @@ impl VulkanScene {
     /// Returns None if the texture does not exist.
     pub fn single_texture(&self, id: u16) -> Option<&Texture> {
         self.raw_textures.get(id as usize)
+    }
+
+    /// Returns the light used as skydome.
+    pub fn skydome(&self) -> Option<SkyLight> {
+        if let Some((sky, _)) = self.skylight {
+            Some(sky)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn skydome_data(&self) -> Option<(SkyLight, Descriptor, &Pipeline)> {
+        if let Some((sky, Some((desc, pipeline)))) = &self.skylight {
+            Some((*sky, *desc, pipeline))
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn set_skydome(
+        &mut self,
+        skydome: Option<SkyLight>,
+        render_size: vk::Extent2D,
+        renderpass: vk::RenderPass,
+    ) {
+        self.skylight = if let Some(sky) = skydome {
+            let render_data = build_skydome(
+                self.instance.device().logical_clone(),
+                render_size,
+                &mut self.dm,
+                sky,
+                &self.textures.read().unwrap(),
+                self.sampler,
+                renderpass,
+            );
+            Some((sky, Some(render_data)))
+        } else {
+            None
+        };
     }
 
     /// Adds a single texture to the scene.
@@ -403,7 +457,10 @@ impl VulkanScene {
 
     pub fn save(&mut self) -> Result<(), std::io::Error> {
         let cameras = [self.current_cam];
-        let lights = self.lights().to_vec();
+        let mut lights = self.lights().to_vec();
+        if let Some((sky, _)) = self.skylight {
+            lights.push(Light::Sky(sky));
+        }
         let materials = self.materials().to_vec();
         let meta = &self.meta;
         let textures = if self.edited_textures {
@@ -432,6 +489,55 @@ impl Drop for VulkanScene {
                 .destroy_sampler(self.sampler, None)
         };
     }
+}
+
+fn build_realtime_descriptor(
+    dm: &mut DescriptorSetManager,
+    transforms_buffer: &AllocatedBuffer,
+) -> Descriptor {
+    dm.new_set()
+        .bind_buffer(
+            transforms_buffer,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::VERTEX,
+        )
+        .build()
+}
+
+fn build_skydome(
+    device: Arc<ash::Device>,
+    extent: vk::Extent2D,
+    dm: &mut DescriptorSetManager,
+    sky: SkyLight,
+    textures: &[TextureLoaded],
+    sampler: vk::Sampler,
+    rp: vk::RenderPass,
+) -> (Descriptor, Pipeline) {
+    let bound_sky = &textures[sky.tex_id as usize].image;
+    let descriptor = dm
+        .new_set()
+        .bind_image(
+            bound_sky,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            sampler,
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            vk::ShaderStageFlags::FRAGMENT,
+        )
+        .build();
+    let mut builder = PipelineBuilder::default();
+    let vs = include_shader!("skydome.vert");
+    let fs = include_shader!("texture.frag");
+    builder.push_shader(vs, "main", vk::ShaderStageFlags::VERTEX);
+    builder.push_shader(fs, "main", vk::ShaderStageFlags::FRAGMENT);
+    builder.push_constants(24, vk::ShaderStageFlags::VERTEX);
+    // vertices will be hard-coded (fullscreen)
+    builder.binding_descriptions = Vec::with_capacity(0);
+    builder.attribute_descriptions = Vec::with_capacity(0);
+    // deactivate depth stencil
+    builder.no_depth();
+    builder.rasterizer.cull_mode = vk::CullModeFlags::NONE;
+    let pipeline = builder.build(device, rp, extent, &[descriptor.layout]);
+    (descriptor, pipeline)
 }
 
 /// Creates the default sampler for this scene.
@@ -1086,6 +1192,7 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     transforms_buffer: Arc<AllocatedBuffer>,
     // (material_id, transform_ids)
     material_instance_ids: FnvHashMap<u16, Vec<u16>>,
+    // does not account for skylights
     pub(crate) lights_no: u32,
     pub(crate) meta: Meta,
     textures: Arc<RwLock<Vec<TextureLoaded>>>,
@@ -1120,7 +1227,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         let materials = parsed
             .materials()
             .unwrap_or_else(|_| vec![Material::default()]);
-        let lights = parsed.lights().unwrap_or_default();
+        let mut lights = parsed.lights().unwrap_or_default();
         let mut dm = DescriptorSetManager::new(
             instance.device().logical_clone(),
             &Self::AVG_DESC,
@@ -1203,6 +1310,17 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &textures.read().unwrap(),
             sampler,
         );
+        let skylight = lights
+            .iter()
+            .find_map(|l| match l {
+                Light::Sky(s) => Some(s),
+                _ => None,
+            })
+            .copied();
+        lights = lights
+            .into_iter()
+            .filter(|l| l.ltype() != LightType::SKY)
+            .collect();
         let meta = parsed.meta().unwrap_or_default();
         unf.wait_completion();
         RayTraceScene {

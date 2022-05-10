@@ -3,8 +3,8 @@
 use cgmath::Point3;
 use glaze::{
     parse, Camera, ColorRGB, Integrator, Light, LightType, Metal, OrthographicCam, PerspectiveCam,
-    PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer, ShaderMat, Spectrum,
-    Texture, TextureFormat, TextureInfo, VulkanScene,
+    PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer, ShaderMat, SkyLight,
+    Spectrum, Texture, TextureFormat, TextureInfo, VulkanScene,
 };
 use image::GenericImageView;
 use imgui::{
@@ -42,6 +42,7 @@ pub struct UiState {
     materials_selected: Option<u16>,
     lights_window: bool,
     light_selected: Option<usize>,
+    sky_selected: Option<SkyLight>,
     spectrum_temperature: bool,
     stats_window: bool,
     info_window: bool,
@@ -71,6 +72,7 @@ impl UiState {
             materials_selected: None,
             lights_window: false,
             light_selected: None,
+            sky_selected: None,
             spectrum_temperature: true,
             stats_window: true,
             info_window: false,
@@ -738,6 +740,7 @@ fn window_lights(
     let mut remove = None;
     let mut exposure = renderer.exposure();
     let mut update_exposure = false;
+    let mut update_sky = false;
     let mut update_lights = false;
     if let Some(window) = imgui::Window::new("Lights")
         .opened(closed)
@@ -761,6 +764,71 @@ fn window_lights(
             );
             update_lights = true;
             add = Some(dflt_light);
+        }
+        ui.separator();
+        ui.spacing();
+        // Skylight
+        ui.text("Sky Dome");
+        let dome_preview = match &state.sky_selected {
+            Some(sky) => {
+                let texture = renderer.scene().single_texture(sky.tex_id).unwrap();
+                &texture.info().name
+            }
+            _ => "",
+        };
+        ComboBox::new("Sky Texture")
+            .preview_value(dome_preview)
+            .build(ui, || {
+                if Selectable::new("None").build(ui) {
+                    state.sky_selected = None;
+                    update_sky = true;
+                }
+                renderer
+                    .scene()
+                    .textures()
+                    .iter()
+                    .enumerate()
+                    .for_each(|(id, texture)| {
+                        if Selectable::new(&texture.info().name).build(ui) {
+                            match state.sky_selected {
+                                Some(mut s) => s.tex_id = id as u16,
+                                None => {
+                                    state.sky_selected = Some(SkyLight {
+                                        yaw_deg: 0.0,
+                                        tex_id: id as u16,
+                                        pitch_deg: 90.0,
+                                        roll_deg: 0.0,
+                                    })
+                                }
+                            }
+                            update_sky = true;
+                        }
+                        if ui.is_item_hovered() {
+                            ui.tooltip(|| {
+                                Image::new(TextureId::new(id as usize), [128.0, 128.0]).build(ui);
+                            });
+                        }
+                    });
+            });
+        if let Some(sky) = &mut state.sky_selected {
+            ui.same_line();
+            if ImageButton::new(TextureId::new(sky.tex_id as usize), [16.0, 16.0])
+                .frame_padding(0)
+                .build(ui)
+            {
+                state.textures_selected = Some(sky.tex_id);
+                state.textures_window = true;
+            }
+            if ui.is_item_hovered() {
+                ui.tooltip(|| {
+                    ui.text(scene.single_texture(sky.tex_id).unwrap().name());
+                    Image::new(TextureId::new(sky.tex_id as usize), [256.0, 256.0]).build(ui);
+                });
+            }
+            Slider::new("Dome Yaw (deg)", 0.0, 360.0).build(ui, &mut sky.yaw_deg);
+            Slider::new("Dome Pitch (deg)", 0.0, 360.0).build(ui, &mut sky.pitch_deg);
+            Slider::new("Dome Roll (deg)", 0.0, 360.0).build(ui, &mut sky.roll_deg);
+            update_sky = true;
         }
         ui.separator();
         ui.spacing();
@@ -881,6 +949,7 @@ fn window_lights(
                         LightType::AREA => {
                             Light::new_area(new_name, light.material_id(), new_intensity)
                         }
+                        LightType::SKY => panic!("Skylight should not be selectable"),
                     };
                     update = Some((selected, new_light));
                     update_lights = true;
@@ -908,6 +977,12 @@ fn window_lights(
             renderer.update_light(&lights);
             if let Some(raytracer) = raytracer.as_mut() {
                 raytracer.update_materials_and_lights(&materials, &lights);
+            }
+        }
+        if update_sky {
+            renderer.set_skydome(state.sky_selected);
+            if let Some(raytracer) = raytracer.as_mut() {
+                raytracer.set_skylight(state.sky_selected);
             }
         }
     }

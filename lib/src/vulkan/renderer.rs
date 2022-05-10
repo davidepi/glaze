@@ -9,10 +9,12 @@ use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
 use super::{UnfinishedExecutions, FRAMES_IN_FLIGHT};
+use crate::geometry::SkyLight;
 use crate::parser::NoScene;
 use crate::{include_shader, Camera, Light, Material, RayTraceRenderer, Texture};
 use ash::vk;
-use cgmath::{Matrix4, SquareMatrix};
+use cgmath::{InnerSpace, Matrix4, Point2, Point3, SquareMatrix, Transform, Vector2 as Vec2};
+use std::f32::consts::PI;
 use std::ptr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -250,9 +252,20 @@ impl RealtimeRenderer {
     /// Sets the background color.
     ///
     /// Color is expressed as RGB floats in the range [0, 1].
+    ///
+    /// This is overriden by the skydome.
     pub fn set_clear_color(&mut self, color: [f32; 3]) {
         self.clear_color = [color[0], color[1], color[2], 1.0];
         self.forward_pass.clear_color[0].color.float32 = self.clear_color;
+    }
+
+    /// Sets the skydome of the scene.
+    pub fn set_skydome(&mut self, sky: Option<SkyLight>) {
+        self.wait_idle();
+        let (width, height) = self.render_size();
+        let render_size = vk::Extent2D { width, height };
+        self.scene
+            .set_skydome(sky, render_size, self.forward_pass.renderpass);
     }
 
     /// Returns the current stats of the renderer.
@@ -313,7 +326,6 @@ impl RealtimeRenderer {
         self.scene.deinit_pipelines();
         self.scene.init_pipelines(
             render_size,
-            self.instance.device().logical_clone(),
             self.forward_pass.renderpass,
             self.frame_data[0].descriptor.layout,
         );
@@ -356,7 +368,6 @@ impl RealtimeRenderer {
         };
         scene.init_pipelines(
             render_size,
-            self.instance.device().logical_clone(),
             self.forward_pass.renderpass,
             self.frame_data[0].descriptor.layout,
         );
@@ -456,6 +467,7 @@ impl RealtimeRenderer {
                 if raytracer.is_none() {
                     let ar = self.swapchain.extent().width as f32
                         / self.swapchain.extent().height as f32;
+                    draw_background(&self.scene, ar, device, cmd, &mut self.stats);
                     draw_objects(&self.scene, ar, frame_data, device, cmd, &mut self.stats);
                 }
                 self.forward_pass.end(cmd);
@@ -562,7 +574,7 @@ unsafe fn draw_objects(
     cmd: vk::CommandBuffer,
     stats: &mut InternalStats,
 ) {
-    let cam = &scene.current_cam;
+    let cam = scene.current_cam;
     let mut proj = cam.projection(ar);
     proj[1][1] *= -1.0;
     let view = cam.look_at_rh();
@@ -610,6 +622,35 @@ unsafe fn draw_objects(
     }
 }
 
+fn draw_background(
+    scene: &VulkanScene,
+    ar: f32,
+    device: &ash::Device,
+    cmd: vk::CommandBuffer,
+    stats: &mut InternalStats,
+) {
+    if let Some((sky, desc, pipeline)) = scene.skydome_data() {
+        let camera = scene.current_cam;
+        let scene_radius = scene.meta.scene_radius;
+        let uvs = skydome_mapping(camera, ar, scene_radius, sky.rotation_matrix());
+        let pc = unsafe { as_u8_slice(&uvs) };
+        unsafe {
+            device.cmd_bind_pipeline(cmd, vk::PipelineBindPoint::GRAPHICS, pipeline.pipeline);
+            device.cmd_bind_descriptor_sets(
+                cmd,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                0,
+                &[desc.set],
+                &[],
+            );
+            device.cmd_push_constants(cmd, pipeline.layout, vk::ShaderStageFlags::VERTEX, 0, pc);
+            device.cmd_draw(cmd, 3, 1, 0, 0);
+        }
+        stats.done_draw_call();
+    }
+}
+
 /// Creates the sampler used to copy the forward pass color attachment into the swapchain image.
 fn create_copy_sampler(device: &ash::Device) -> vk::Sampler {
     let ci = vk::SamplerCreateInfo {
@@ -647,8 +688,8 @@ fn create_copy_pipeline(
     dset_layout: &[vk::DescriptorSetLayout],
 ) -> Pipeline {
     let mut builder = PipelineBuilder::default();
-    let vs = include_shader!("blit.vert");
-    let fs = include_shader!("blit.frag");
+    let vs = include_shader!("quad.vert");
+    let fs = include_shader!("texture.frag");
     builder.push_shader(vs, "main", vk::ShaderStageFlags::VERTEX);
     builder.push_shader(fs, "main", vk::ShaderStageFlags::FRAGMENT);
     // vertices will be hard-coded (fullscreen)
@@ -728,4 +769,71 @@ impl InternalStats {
     pub fn done_frame(&mut self) {
         self.frame_count += 1;
     }
+}
+
+fn skydome_mapping(
+    camera: Camera,
+    ar: f32,
+    scene_radius: f32,
+    dome_rotation: Matrix4<f32>,
+) -> [Point2<f32>; 3] {
+    let radius = f32::max(scene_radius, 100.0);
+    let mut proj = camera.projection(ar);
+    proj[1][1] *= -1.0;
+    let view = camera.look_at_rh();
+    let screen2camera = proj.invert().unwrap();
+    let camera2world = view.invert().unwrap();
+    let sphere2world = dome_rotation
+        * Matrix4::<f32>::from_translation(camera.position() - Point3::<f32>::new(0.0, 0.0, 0.0));
+    let world2sphere = sphere2world.invert().unwrap();
+    [
+        Vec2::new(-1.0, -1.0),
+        Vec2::new(3.0, -1.0),
+        Vec2::new(-1.0, 3.0),
+    ]
+    .into_iter()
+    .map(|vertex| {
+        let (ray_o, ray_d) = camera.ray_world_space(vertex, screen2camera, camera2world);
+        let o = world2sphere.transform_point(ray_o);
+        let d = world2sphere.transform_vector(ray_d).normalize();
+        // sphere intersection equation
+        let a = d.x * d.x + d.y * d.y + d.z * d.z;
+        let b = 2.0 * (d.x * o.x + d.y * o.y + d.z * o.z);
+        let c = o.x * o.x + o.y * o.y + o.z * o.z - radius * radius;
+        // by construction the sphere is outside the camera so always 2 solutions
+        let delta = b * b - 4.0 * a * c;
+        let q = if b < 0.0 {
+            -0.5 * (b - delta.sqrt())
+        } else {
+            -0.5 * (b + delta.sqrt())
+        };
+        // by construction one will be less than 0, the hit behind me
+        let distance = f32::max(q / a, c / q);
+        let mut hit = Point3::new(
+            o.x + d.x * distance,
+            o.y + d.y * distance,
+            o.z + d.z * distance,
+        );
+        // sphere singularity at the pole
+        if hit.x == 0.0 && hit.y == 0.0 {
+            hit.x = f32::EPSILON * radius;
+        }
+        // compute UVs
+        let mut phi = f32::atan2(hit.y, hit.x);
+        if phi < 0.0 {
+            phi += 2.0 * PI;
+        }
+        let theta = f32::acos(f32::clamp(hit.z / radius, -1.0, 1.0));
+        let u = phi / (2.0 * PI);
+        let v = theta / PI;
+        Point2::new(u, v)
+    })
+    .collect::<Vec<_>>()
+    .try_into()
+    .unwrap()
+}
+
+/// Reads a struct as a sequence of bytes
+unsafe fn as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+    std::slice::from_raw_parts((p as *const T) as *const u8, std::mem::size_of::<T>())
 }

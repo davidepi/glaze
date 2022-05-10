@@ -24,6 +24,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let variants = [
             ("path_trace.rgen", "", "path_trace.rgen"),
             ("path_trace.rgen", "PATH_INIT", "path_trace_init.rgen"),
+            ("quad.vert", "", "quad.vert"),
+            ("quad.vert", "SKYDOME", "skydome.vert"),
         ];
         compile_spirv(&variants)?;
     }

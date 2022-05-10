@@ -1,4 +1,7 @@
-use cgmath::{ortho, perspective, InnerSpace, Matrix3, Matrix4, Point3, Rad, Vector3 as Vec3};
+use cgmath::{
+    ortho, perspective, InnerSpace, Matrix3, Matrix4, Point3, Rad, Transform, Vector2 as Vec2,
+    Vector3 as Vec3,
+};
 
 /// A camera exhibiting a perspective projection.
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -133,6 +136,41 @@ impl Camera {
 
             Camera::Orthographic(cam) => ortho(
                 -cam.scale, cam.scale, -cam.scale, cam.scale, cam.near, cam.far,
+            ),
+        }
+    }
+
+    /// Returns a ray in screen space, given a coordinate in the screen from (-1, -1) to (1, 1).
+    fn ray_screen_space(&self, ndc: Vec2<f32>) -> (Point3<f32>, Vec3<f32>) {
+        match self {
+            Camera::Perspective(_) => (
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(ndc.x, ndc.y, 1.0).normalize(),
+            ),
+            Camera::Orthographic(_) => (Point3::new(ndc.x, ndc.y, 0.0), Vec3::new(0.0, 0.0, 1.0)),
+        }
+    }
+
+    /// Returns a ray in world space, given a coordinare in the screen from (-1, -1) to (1, 1).
+    ///
+    /// The screen2camera matrix is the inverse of the camera projection matrix, and the
+    /// camera2world matrix is the inverse of the look_at matrix.
+    pub fn ray_world_space(
+        &self,
+        ndc: Vec2<f32>,
+        screen2camera: Matrix4<f32>,
+        camera2world: Matrix4<f32>,
+    ) -> (Point3<f32>, Vec3<f32>) {
+        let (origin_ss, direction_ss) = self.ray_screen_space(ndc);
+        let screen2world = screen2camera * camera2world;
+        match self {
+            Camera::Perspective(_) => (
+                camera2world.transform_point(origin_ss),
+                screen2world.transform_vector(direction_ss).normalize(),
+            ),
+            Camera::Orthographic(_) => (
+                screen2world.transform_point(origin_ss),
+                camera2world.transform_vector(direction_ss).normalize(),
             ),
         }
     }

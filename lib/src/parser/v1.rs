@@ -1013,12 +1013,24 @@ fn light_to_bytes(light: &Light) -> Vec<u8> {
             dir.into_iter()
                 .flat_map(|x| x.to_le_bytes())
                 .chain(color)
-                .collect::<Vec<_>>()
+                .collect()
         }
         Light::Area(l) => {
             let instance_id = l.material_id.to_le_bytes();
             let intensity = light.intensity().to_le_bytes();
-            instance_id.into_iter().chain(intensity).collect::<Vec<_>>()
+            instance_id.into_iter().chain(intensity).collect()
+        }
+        Light::Sky(l) => {
+            let yaw_deg = l.yaw_deg.to_le_bytes();
+            let pitch_deg = l.pitch_deg.to_le_bytes();
+            let roll_deg = l.roll_deg.to_le_bytes();
+            let tex_id = l.tex_id.to_le_bytes();
+            yaw_deg
+                .into_iter()
+                .chain(pitch_deg)
+                .chain(roll_deg)
+                .chain(tex_id)
+                .collect()
         }
     };
     let name_len = light.name().bytes().len();
@@ -1066,6 +1078,16 @@ fn bytes_to_light(data: &[u8]) -> Light {
             index += 4;
             let name = String::from_utf8(data[index..].to_vec()).unwrap();
             Light::new_area(name, instance_id, intensity)
+        }
+        LightType::SKY => {
+            let yaw_deg = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+            index += 4;
+            let pitch_deg = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+            index += 4;
+            let roll_deg = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+            index += 4;
+            let tex_id = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
+            Light::new_sky(tex_id, yaw_deg, pitch_deg, roll_deg)
         }
     }
 }
@@ -1368,18 +1390,19 @@ mod tests {
             let light = match ltype {
                 LightType::OMNI => {
                     let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-                    let intensity = rng.gen();
-                    Light::new_omni(name, color, position, intensity)
+                    Light::new_omni(name, color, position, rng.gen())
                 }
                 LightType::SUN => {
                     let direction = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
                     Light::new_sun(name, color, direction)
                 }
-                LightType::AREA => {
-                    let instance_id = rng.gen();
-                    let intensity = rng.gen();
-                    Light::new_area(name, instance_id, intensity)
-                }
+                LightType::AREA => Light::new_area(name, rng.gen(), rng.gen()),
+                LightType::SKY => Light::new_sky(
+                    rng.gen(),
+                    rng.gen_range(0.0..360.0),
+                    rng.gen_range(0.0..360.0),
+                    rng.gen_range(0.0..360.0),
+                ),
             };
             data.push(light);
         }

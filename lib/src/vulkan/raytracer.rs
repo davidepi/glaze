@@ -6,7 +6,7 @@ use super::raytrace_structures::{PTLastVertex, RTFrameData, PT_STEPS};
 use super::scene::{padding, RayTraceScene};
 use super::sync::{create_fence, create_semaphore};
 use super::{export, AllocatedImage, Descriptor, UnfinishedExecutions};
-use crate::geometry::{SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
+use crate::geometry::{SkyLight, SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
 use crate::materials::{SBT_MATERIAL_STRIDE, SBT_MATERIAL_TYPES};
 use crate::parser::NoScene;
 use crate::vulkan::pipeline::build_raytracing_pipeline;
@@ -126,6 +126,10 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             self.scene.meta.exposure = exposure;
         }
         // no need to restart the frame, as only the weight for each sample is affected.
+    }
+
+    pub fn set_skylight(&mut self, sky: Option<SkyLight>) {
+        // TODO: implement this
     }
 
     pub fn set_integrator(&mut self, integrator: Integrator) {
