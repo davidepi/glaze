@@ -4,13 +4,15 @@ use cgmath::Point3;
 use glaze::{
     parse, Camera, ColorRGB, Integrator, Light, LightType, Metal, OrthographicCam, PerspectiveCam,
     PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer, ShaderMat, Spectrum,
-    TextureFormat, VulkanScene,
+    Texture, TextureFormat, TextureInfo, VulkanScene,
 };
+use image::GenericImageView;
 use imgui::{
-    CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, MenuItem, PopupModal,
-    Selectable, Slider, SliderFlags, TextureId, Ui,
+    CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, InputText, MenuItem,
+    PopupModal, Selectable, Slider, SliderFlags, TextureId, Ui,
 };
 use native_dialog::FileDialog;
+use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{mpsc, Arc};
 use std::time::Instant;
@@ -34,6 +36,8 @@ pub struct UiState {
     pub inverted_vert_mov: bool,
     textures_window: bool,
     textures_selected: Option<u16>,
+    texture_path: String,
+    texture_format: TextureFormat,
     materials_window: bool,
     materials_selected: Option<u16>,
     lights_window: bool,
@@ -72,6 +76,8 @@ impl UiState {
             info_window: false,
             loading_scene: None,
             use_raytracer: false,
+            texture_path: "".to_string(),
+            texture_format: TextureFormat::RgbaSrgb,
         }
     }
 }
@@ -136,7 +142,7 @@ pub fn draw_ui(
         window_settings(ui, state, window, renderer, raytracer);
     }
     if state.textures_window {
-        window_textures(ui, state, renderer);
+        window_textures(ui, state, renderer, raytracer);
     }
     if state.materials_window {
         window_materials(ui, state, renderer, raytracer);
@@ -328,26 +334,82 @@ fn window_settings(
     state.settings_window = closed;
 }
 
-fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
+fn window_textures(
+    ui: &Ui,
+    state: &mut UiState,
+    renderer: &mut RealtimeRenderer,
+    raytracer: &mut Option<RayTraceRenderer<PresentInstance>>,
+) {
     let closed = &mut state.textures_window;
+    let texture_path = &mut state.texture_path;
+    let format = &mut state.texture_format;
     let selected = &mut state.textures_selected;
-    let scene = renderer.scene();
-    let preview = match &selected {
-        Some(id) => {
-            let texture = scene.single_texture(*id).unwrap();
-            &texture.info().name
-        }
-        _ => "",
-    };
     imgui::Window::new("Textures")
         .opened(closed)
         .size([600.0, 600.0], Condition::Appearing)
         .save_settings(false)
         .build(ui, || {
+            ui.text("Texture Loader");
+            InputText::new(ui, "Load texture", texture_path)
+                .hint("Texture path...")
+                .build();
+            ui.same_line();
+            if ui.button("Select") {
+                if let Ok(Some(path)) = FileDialog::new().show_open_single_file() {
+                    *texture_path = path.to_str().unwrap().to_string();
+                }
+            }
+            ComboBox::new("Texture format")
+                .preview_value(format.str())
+                .build(ui, || {
+                    TextureFormat::values().for_each(|val| {
+                        if Selectable::new(val.str()).build(ui) {
+                            *format = val;
+                        }
+                    });
+                });
+            if ui.button("Load") {
+                if let Ok(data) = image::open(texture_path.clone()) {
+                    let name = PathBuf::from(&texture_path)
+                        .file_stem()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_string();
+                    let info = TextureInfo {
+                        name,
+                        width: data.dimensions().0 as u16,
+                        height: data.dimensions().1 as u16,
+                        format: *format,
+                    };
+                    let texture = match *format {
+                        TextureFormat::Gray => Texture::new_gray(info, data.to_luma8()),
+                        TextureFormat::RgbaNorm | TextureFormat::RgbaSrgb => {
+                            Texture::new_rgba(info, data.to_rgba8())
+                        }
+                    };
+                    renderer.add_texture(texture);
+                    if let Some(raytracer) = raytracer {
+                        raytracer.refresh_binded_textures();
+                    }
+                } else {
+                    //TODO: Handle opening error (maybe a popup?)
+                }
+            }
+            ui.separator();
+            ui.text("Texture previewer");
+            let preview = match &selected {
+                Some(id) => {
+                    let texture = renderer.scene().single_texture(*id).unwrap();
+                    &texture.info().name
+                }
+                _ => "",
+            };
             ComboBox::new("Texture name")
                 .preview_value(preview)
                 .build(ui, || {
-                    scene
+                    renderer
+                        .scene()
                         .textures()
                         .iter()
                         .enumerate()
@@ -356,10 +418,10 @@ fn window_textures(ui: &Ui, state: &mut UiState, renderer: &RealtimeRenderer) {
                                 *selected = Some(id as u16);
                             }
                         });
+                    // TODO: allow deletion of textures? Not sure if it will switch to default tex
                 });
             if let Some(selected) = selected {
-                ui.separator();
-                let info = &scene.single_texture(*selected).unwrap().info();
+                let info = &renderer.scene().single_texture(*selected).unwrap().info();
                 ui.text(format!("Resolution {}x{}", info.width, info.height));
                 ui.text(format!("Format {}", channels_to_string(info.format)));
                 let window_w = ui.window_size()[0];

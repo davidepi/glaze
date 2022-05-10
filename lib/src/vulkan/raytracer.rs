@@ -242,6 +242,33 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         self.request_new_frame = true;
     }
 
+    /// Must be called after updating textures shared with the realtime renderer.
+    ///
+    /// This involves rebuilding the pipeline and the descriptors and is quite costly.
+    pub fn refresh_binded_textures(&mut self) {
+        self.scene.refresh_descriptors();
+        let mut unf = UnfinishedExecutions::new(self.instance.device());
+        let instance = &self.instance;
+        let device = instance.device();
+        let pipeline = build_raytracing_pipeline(
+            &self.rploader,
+            device.logical_clone(),
+            &[self.frame_desc[0].layout, self.scene.descriptor.layout],
+            self.integrator,
+        );
+        let sbt = build_sbt(
+            instance.as_ref(),
+            &self.rploader,
+            &mut self.tcmdm,
+            &pipeline,
+            self.integrator,
+            &mut unf,
+        );
+        self.pipeline = pipeline;
+        self.sbt = sbt;
+        unf.wait_completion();
+    }
+
     pub(crate) fn output_image(&self) -> &AllocatedImage {
         &self.out8_img
     }

@@ -10,7 +10,7 @@ use super::swapchain::Swapchain;
 use super::sync::PresentSync;
 use super::{UnfinishedExecutions, FRAMES_IN_FLIGHT};
 use crate::parser::NoScene;
-use crate::{include_shader, Camera, Light, Material, RayTraceRenderer};
+use crate::{include_shader, Camera, Light, Material, RayTraceRenderer, Texture};
 use ash::vk;
 use cgmath::{Matrix4, SquareMatrix};
 use std::ptr;
@@ -394,6 +394,20 @@ impl RealtimeRenderer {
     pub fn update_light(&mut self, lights: &[Light]) {
         self.wait_idle();
         self.scene.update_lights(lights);
+    }
+
+    /// Adds a texture to the loaded scene.
+    pub fn add_texture(&mut self, texture: Texture) {
+        self.wait_idle();
+        self.scene.add_texture(texture);
+        self.imgui_renderer.rebuild_texture_descriptors();
+    }
+
+    /// Removes the texture with given ID from the loaded scene.
+    pub fn remove_texture(&mut self, id: u16) {
+        self.wait_idle();
+        self.scene.remove_texture(id);
+        self.imgui_renderer.rebuild_texture_descriptors();
     }
 
     /// Draws a single frame.

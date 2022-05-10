@@ -317,6 +317,7 @@ pub trait ParsedScene {
         cameras: Option<&[Camera]>,
         materials: Option<&[Material]>,
         lights: Option<&[Light]>,
+        textures: Option<&[Texture]>,
         meta: Option<&Meta>,
     ) -> Result<(), Error>;
 }
@@ -392,6 +393,7 @@ impl ParsedScene for NoScene {
         _: Option<&[Camera]>,
         _: Option<&[Material]>,
         _: Option<&[Light]>,
+        _: Option<&[Texture]>,
         _: Option<&Meta>,
     ) -> Result<(), Error> {
         Err(Error::new(

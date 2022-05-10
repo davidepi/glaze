@@ -406,8 +406,18 @@ impl VulkanScene {
         let lights = self.lights().to_vec();
         let materials = self.materials().to_vec();
         let meta = &self.meta;
-        self.file
-            .update(Some(&cameras), Some(&materials), Some(&lights), Some(meta))
+        let textures = if self.edited_textures {
+            Some(&self.raw_textures[..])
+        } else {
+            None
+        };
+        self.file.update(
+            Some(&cameras),
+            Some(&materials),
+            Some(&lights),
+            textures,
+            Some(meta),
+        )
     }
 }
 
@@ -1217,6 +1227,23 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
     }
 
     #[cfg(feature = "vulkan-interactive")]
+    pub(crate) fn refresh_descriptors(&mut self) {
+        self.descriptor = build_raytrace_descriptor(
+            &mut self.dm,
+            &self.acc,
+            &self.vertex_buffer,
+            &self.index_buffer,
+            &self.instance_buffer,
+            &self.material_buffer,
+            &self.light_buffer,
+            &self.derivative_buffer,
+            &self.transforms_buffer,
+            &self.textures.read().unwrap(),
+            self.sampler,
+        );
+    }
+
+    #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn update_materials_and_lights(
         &mut self,
         materials: &[Material],
@@ -1241,19 +1268,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         unf.add_buffer(mat_buffer);
         unf.add_buffer(light_buffer);
         self.lights_no = lights.len() as u32;
-        self.descriptor = build_raytrace_descriptor(
-            &mut self.dm,
-            &self.acc,
-            &self.vertex_buffer,
-            &self.index_buffer,
-            &self.instance_buffer,
-            &self.material_buffer,
-            &self.light_buffer,
-            &self.derivative_buffer,
-            &self.transforms_buffer,
-            &self.textures.read().unwrap(),
-            self.sampler,
-        );
+        self.refresh_descriptors();
     }
 }
 

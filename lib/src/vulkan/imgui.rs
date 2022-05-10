@@ -224,24 +224,32 @@ impl ImguiRenderer {
 
     pub(super) fn load_scene_textures(&mut self, scene: &VulkanScene) {
         let scene_textures = Arc::clone(&scene.textures);
-        self.tex_descs = scene_textures
-            .read()
-            .unwrap()
-            .iter()
-            .map(|texture| {
-                self.dm
-                    .new_set()
-                    .bind_image(
-                        &texture.image,
-                        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                        self.sampler,
-                        vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-                        vk::ShaderStageFlags::FRAGMENT,
-                    )
-                    .build()
-            })
-            .collect();
         self.scene_textures = Some(scene_textures);
+        self.rebuild_texture_descriptors();
+    }
+
+    pub fn rebuild_texture_descriptors(&mut self) {
+        self.tex_descs = if let Some(scene_textures) = &self.scene_textures {
+            scene_textures
+                .read()
+                .unwrap()
+                .iter()
+                .map(|texture| {
+                    self.dm
+                        .new_set()
+                        .bind_image(
+                            &texture.image,
+                            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                            self.sampler,
+                            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                            vk::ShaderStageFlags::FRAGMENT,
+                        )
+                        .build()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        }
     }
 
     /// draw the ui. This should be called inside an existing render pass.

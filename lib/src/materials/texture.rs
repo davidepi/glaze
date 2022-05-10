@@ -75,6 +75,20 @@ impl TextureFormat {
             TextureFormat::RgbaNorm => image::ColorType::Rgba8,
         }
     }
+
+    /// Iterates all possible TextureFormat values.
+    pub fn values() -> impl Iterator<Item = TextureFormat> {
+        [Self::Gray, Self::RgbaNorm, Self::RgbaSrgb].into_iter()
+    }
+
+    /// Returns a string representing the current format name.
+    pub fn str(&self) -> &'static str {
+        match self {
+            TextureFormat::Gray => "Gray",
+            TextureFormat::RgbaNorm => "Rgba (linear)",
+            TextureFormat::RgbaSrgb => "Rgba (sRGB)",
+        }
+    }
 }
 
 /// A texture stored in memory.

@@ -368,11 +368,11 @@ impl ParsedScene for ContentV1 {
         cameras: Option<&[Camera]>,
         materials: Option<&[Material]>,
         lights: Option<&[Light]>,
+        textures: Option<&[Texture]>,
         meta: Option<&Meta>,
     ) -> Result<(), Error> {
         let vertices = self.read_chunk(ChunkID::Vertex)?;
         let meshes = self.read_chunk(ChunkID::Mesh)?;
-        let textures = self.read_chunk(ChunkID::Texture)?;
         let transforms = self.read_chunk(ChunkID::Transform)?;
         let instances = self.read_chunk(ChunkID::Instance)?;
         let meta = if let Some(meta) = meta {
@@ -394,6 +394,11 @@ impl ParsedScene for ContentV1 {
             Chunk::encode_dynamic(lights, light_to_bytes)
         } else {
             self.read_chunk(ChunkID::Light)?
+        };
+        let textures = if let Some(textures) = textures {
+            Chunk::encode_textures(textures)
+        } else {
+            self.read_chunk(ChunkID::Texture)?
         };
         {
             // Reopens the file in write mode (actually creates a new file, as most content will be
@@ -1989,7 +1994,7 @@ mod tests {
             .serialize()?;
         let mut read = parse(file.as_path())?;
         assert_eq!(read.vertices()?.len(), vertices.len());
-        read.update(None, None, None, None)?;
+        read.update(None, None, None, None, None)?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         // close file and reopen it
         let read = parse(file.as_path())?;
@@ -2010,17 +2015,20 @@ mod tests {
         let new_cameras = gen_cameras(100, 0xECD7D80A8A4C4C95);
         let new_materials = gen_materials(100, 0xAA9475DE05B6CE41);
         let new_lights = gen_lights(100, 0xEF2F6EF8FD11E92E);
+        let new_textures = gen_textures(4, 0xFFB764694A84BEDA);
         let new_meta = gen_meta(0x3A77182EE1A0747E);
         read.update(
             Some(&new_cameras),
             Some(&new_materials),
             Some(&new_lights),
+            Some(&new_textures),
             Some(&new_meta),
         )?;
         assert_eq!(read.vertices()?.len(), vertices.len());
         assert_eq!(read.cameras()?.len(), new_cameras.len());
         assert_eq!(read.materials()?.len(), new_materials.len());
         assert_eq!(read.lights()?.len(), new_lights.len());
+        assert_eq!(read.textures()?.len(), new_textures.len());
         Ok(())
     }
 
@@ -2029,7 +2037,7 @@ mod tests {
         let vertices = gen_vertices(100, 0x7CE285088B15CD6C);
         let meshes = gen_meshes(100, 0x0360E2B31852DCDA);
         let cameras = gen_cameras(25, 0x91D237698C5717D3);
-        let textures = gen_textures(4, 0x4AE5995B104BBAB1);
+        let textures = gen_textures(2, 0x4AE5995B104BBAB1);
         let materials = gen_materials(25, 0x6FEC53A488FBDB4F);
         let transforms = gen_transforms(25, 0x1E5CBA94679D9D3B);
         let instances = gen_instances(100, 0xC79389E3BBC74BCF);
@@ -2062,11 +2070,13 @@ mod tests {
         let new_cameras = gen_cameras(100, 0x056F0B996A248BC4);
         let new_materials = gen_materials(100, 0x3ABE1A9BEB00DA7B);
         let new_lights = gen_lights(100, 0x5871F342932A7B6A);
+        let new_textures = gen_textures(4, 0x05E96CDC62E9A586);
         let new_meta = gen_meta(0xF4AF4CA42889AAD0);
         read.update(
             Some(&new_cameras),
             Some(&new_materials),
             Some(&new_lights),
+            Some(&new_textures),
             Some(&new_meta),
         )?;
         let read_vertices = read.vertices()?;
@@ -2081,7 +2091,7 @@ mod tests {
         assert_eq!(read_vertices.len(), vertices.len());
         assert_eq!(read_meshes.len(), meshes.len());
         assert_eq!(read_cameras.len(), new_cameras.len());
-        assert_eq!(read_textures.len(), textures.len());
+        assert_eq!(read_textures.len(), new_textures.len());
         assert_eq!(read_materials.len(), new_materials.len());
         assert_eq!(read_transforms.len(), transforms.len());
         assert_eq!(read_instances.len(), instances.len());
@@ -2104,7 +2114,7 @@ mod tests {
         }
         for i in 0..read_textures.len() {
             let val = &read_textures.get(i).unwrap();
-            let expected = &textures.get(i).unwrap();
+            let expected = &new_textures.get(i).unwrap();
             assert_eq!(val, expected);
         }
         for i in 0..read_materials.len() {
