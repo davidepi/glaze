@@ -76,7 +76,7 @@ pub struct VulkanScene {
     /// Scene level descriptor set
     pub(super) scene_desc: Descriptor,
     /// skylighy used for the skydome.
-    skylight: Option<(SkyLight, Option<(Descriptor, Pipeline)>)>,
+    skylight: Option<(SkyLight, Option<SkydomeDrawData>)>,
     /// All the lights in the scene.
     lights: Vec<Light>,
     /// Instance storing this scene.
@@ -96,6 +96,19 @@ pub struct VulkanMesh {
     pub max_index: u32,
     /// Material id of this mesh.
     pub material: u16,
+}
+
+pub struct SkydomeDrawData {
+    /// Number of vertices in the skydome
+    pub index_count: u32,
+    /// Contains the vertices of the sphere dome, allocated in the GPU.
+    pub vertices: AllocatedBuffer,
+    /// Cibstaubs the indices of the sphere dome, allocated in the GPU.
+    pub indices: AllocatedBuffer,
+    /// Descriptor for the texture
+    pub descriptor: Descriptor,
+    /// Pipeline for drawing the skydome
+    pub pipeline: Pipeline,
 }
 
 #[cfg(feature = "vulkan-interactive")]
@@ -338,10 +351,15 @@ impl VulkanScene {
             });
         }
         if let Some((sky, data)) = &mut self.skylight {
-            let device = self.instance.device().logical_clone();
+            let device = self.instance.device();
+            let mm = self.instance.allocator();
+            let mut tcmdm =
+                CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
             *data = Some(build_skydome(
                 device,
+                mm,
                 render_size,
+                &mut tcmdm,
                 &mut self.dm,
                 *sky,
                 &self.textures.read().unwrap(),
@@ -392,9 +410,9 @@ impl VulkanScene {
         }
     }
 
-    pub(super) fn skydome_data(&self) -> Option<(SkyLight, Descriptor, &Pipeline)> {
-        if let Some((sky, Some((desc, pipeline)))) = &self.skylight {
-            Some((*sky, *desc, pipeline))
+    pub(super) fn skydome_data(&self) -> Option<(SkyLight, &SkydomeDrawData)> {
+        if let Some((sky, Some(dd))) = &self.skylight {
+            Some((*sky, dd))
         } else {
             None
         }
@@ -407,9 +425,15 @@ impl VulkanScene {
         renderpass: vk::RenderPass,
     ) {
         self.skylight = if let Some(sky) = skydome {
+            let device = self.instance.device();
+            let mm = self.instance.allocator();
+            let mut tcmdm =
+                CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
             let render_data = build_skydome(
-                self.instance.device().logical_clone(),
+                device,
+                mm,
                 render_size,
+                &mut tcmdm,
                 &mut self.dm,
                 sky,
                 &self.textures.read().unwrap(),
@@ -556,14 +580,37 @@ fn gen_sphere(lat: u32, lon: u32, ccw: bool) -> (Vec<f32>, Vec<u32>) {
 }
 
 fn build_skydome(
-    device: Arc<ash::Device>,
+    device: &Device,
+    mm: &MemoryManager,
     extent: vk::Extent2D,
+    tcmdm: &mut CommandManager,
     dm: &mut DescriptorSetManager,
     sky: SkyLight,
     textures: &[TextureLoaded],
     sampler: vk::Sampler,
     rp: vk::RenderPass,
-) -> (Descriptor, Pipeline) {
+) -> SkydomeDrawData {
+    // geometry
+    let mut unf = UnfinishedExecutions::new(device);
+    let (v, i) = gen_sphere(20, 20, false);
+    let si = i.into_iter().map(|i| i as u16).collect::<Vec<_>>();
+    let vertices = upload_buffer(
+        device,
+        mm,
+        tcmdm,
+        vk::BufferUsageFlags::VERTEX_BUFFER,
+        &mut unf,
+        &v,
+    );
+    let indices = upload_buffer(
+        device,
+        mm,
+        tcmdm,
+        vk::BufferUsageFlags::INDEX_BUFFER,
+        &mut unf,
+        &si,
+    );
+    // descriptor
     let bound_sky = &textures[sky.tex_id as usize].image;
     let descriptor = dm
         .new_set()
@@ -575,20 +622,43 @@ fn build_skydome(
             vk::ShaderStageFlags::FRAGMENT,
         )
         .build();
+    // pipeline
     let mut builder = PipelineBuilder::default();
     let vs = include_shader!("skydome.vert");
-    let fs = include_shader!("texture.frag");
+    let fs = include_shader!("skydome.frag");
     builder.push_shader(vs, "main", vk::ShaderStageFlags::VERTEX);
     builder.push_shader(fs, "main", vk::ShaderStageFlags::FRAGMENT);
-    builder.push_constants(24, vk::ShaderStageFlags::VERTEX);
-    // vertices will be hard-coded (fullscreen)
-    builder.binding_descriptions = Vec::with_capacity(0);
-    builder.attribute_descriptions = Vec::with_capacity(0);
-    // deactivate depth stencil
+    builder.push_constants(64, vk::ShaderStageFlags::VERTEX);
+    builder.binding_descriptions = vec![vk::VertexInputBindingDescription {
+        binding: 0,
+        stride: (std::mem::size_of::<f32>() * 5) as u32,
+        input_rate: vk::VertexInputRate::VERTEX,
+    }];
+    builder.attribute_descriptions = vec![
+        vk::VertexInputAttributeDescription {
+            location: 0,
+            binding: 0,
+            format: vk::Format::R32G32B32_SFLOAT,
+            offset: 0,
+        },
+        vk::VertexInputAttributeDescription {
+            location: 1,
+            binding: 0,
+            format: vk::Format::R32G32_SFLOAT,
+            offset: 12,
+        },
+    ];
     builder.no_depth();
     builder.rasterizer.cull_mode = vk::CullModeFlags::NONE;
-    let pipeline = builder.build(device, rp, extent, &[descriptor.layout]);
-    (descriptor, pipeline)
+    let pipeline = builder.build(device.logical_clone(), rp, extent, &[descriptor.layout]);
+    unf.wait_completion();
+    SkydomeDrawData {
+        vertices,
+        indices,
+        descriptor,
+        pipeline,
+        index_count: si.len() as u32,
+    }
 }
 
 /// Creates the default sampler for this scene.
