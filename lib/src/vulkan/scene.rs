@@ -27,6 +27,7 @@ use fnv::{FnvBuildHasher, FnvHashMap};
 use gpu_allocator::MemoryLocation;
 #[cfg(feature = "vulkan-interactive")]
 use std::collections::hash_map::Entry;
+use std::f32::consts::PI;
 #[cfg(feature = "vulkan-interactive")]
 use std::ffi::c_void;
 #[cfg(feature = "vulkan-interactive")]
@@ -502,6 +503,56 @@ fn build_realtime_descriptor(
             vk::ShaderStageFlags::VERTEX,
         )
         .build()
+}
+
+fn gen_sphere(lat: u32, lon: u32, ccw: bool) -> (Vec<f32>, Vec<u32>) {
+    let mut vertices = Vec::with_capacity(((lat * lon + 2) * 5) as usize);
+    let mut indices = Vec::with_capacity(((lon * 2 + ((lat - 1) * 2 * lon)) * 3) as usize);
+    for i in 1..(lat + 1) {
+        for j in 0..lon {
+            let v = i as f32 / lat as f32;
+            let u = j as f32 / (lon - 1) as f32;
+            let x = f32::sin(PI * v) * f32::cos(2.0 * PI * u);
+            let y = f32::sin(PI * v) * f32::sin(2.0 * PI * u);
+            let z = f32::cos(PI * v);
+            vertices.extend([x, y, z, u, v]);
+        }
+    }
+    let pole_top = lat * lon;
+    let pole_bot = pole_top + 1;
+    // The u value at poles can be anything between 0.0 and 1.0
+    vertices.extend([0.0, 0.0, 1.0, 0.5, 0.0]);
+    vertices.extend([0.0, 0.0, -1.0, 0.5, 1.0]);
+    // generate the sphere caps
+    for j in 0..lon {
+        let i = (lat - 1) * lon;
+        let next_j = if j + 1 == lon { 0 } else { j + 1 };
+        if ccw {
+            indices.extend([pole_top, j, next_j]);
+            indices.extend([pole_bot, i + next_j, i + j]);
+        } else {
+            indices.extend([j, pole_top, next_j]);
+            indices.extend([i + j, i + next_j, pole_bot]);
+        }
+    }
+    // generate the rest of the sphere
+    for i in 0..lat - 1 {
+        for j in 0..lon {
+            let next_j = if j + 1 == lon { 0 } else { j + 1 };
+            let p0 = i * lon + j;
+            let p0n = i * lon + next_j;
+            let p1 = (i + 1) * lat + j;
+            let p1n = (i + 1) * lon + next_j;
+            if ccw {
+                indices.extend([p0, p1, p1n]);
+                indices.extend([p0, p1n, p0n]);
+            } else {
+                indices.extend([p0, p1n, p1]);
+                indices.extend([p0, p0n, p1n]);
+            }
+        }
+    }
+    (vertices, indices)
 }
 
 fn build_skydome(
