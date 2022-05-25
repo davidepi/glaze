@@ -9,7 +9,6 @@ mod viewport;
 #[clap(author, version, about, long_about = None)]
 struct Args {
     /// The scene that will be loaded on startup.
-    #[clap(short, long)]
     scene: Option<String>,
 }
 
