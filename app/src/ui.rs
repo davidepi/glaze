@@ -793,12 +793,9 @@ fn window_lights(
                             match state.sky_selected {
                                 Some(mut s) => s.tex_id = id as u16,
                                 None => {
-                                    state.sky_selected = Some(SkyLight {
-                                        yaw_deg: 0.0,
-                                        tex_id: id as u16,
-                                        pitch_deg: 90.0,
-                                        roll_deg: 0.0,
-                                    })
+                                    let mut dflt = SkyLight::default();
+                                    dflt.tex_id = id as u16;
+                                    state.sky_selected = Some(dflt)
                                 }
                             }
                             update_sky = true;

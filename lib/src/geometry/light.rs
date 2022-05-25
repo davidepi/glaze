@@ -268,7 +268,7 @@ impl Default for SkyLight {
     fn default() -> Self {
         Self {
             yaw_deg: 0.0,
-            pitch_deg: 90.0,
+            pitch_deg: 180.0,
             roll_deg: 0.0,
             tex_id: 0,
         }

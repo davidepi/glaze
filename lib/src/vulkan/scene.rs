@@ -27,7 +27,6 @@ use fnv::{FnvBuildHasher, FnvHashMap};
 use gpu_allocator::MemoryLocation;
 #[cfg(feature = "vulkan-interactive")]
 use std::collections::hash_map::Entry;
-use std::f32::consts::PI;
 #[cfg(feature = "vulkan-interactive")]
 use std::ffi::c_void;
 #[cfg(feature = "vulkan-interactive")]
@@ -528,53 +527,62 @@ fn build_realtime_descriptor(
         )
         .build()
 }
+fn gen_icosphere(order: u8) -> (Vec<f32>, Vec<u32>) {
+    // move a vertex over the unit sphere
+    fn unit_sphere(x: f32, y: f32, z: f32) -> [f32; 3] {
+        let len = f32::sqrt(x * x + y * y + z * z);
+        [x / len, y / len, z / len]
+    }
+    // calculates midpoint between two vertices and caches it.
+    // closely related to gen_icosphere, so is inside here.
+    fn icosphere_midpoint(
+        mut a: u32,
+        mut b: u32,
+        vertices: &mut Vec<f32>,
+        cache: &mut FnvHashMap<u64, u32>,
+    ) -> u32 {
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
+        let key = (a as u64) << 32 | b as u64;
+        *cache.entry(key).or_insert({
+            let tri_a = &vertices[a as usize * 3..a as usize * 3 + 3];
+            let tri_b = &vertices[b as usize * 3..b as usize * 3 + 3];
+            let mid_p = unit_sphere(
+                (tri_a[0] + tri_b[0]) / 2.0,
+                (tri_a[1] + tri_b[1]) / 2.0,
+                (tri_a[2] + tri_b[2]) / 2.0,
+            );
+            let index = vertices.len() / 3;
+            vertices.extend(mid_p);
+            index as u32
+        })
+    }
 
-fn gen_sphere(lat: u32, lon: u32, ccw: bool) -> (Vec<f32>, Vec<u32>) {
-    let mut vertices = Vec::with_capacity(((lat * lon + 2) * 5) as usize);
-    let mut indices = Vec::with_capacity(((lon * 2 + ((lat - 1) * 2 * lon)) * 3) as usize);
-    for i in 1..(lat + 1) {
-        for j in 0..lon {
-            let v = i as f32 / lat as f32;
-            let u = j as f32 / (lon - 1) as f32;
-            let x = f32::sin(PI * v) * f32::cos(2.0 * PI * u);
-            let y = f32::sin(PI * v) * f32::sin(2.0 * PI * u);
-            let z = f32::cos(PI * v);
-            vertices.extend([x, y, z, u, v]);
-        }
-    }
-    let pole_top = lat * lon;
-    let pole_bot = pole_top + 1;
-    // The u value at poles can be anything between 0.0 and 1.0
-    vertices.extend([0.0, 0.0, 1.0, 0.5, 0.0]);
-    vertices.extend([0.0, 0.0, -1.0, 0.5, 1.0]);
-    // generate the sphere caps
-    for j in 0..lon {
-        let i = (lat - 1) * lon;
-        let next_j = if j + 1 == lon { 0 } else { j + 1 };
-        if ccw {
-            indices.extend([pole_top, j, next_j]);
-            indices.extend([pole_bot, i + next_j, i + j]);
-        } else {
-            indices.extend([j, pole_top, next_j]);
-            indices.extend([i + j, i + next_j, pole_bot]);
-        }
-    }
-    // generate the rest of the sphere
-    for i in 0..lat - 1 {
-        for j in 0..lon {
-            let next_j = if j + 1 == lon { 0 } else { j + 1 };
-            let p0 = i * lon + j;
-            let p0n = i * lon + next_j;
-            let p1 = (i + 1) * lat + j;
-            let p1n = (i + 1) * lon + next_j;
-            if ccw {
-                indices.extend([p0, p1, p1n]);
-                indices.extend([p0, p1n, p0n]);
-            } else {
-                indices.extend([p0, p1n, p1]);
-                indices.extend([p0, p0n, p1n]);
-            }
-        }
+    // order 0
+    let mut cache = FnvHashMap::default();
+    let mid = 0.8506508;
+    let one = 0.5257311;
+    let mut vertices = vec![
+        -one, mid, 0.0, one, mid, 0.0, -one, -mid, 0.0, one, -mid, 0.0, 0.0, -one, mid, 0.0, one,
+        mid, 0.0, -one, -mid, 0.0, one, -mid, mid, 0.0, -one, mid, 0.0, one, -mid, 0.0, -one, -mid,
+        0.0, one,
+    ];
+    let mut indices = vec![
+        0, 11, 5, 0, 5, 1, 0, 1, 7, 0, 7, 10, 0, 10, 11, 1, 5, 9, 5, 11, 4, 11, 10, 2, 10, 7, 6, 7,
+        1, 8, 3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9, 4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9,
+        8, 1,
+    ];
+    for _ in 0..order {
+        indices = indices
+            .chunks_exact(3)
+            .flat_map(|f| {
+                let a = icosphere_midpoint(f[0], f[1], &mut vertices, &mut cache);
+                let b = icosphere_midpoint(f[1], f[2], &mut vertices, &mut cache);
+                let c = icosphere_midpoint(f[2], f[0], &mut vertices, &mut cache);
+                [f[0], a, c, f[1], b, a, f[2], c, b, a, b, c]
+            })
+            .collect();
     }
     (vertices, indices)
 }
@@ -592,7 +600,7 @@ fn build_skydome(
 ) -> SkydomeDrawData {
     // geometry
     let mut unf = UnfinishedExecutions::new(device);
-    let (v, i) = gen_sphere(20, 20, false);
+    let (v, i) = gen_icosphere(3);
     let si = i.into_iter().map(|i| i as u16).collect::<Vec<_>>();
     let vertices = upload_buffer(
         device,
@@ -631,23 +639,15 @@ fn build_skydome(
     builder.push_constants(64, vk::ShaderStageFlags::VERTEX);
     builder.binding_descriptions = vec![vk::VertexInputBindingDescription {
         binding: 0,
-        stride: (std::mem::size_of::<f32>() * 5) as u32,
+        stride: (std::mem::size_of::<f32>() * 3) as u32,
         input_rate: vk::VertexInputRate::VERTEX,
     }];
-    builder.attribute_descriptions = vec![
-        vk::VertexInputAttributeDescription {
-            location: 0,
-            binding: 0,
-            format: vk::Format::R32G32B32_SFLOAT,
-            offset: 0,
-        },
-        vk::VertexInputAttributeDescription {
-            location: 1,
-            binding: 0,
-            format: vk::Format::R32G32_SFLOAT,
-            offset: 12,
-        },
-    ];
+    builder.attribute_descriptions = vec![vk::VertexInputAttributeDescription {
+        location: 0,
+        binding: 0,
+        format: vk::Format::R32G32B32_SFLOAT,
+        offset: 0,
+    }];
     builder.no_depth();
     builder.rasterizer.cull_mode = vk::CullModeFlags::NONE;
     let pipeline = builder.build(device.logical_clone(), rp, extent, &[descriptor.layout]);
