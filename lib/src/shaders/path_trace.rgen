@@ -7,6 +7,8 @@
 #include "raytrace_structures.glsl"
 #include "raytrace_commons.glsl"
 
+#define RUSSIAN_ROULETTE PT_STEPS/2
+
 layout(location=0) rayPayloadEXT HitData hit;
 layout(location=1) rayPayloadEXT bool shadow_ray_hit;
 layout(location=2) callableDataEXT SampledLight sam;
@@ -160,6 +162,22 @@ void main()
   }
   // recursive bounce, no need to calculate this with "direct light" integrator
 #ifndef DIRECT_ONLY
+#ifdef RUSSIAN_ROULETTE
+  if(PTData.last[path_id].hit.w > RUSSIAN_ROULETTE)
+  {
+    float kill_prob = max(0.05, 1.0 - luminance(importance));
+    float roll = rand(rng);
+    if(roll < kill_prob)
+    {
+      PTData.last[path_id].hit.w = 0.0;
+      return;
+    }
+    else
+    {
+      importance = mul(importance, 1.0/(1.0 - kill_prob));
+    }
+  }
+#endif
   bsdfsampleval.uv = hit.uv;
   bsdfsampleval.woW = woW;
   bsdfsampleval.geometric_normal = hit.geometric_normal;
