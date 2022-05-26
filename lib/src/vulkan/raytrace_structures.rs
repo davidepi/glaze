@@ -9,7 +9,7 @@ pub struct RTFrameData {
     pub scene_radius: f32,
     pub exposure: f32,
     pub scene_size: [f32; 2],
-    pub center_and_step: [f32; 4],
+    pub scene_centre: [f32; 4],
 }
 
 impl Default for RTFrameData {
@@ -21,7 +21,7 @@ impl Default for RTFrameData {
             exposure: 1.0,
             pixel_offset: [0.0; 2],
             scene_size: [0.0; 2],
-            center_and_step: [0.0; 4],
+            scene_centre: [0.0; 4],
         }
     }
 }
@@ -79,5 +79,5 @@ pub const PT_STEPS: usize = 6;
 pub struct PTLastVertex {
     pub importance: Spectrum,
     pub wi: [f32; 4],  //wi.z indicates if the last bounce was specular
-    pub hit: [f32; 4], //hit.z indicates if the path is still valid or not
+    pub hit: [f32; 4], //hit.z indicates the bounce number
 }

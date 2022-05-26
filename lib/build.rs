@@ -23,9 +23,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         gen_shared_structures(&["src/vulkan/raytrace_structures.rs"])?;
         let variants = [
             ("path_trace.rgen", "", "path_trace.rgen"),
-            ("path_trace.rgen", "PATH_INIT", "path_trace_init.rgen"),
-            ("quad.vert", "", "quad.vert"),
-            ("quad.vert", "SKYDOME", "skydome.vert"),
+            ("path_trace.rgen", "DIRECT_ONLY", "direct.rgen"),
         ];
         compile_spirv(&variants)?;
     }

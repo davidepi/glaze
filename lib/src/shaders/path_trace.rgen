@@ -112,19 +112,26 @@ void main()
   const vec2 pixel = gl_LaunchIDEXT.xy + FrameData.data.pixel_offset;
   const vec2 uv = pixel / gl_LaunchSizeEXT.xy;
   const vec2 ndc = vec2(-1.0)+2.0*uv;
-#ifdef PATH_INIT
-  vec3 origin = ray_origin();
-  vec3 direction = ray_dir(ndc);
-  Spectrum importance = SPECTRUM_ONE;
-#else
-  if(PTData.last[path_id].hit.w == 0.0)
+  Spectrum importance;
+  vec3 origin;
+  vec3 direction;
+  // if integrator is "direct light", generates a new path every time,
+  // otherwise only when bounces is zero (hit.w == 0)
+#ifndef DIRECT_ONLY
+  if(PTData.last[path_id].hit.w == 0)
   {
-    // path is invalid.
-    return;
+#endif
+    origin = ray_origin();
+    direction = ray_dir(ndc);
+    importance = SPECTRUM_ONE;
+#ifndef DIRECT_ONLY
   }
-  vec3 origin = PTData.last[path_id].hit.xyz;
-  vec3 direction = PTData.last[path_id].wi.xyz;
-  Spectrum importance = PTData.last[path_id].importance;
+  else
+  {
+    origin = PTData.last[path_id].hit.xyz;
+    direction = PTData.last[path_id].wi.xyz;
+    importance = PTData.last[path_id].importance;
+  }
 #endif
   traceRayEXT(scene, 0, 0xFF, 0, 0, 0, origin, 0.0001, direction, INFINITY, 0);
   if(isinf(hit.distance))
@@ -151,6 +158,8 @@ void main()
   {
     PTData.last[path_id].wi.w = 1.0; // mark specularity of the bounce
   }
+  // recursive bounce, no need to calculate this with "direct light" integrator
+#ifndef DIRECT_ONLY
   bsdfsampleval.uv = hit.uv;
   bsdfsampleval.woW = woW;
   bsdfsampleval.geometric_normal = hit.geometric_normal;
@@ -166,6 +175,16 @@ void main()
   float weight = abs(dot(bsdfsampleval.wiW, hit.shading_normal));
   weight /= bsdfsampleval.pdf;
   PTData.last[path_id].importance = mul(importance, mul(bsdfsampleval.value, weight));
-  PTData.last[path_id].hit = vec4(hit.point, 1.0); // hit.w marks the path as valid
+  PTData.last[path_id].hit.xyz = hit.point;
   PTData.last[path_id].wi.xyz = bsdfsampleval.wiW;
+  // update the bounce count
+  if(PTData.last[path_id].hit.w < PT_STEPS)
+  {
+    PTData.last[path_id].hit.w += 1.0;
+  }
+  else
+  {
+    PTData.last[path_id].hit.w = 0.0;
+  }
+#endif
 }

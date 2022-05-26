@@ -15,7 +15,7 @@ struct RTFrameData
   float scene_radius;
   float exposure;
   vec2 scene_size;
-  vec4 center_and_step;
+  vec4 scene_centre;
 };
 
 struct RTInstance

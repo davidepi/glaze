@@ -47,15 +47,14 @@ impl Integrator {
     // how many raygen shaders are necessary for each integrator
     fn raygen_count(&self) -> u32 {
         match self {
-            Integrator::DIRECT => 1,
-            Integrator::PATH_TRACE => 2,
+            Integrator::DIRECT | Integrator::PATH_TRACE => 1,
         }
     }
 
     pub fn steps_per_sample(&self) -> usize {
         match self {
             Integrator::DIRECT => 1,
-            Integrator::PATH_TRACE => PT_STEPS,
+            Integrator::PATH_TRACE => PT_STEPS, // worst case
         }
     }
 }
@@ -84,7 +83,6 @@ pub struct RayTraceRenderer<T: Instance + Send + Sync> {
     out8_img: AllocatedImage,
     integrator: Integrator,
     integrator_data: AllocatedBuffer,
-    integrator_step: u32,
     sample_scheduler: WorkScheduler,
     request_new_frame: bool,
     // contains also the out_img
@@ -388,7 +386,6 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         };
         let frame_index = frame_no % self.frame_desc.len();
         if self.request_new_frame {
-            self.integrator_step = 0;
             self.sample_scheduler.rewind();
         }
         let fd = RTFrameData {
@@ -398,23 +395,14 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             scene_radius: self.scene.meta.scene_radius,
             exposure: self.scene.meta.exposure,
             scene_size: [self.extent.width as f32, self.extent.height as f32],
-            center_and_step: [
+            scene_centre: [
                 self.scene.meta.scene_centre[0],
                 self.scene.meta.scene_centre[1],
                 self.scene.meta.scene_centre[2],
-                self.integrator_step as f32,
+                0.0,
             ],
         };
-        let which_raygen = if self.integrator == Integrator::DIRECT
-            || (self.integrator == Integrator::PATH_TRACE && self.integrator_step == 0)
-        {
-            0
-        } else {
-            1
-        };
         update_frame_data(fd, &mut self.frame_data[frame_index]);
-        self.integrator_step =
-            (self.integrator_step + 1) % self.integrator.steps_per_sample() as u32;
         let queue = device.compute_queue();
         unsafe {
             vkdevice
@@ -425,6 +413,13 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                 let color = vk::ClearColorValue {
                     float32: [0.0, 0.0, 0.0, 0.0],
                 };
+                vkdevice.cmd_fill_buffer(
+                    cmd,
+                    self.integrator_data.buffer,
+                    0,
+                    self.integrator_data.size,
+                    0,
+                );
                 vkdevice.cmd_clear_color_image(
                     cmd,
                     self.cumulative_img.image,
@@ -462,7 +457,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             );
             self.rploader.cmd_trace_rays(
                 cmd,
-                &self.sbt.rgen_addrs[which_raygen],
+                &self.sbt.rgen_addrs[0],
                 &self.sbt.miss_addr,
                 &self.sbt.hit_addr,
                 &self.sbt.call_addr,
@@ -688,7 +683,6 @@ fn init_rt<T: Instance + Send + Sync>(
         out8_img,
         integrator,
         integrator_data,
-        integrator_step: 0,
         sample_scheduler,
         request_new_frame: true,
         frame_desc,
@@ -1025,11 +1019,12 @@ fn create_integrator_data<T: Instance>(
     extent: vk::Extent2D,
 ) -> AllocatedBuffer {
     let allocator = instance.allocator();
+    // TRANSFER_DST required to clear the buffer
     match integrator {
         Integrator::DIRECT => allocator.create_buffer(
             "unused",
-            1,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
+            4,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
             MemoryLocation::GpuOnly,
         ),
         Integrator::PATH_TRACE => {
@@ -1038,7 +1033,7 @@ fn create_integrator_data<T: Instance>(
             allocator.create_buffer(
                 "PT storage",
                 size,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 MemoryLocation::GpuOnly,
             )
         }
