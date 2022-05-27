@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier: require
 
 #include "random.glsl"
 #include "constants.glsl"
@@ -8,6 +9,9 @@
 #include "raytrace_commons.glsl"
 
 #define RUSSIAN_ROULETTE PT_STEPS/2
+#define BOUNCE_NUMBER PTData.last[path_id].hit.w
+#define RESET_PATH BOUNCE_NUMBER = 0.0
+#define LAST_BOUNCE_SPECULAR PTData.last[path_id].wi.w
 
 layout(location=0) rayPayloadEXT HitData hit;
 layout(location=1) rayPayloadEXT bool shadow_ray_hit;
@@ -34,6 +38,10 @@ layout(std430, set=1, binding=4) readonly buffer materialBuffer {
 layout(std430, set=1, binding=5) readonly buffer lightBuffer {
   RTLight lights[];
 } LightBuffer;
+layout(set=1, binding=6) uniform sampler2D textures[];
+layout(set=1, binding=9) uniform skyUniform {
+  RTSky sky;
+} SkyUniform;
 
 vec3 ray_origin()
 {
@@ -120,7 +128,7 @@ void main()
   // if integrator is "direct light", generates a new path every time,
   // otherwise only when bounces is zero (hit.w == 0)
 #ifndef DIRECT_ONLY
-  if(PTData.last[path_id].hit.w == 0)
+  if(BOUNCE_NUMBER == 0.0)
   {
 #endif
     origin = ray_origin();
@@ -138,7 +146,18 @@ void main()
   traceRayEXT(scene, 0, 0xFF, 0, 0, 0, origin, 0.0001, direction, INFINITY, 0);
   if(isinf(hit.distance))
   {
-    PTData.last[path_id].hit.w = 0.0; // mark the path as invalid
+    if(BOUNCE_NUMBER == 0.0 && SkyUniform.sky.tex_id < ~0)
+    {
+      vec3 w = normalize((SkyUniform.sky.world2obj * vec4(direction, 0.0)).xyz);
+      float u = atan(w.y, w.x); // just call it atan2 like everybody else...
+      u = u < 0.0 ? u + TWO_PI : u;
+      vec2 uv = vec2(u, acos(w.z)) * INV_2PI;
+      vec3 sampled_texel =
+        texture(textures[nonuniformEXT(SkyUniform.sky.tex_id)], uv).rgb;
+      //vec3 sampled_texel = vec3(uv, 0.0);
+      update_result(from_illuminant_color(sampled_texel));
+    }
+    RESET_PATH;
     return;
   }
   RTMaterial material = MaterialBuffer.materials[hit.material_id];
@@ -154,22 +173,22 @@ void main()
       radiance = mul(radiance, importance);
       update_result(radiance);
     }
-    PTData.last[path_id].wi.w = 0.0; // mark non-specularity of the bounce
+    LAST_BOUNCE_SPECULAR = 0.0;
   }
   else
   {
-    PTData.last[path_id].wi.w = 1.0; // mark specularity of the bounce
+    LAST_BOUNCE_SPECULAR = 1.0;
   }
   // recursive bounce, no need to calculate this with "direct light" integrator
 #ifndef DIRECT_ONLY
 #ifdef RUSSIAN_ROULETTE
-  if(PTData.last[path_id].hit.w > RUSSIAN_ROULETTE)
+  if(BOUNCE_NUMBER > RUSSIAN_ROULETTE)
   {
     float kill_prob = max(0.05, 1.0 - luminance(importance));
     float roll = rand(rng);
     if(roll < kill_prob)
     {
-      PTData.last[path_id].hit.w = 0.0;
+      RESET_PATH;
       return;
     }
     else
@@ -187,7 +206,7 @@ void main()
   executeCallableEXT(material.bsdf_index+1, 4);
   if(bsdfsampleval.pdf == 0.0)
   {
-    PTData.last[path_id].hit.w = 0.0; // mark the path as invalid
+    RESET_PATH;
     return;
   }
   float weight = abs(dot(bsdfsampleval.wiW, hit.shading_normal));
@@ -196,13 +215,13 @@ void main()
   PTData.last[path_id].hit.xyz = hit.point;
   PTData.last[path_id].wi.xyz = bsdfsampleval.wiW;
   // update the bounce count
-  if(PTData.last[path_id].hit.w < PT_STEPS)
+  if(BOUNCE_NUMBER < PT_STEPS)
   {
-    PTData.last[path_id].hit.w += 1.0;
+    BOUNCE_NUMBER += 1.0;
   }
   else
   {
-    PTData.last[path_id].hit.w = 0.0;
+    RESET_PATH;
   }
 #endif
 }

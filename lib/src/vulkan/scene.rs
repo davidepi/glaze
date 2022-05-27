@@ -8,7 +8,7 @@ use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::build_compute_pipeline;
 #[cfg(feature = "vulkan-interactive")]
 use super::pipeline::Pipeline;
-use super::raytrace_structures::{RTInstance, RTLight, RTMaterial};
+use super::raytrace_structures::{RTInstance, RTLight, RTMaterial, RTSky};
 use super::UnfinishedExecutions;
 use crate::geometry::SkyLight;
 #[cfg(feature = "vulkan-interactive")]
@@ -21,7 +21,7 @@ use crate::{
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
-use cgmath::{InnerSpace, Vector3 as Vec3};
+use cgmath::{InnerSpace, Matrix4, SquareMatrix, Vector3 as Vec3};
 #[cfg(feature = "vulkan-interactive")]
 use fnv::{FnvBuildHasher, FnvHashMap};
 use gpu_allocator::MemoryLocation;
@@ -1313,6 +1313,7 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     transforms_buffer: Arc<AllocatedBuffer>,
     // (material_id, transform_ids)
     material_instance_ids: FnvHashMap<u16, Vec<u16>>,
+    sky_buffer: AllocatedBuffer,
     // does not account for skylights
     pub(crate) lights_no: u32,
     pub(crate) meta: Meta,
@@ -1323,9 +1324,11 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
 }
 
 impl<T: Instance + Send + Sync> RayTraceScene<T> {
-    const AVG_DESC: [(vk::DescriptorType, f32); 2] = [
+    const AVG_DESC: [(vk::DescriptorType, f32); 4] = [
         (vk::DescriptorType::ACCELERATION_STRUCTURE_KHR, 1.0),
-        (vk::DescriptorType::STORAGE_BUFFER, 4.0),
+        (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
+        (vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0),
+        (vk::DescriptorType::STORAGE_BUFFER, 7.0),
     ];
 
     pub fn new(
@@ -1409,15 +1412,43 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             load_raytrace_instances_to_gpu(device, mm, &mut tcmdm, &mut unf, &meshes, &instances);
         let material_buffer =
             load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
+        let sampler = create_sampler(device);
+        let skylight = lights
+            .iter()
+            .find_map(|s| match s {
+                Light::Sky(s) => Some(s),
+                _ => None,
+            })
+            .copied();
+        let rtskylight = if let Some(s) = skylight {
+            RTSky {
+                world2obj: s.rotation_matrix().invert().unwrap(),
+                tex_id: s.tex_id as u32,
+            }
+        } else {
+            RTSky {
+                world2obj: Matrix4::identity(),
+                tex_id: u32::MAX,
+            }
+        };
+        let sky_buffer = upload_buffer(
+            device,
+            mm,
+            &mut tcmdm,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            &mut unf,
+            &[rtskylight],
+        );
+        lights.retain(|l| l.ltype() != LightType::SKY);
         let light_buffer = load_raytrace_lights_to_gpu(
             device,
             mm,
             &mut tcmdm,
             &mut unf,
             &lights,
+            skylight,
             &material_instance_ids,
         );
-        let sampler = create_sampler(device);
         let descriptor = build_raytrace_descriptor(
             &mut dm,
             &acc,
@@ -1428,20 +1459,10 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &light_buffer,
             &derivative_buffer,
             &transforms_buffer,
+            &sky_buffer,
             &textures.read().unwrap(),
             sampler,
         );
-        let skylight = lights
-            .iter()
-            .find_map(|l| match l {
-                Light::Sky(s) => Some(s),
-                _ => None,
-            })
-            .copied();
-        lights = lights
-            .into_iter()
-            .filter(|l| l.ltype() != LightType::SKY)
-            .collect();
         let meta = parsed.meta().unwrap_or_default();
         unf.wait_completion();
         RayTraceScene {
@@ -1456,6 +1477,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             derivative_buffer,
             transforms_buffer: Arc::new(transforms_buffer),
             material_instance_ids,
+            sky_buffer,
             lights_no: lights.len() as u32,
             meta,
             textures,
@@ -1477,6 +1499,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.light_buffer,
             &self.derivative_buffer,
             &self.transforms_buffer,
+            &self.sky_buffer,
             &self.textures.read().unwrap(),
             self.sampler,
         );
@@ -1487,6 +1510,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         &mut self,
         materials: &[Material],
         lights: &[Light],
+        sky: Option<SkyLight>,
         tcmdm: &mut CommandManager,
         unf: &mut UnfinishedExecutions,
     ) {
@@ -1499,13 +1523,35 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             tcmdm,
             unf,
             lights,
+            sky,
             &self.material_instance_ids,
+        );
+        let rtskylight = if let Some(s) = sky {
+            RTSky {
+                world2obj: s.rotation_matrix().invert().unwrap(),
+                tex_id: s.tex_id as u32,
+            }
+        } else {
+            RTSky {
+                world2obj: Matrix4::identity(),
+                tex_id: u32::MAX,
+            }
+        };
+        let mut sky_buffer = upload_buffer(
+            self.instance.device(),
+            mm,
+            tcmdm,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            unf,
+            &[rtskylight],
         );
         // cannot drop yet, the loading is not finished yet
         std::mem::swap(&mut self.material_buffer, &mut mat_buffer);
         std::mem::swap(&mut self.light_buffer, &mut light_buffer);
+        std::mem::swap(&mut self.sky_buffer, &mut sky_buffer);
         unf.add_buffer(mat_buffer);
         unf.add_buffer(light_buffer);
+        unf.add_buffer(sky_buffer);
         self.lights_no = lights.len() as u32;
         self.refresh_descriptors();
     }
@@ -1586,9 +1632,29 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             &mut tcmdm,
             &mut unf,
             &scene.lights,
+            scene.skylight.as_ref().map(|(s, _)| s).copied(),
             &material_instance_ids,
         );
         let sampler = create_sampler(device);
+        let skylight = if let Some((s, _)) = &scene.skylight {
+            RTSky {
+                world2obj: s.rotation_matrix().invert().unwrap(),
+                tex_id: s.tex_id as u32,
+            }
+        } else {
+            RTSky {
+                world2obj: Matrix4::identity(),
+                tex_id: u32::MAX,
+            }
+        };
+        let sky_buffer = upload_buffer(
+            device,
+            mm,
+            &mut tcmdm,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            &mut unf,
+            &[skylight],
+        );
         let descriptor = build_raytrace_descriptor(
             &mut dm,
             &acc,
@@ -1599,6 +1665,7 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             &light_buffer,
             &derivative_buffer,
             &transforms_buffer,
+            &sky_buffer,
             &textures.read().unwrap(),
             sampler,
         );
@@ -1616,6 +1683,7 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             derivative_buffer,
             transforms_buffer,
             material_instance_ids,
+            sky_buffer,
             lights_no: scene.lights.len() as u32,
             meta,
             textures,
@@ -1733,6 +1801,7 @@ fn load_raytrace_lights_to_gpu(
     tcmdm: &mut CommandManager,
     unf: &mut UnfinishedExecutions,
     lights: &[Light],
+    _sky: Option<SkyLight>,
     transform_ids: &FnvHashMap<u16, Vec<u16>>,
 ) -> AllocatedBuffer {
     let mut data = Vec::new();
@@ -1937,6 +2006,7 @@ fn build_raytrace_descriptor(
     light_buffer: &AllocatedBuffer,
     derivative_buffer: &AllocatedBuffer,
     transforms_buffer: &AllocatedBuffer,
+    sky_buffer: &AllocatedBuffer,
     textures: &[TextureLoaded],
     sampler: vk::Sampler,
 ) -> Descriptor {
@@ -1984,7 +2054,8 @@ fn build_raytrace_descriptor(
             &textures_memory,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             sampler,
-            vk::ShaderStageFlags::CLOSEST_HIT_KHR
+            vk::ShaderStageFlags::RAYGEN_KHR
+                | vk::ShaderStageFlags::CLOSEST_HIT_KHR
                 | vk::ShaderStageFlags::ANY_HIT_KHR
                 | vk::ShaderStageFlags::CALLABLE_KHR,
         )
@@ -1997,6 +2068,11 @@ fn build_raytrace_descriptor(
             transforms_buffer,
             vk::DescriptorType::STORAGE_BUFFER,
             vk::ShaderStageFlags::CALLABLE_KHR,
+        )
+        .bind_buffer(
+            sky_buffer,
+            vk::DescriptorType::UNIFORM_BUFFER,
+            vk::ShaderStageFlags::RAYGEN_KHR,
         )
         .build()
 }

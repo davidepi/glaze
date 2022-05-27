@@ -126,10 +126,6 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         // no need to restart the frame, as only the weight for each sample is affected.
     }
 
-    pub fn set_skylight(&mut self, sky: Option<SkyLight>) {
-        // TODO: implement this
-    }
-
     pub fn set_integrator(&mut self, integrator: Integrator) {
         if self.integrator != integrator {
             self.wait_idle();
@@ -236,10 +232,15 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     }
 
     // materials and lights must be handled together because of emissive materials.
-    pub fn update_materials_and_lights(&mut self, materials: &[Material], lights: &[Light]) {
+    pub fn update_materials_and_lights(
+        &mut self,
+        materials: &[Material],
+        lights: &[Light],
+        sky: Option<SkyLight>,
+    ) {
         let mut unf = UnfinishedExecutions::new(self.instance.device());
         self.scene
-            .update_materials_and_lights(materials, lights, &mut self.tcmdm, &mut unf);
+            .update_materials_and_lights(materials, lights, sky, &mut self.tcmdm, &mut unf);
         unf.wait_completion();
         self.request_new_frame = true;
     }

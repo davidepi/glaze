@@ -155,6 +155,50 @@ Spectrum div(Spectrum sp0, Spectrum sp1)
   return res;
 }
 
+#define GENERATE_COLOR_TO_SPECTRUM                   \
+  if(rgb.r <= rgb.g && rgb.r <= rgb.b)               \
+  {                                                  \
+    res = mul(white, rgb.r);                         \
+    if (rgb.g <= rgb.b)                              \
+    {                                                \
+      res = add(res, mul(cyan, (rgb.g - rgb.r)));    \
+      res = add(res, mul(blue, (rgb.b - rgb.g)));    \
+    }                                                \
+    else                                             \
+    {                                                \
+      res = add(res, mul(cyan, (rgb.b - rgb.r)));    \
+      res = add(res, mul(green, (rgb.g - rgb.b)));   \
+    }                                                \
+  }                                                  \
+  else if(rgb.g <= rgb.r && rgb.g <= rgb.b)          \
+  {                                                  \
+    res = mul(white, rgb.g);                         \
+    if (rgb.r <= rgb.b)                              \
+    {                                                \
+      res = add(res, mul(magenta, (rgb.r - rgb.g))); \
+      res = add(res, mul(blue, (rgb.b - rgb.r)));    \
+    }                                                \
+    else                                             \
+    {                                                \
+      res = add(res, mul(magenta, (rgb.b - rgb.g))); \
+      res = add(res, mul(red, (rgb.r - rgb.b)));     \
+    }                                                \
+  }                                                  \
+  else                                               \
+  {                                                  \
+    res = mul(white, rgb.b);                         \
+    if (rgb.r <= rgb.g)                              \
+    {                                                \
+      res = add(res, mul(yellow, (rgb.r - rgb.b)));  \
+      res = add(res, mul(green, (rgb.g - rgb.r)));   \
+    }                                                \
+    else                                             \
+    {                                                \
+      res = add(res, mul(yellow, (rgb.g - rgb.b)));  \
+      res = add(res, mul(red, (rgb.r - rgb.g)));     \
+    }                                                \
+  }
+
 Spectrum from_surface_color(vec3 rgb)
 {
   Spectrum white = Spectrum(
@@ -193,49 +237,50 @@ Spectrum from_surface_color(vec3 rgb)
     vec4(0.0005060, 0.0023498, 0.0006744, 0.0166219),
     vec4(0.0402117, 0.0496045, 0.0435740, 0.0274834));
   Spectrum res;
-  if(rgb.r <= rgb.g && rgb.r <= rgb.b)
-  {
-    res = mul(white, rgb.r);
-    if (rgb.g <= rgb.b)
-    {
-      res = add(res, mul(cyan, (rgb.g - rgb.r)));
-      res = add(res, mul(blue, (rgb.b - rgb.g)));
-    }
-    else
-    {
-      res = add(res, mul(cyan, (rgb.b - rgb.r)));
-      res = add(res, mul(green, (rgb.g - rgb.b)));
-    }
-  }
-  else if(rgb.g <= rgb.r && rgb.g <= rgb.b)
-  {
-    res = mul(white, rgb.g);
-    if (rgb.r <= rgb.b)
-    {
-      res = add(res, mul(magenta, (rgb.r - rgb.g)));
-      res = add(res, mul(blue, (rgb.b - rgb.r)));
-    }
-    else
-    {
-      res = add(res, mul(magenta, (rgb.b - rgb.g)));
-      res = add(res, mul(red, (rgb.r - rgb.b)));
-    }
-  }
-  else
-  {
-    res = mul(white, rgb.b);
-    if (rgb.r <= rgb.g)
-    {
-      res = add(res, mul(yellow, (rgb.r - rgb.b)));
-      res = add(res, mul(green, (rgb.g - rgb.r)));
-    }
-    else
-    {
-      res = add(res, mul(yellow, (rgb.g - rgb.b)));
-      res = add(res, mul(red, (rgb.r - rgb.g)));
-    }
-  }
+  GENERATE_COLOR_TO_SPECTRUM
   return mul(res, 0.94);
+}
+
+Spectrum from_illuminant_color(vec3 rgb)
+{
+  Spectrum white = Spectrum(
+    vec4(1.1560446, 1.1564162, 1.1567873, 1.1565329),
+    vec4(1.1565927, 1.1565410, 1.1472133, 1.1314210),
+    vec4(1.0964089, 1.0338718, 0.9652860, 0.9206722),
+    vec4(0.9001167, 0.8894007, 0.8808384, 0.8781050));
+  Spectrum cyan = Spectrum(
+    vec4(1.1352400, 1.1358532, 1.1362707, 1.1359364),
+    vec4(1.1361867, 1.1358178, 1.1359519, 1.1354234),
+    vec4(1.1224514, 0.8707334, 0.3803442, 0.0512169),
+    vec4(-0.0117626, -0.0106069, -0.0069315, -0.0077819));
+  Spectrum magenta = Spectrum(
+    vec4(1.0765584, 1.0770491, 1.0731253, 1.0796647),
+    vec4(1.0024748, 0.4395829, 0.0204297, -0.0015031),
+    vec4(-0.0000061, 0.0721516, 0.4807862, 0.9731341),
+    vec4(1.0781819, 1.0327506, 1.0495215, 1.0257451));
+  Spectrum yellow = Spectrum(
+    vec4(0.0001469, -0.0001316, -0.0001677, 0.0895192),
+    vec4(0.7482148, 1.0340727, 1.0365779, 1.0367058),
+    vec4(1.0365194, 1.0366123, 1.0361321, 1.0144986),
+    vec4(0.8293751, 0.6705682, 0.6005960, 0.5827772));
+  Spectrum red = Spectrum(
+    vec4(0.0571394, 0.0430340, 0.0212607, 0.0010772),
+    vec4(0.0005799, -0.0002249, -0.0001201, -0.0001991),
+    vec4(0.0127561, 0.1832462, 0.5194882, 0.8212017),
+    vec4(0.9626301, 0.9941070, 0.9901806, 0.9827855));
+  Spectrum green = Spectrum(
+    vec4(0.0064831, 0.0001903, -0.0081060, 0.0481619),
+    vec4(0.6672964, 1.0307844, 1.0311600, 1.0265627),
+    vec4(1.0363099, 1.0120735, 0.3266872, 0.0033846),
+    vec4(0.0081701, 0.0088890, 0.0003663, 0.0009946));
+  Spectrum blue = Spectrum(
+    vec4(1.0542363, 1.0576206, 1.0581438, 1.0568818),
+    vec4(1.0207912, 0.2974275, -0.0014770, -0.0013982),
+    vec4(-0.0005919, -0.0010091, -0.0015480, 0.0051107),
+    vec4(0.0470549, 0.1282754, 0.1524642, 0.1661573));
+  Spectrum res;
+  GENERATE_COLOR_TO_SPECTRUM
+    return mul(res, 0.86445);
 }
 
 #endif

@@ -57,6 +57,12 @@ struct RTLight
   bool delta;
 };
 
+struct RTSky
+{
+  mat4 world2obj;
+  uint tex_id;
+};
+
 struct PTLastVertex
 {
   Spectrum importance;

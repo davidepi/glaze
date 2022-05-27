@@ -1,4 +1,5 @@
 use crate::Spectrum;
+use cgmath::Matrix4;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -70,6 +71,13 @@ pub struct RTLight {
     pub instance_id: u32,
     pub intensity: f32,
     pub delta: bool,
+}
+
+#[repr(C, align(16))]
+#[derive(Debug, Copy, Clone)]
+pub struct RTSky {
+    pub world2obj: Matrix4<f32>,
+    pub tex_id: u32,
 }
 
 pub const PT_STEPS: usize = 6;

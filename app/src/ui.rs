@@ -688,7 +688,7 @@ fn window_materials(
                 if let Some(raytracer) = raytracer.as_mut() {
                     let materials = renderer.scene().materials().to_vec();
                     let lights = renderer.scene().lights().to_vec();
-                    raytracer.update_materials_and_lights(&materials, &lights);
+                    raytracer.update_materials_and_lights(&materials, &lights, state.sky_selected);
                 }
             }
         }
@@ -740,7 +740,6 @@ fn window_lights(
     let mut remove = None;
     let mut exposure = renderer.exposure();
     let mut update_exposure = false;
-    let mut update_sky = false;
     let mut update_lights = false;
     if let Some(window) = imgui::Window::new("Lights")
         .opened(closed)
@@ -781,7 +780,7 @@ fn window_lights(
             .build(ui, || {
                 if Selectable::new("None").build(ui) {
                     state.sky_selected = None;
-                    update_sky = true;
+                    update_lights = true;
                 }
                 renderer
                     .scene()
@@ -798,7 +797,7 @@ fn window_lights(
                                     state.sky_selected = Some(dflt)
                                 }
                             }
-                            update_sky = true;
+                            update_lights = true;
                         }
                         if ui.is_item_hovered() {
                             ui.tooltip(|| {
@@ -822,10 +821,12 @@ fn window_lights(
                     Image::new(TextureId::new(sky.tex_id as usize), [256.0, 256.0]).build(ui);
                 });
             }
-            Slider::new("Dome Yaw (deg)", 0.0, 360.0).build(ui, &mut sky.yaw_deg);
-            Slider::new("Dome Pitch (deg)", 0.0, 360.0).build(ui, &mut sky.pitch_deg);
-            Slider::new("Dome Roll (deg)", 0.0, 360.0).build(ui, &mut sky.roll_deg);
-            update_sky = true;
+            if Slider::new("Dome Yaw (deg)", 0.0, 360.0).build(ui, &mut sky.yaw_deg)
+                || Slider::new("Dome Pitch (deg)", 0.0, 360.0).build(ui, &mut sky.pitch_deg)
+                || Slider::new("Dome Roll (deg)", 0.0, 360.0).build(ui, &mut sky.roll_deg)
+            {
+                update_lights = true;
+            }
         }
         ui.separator();
         ui.spacing();
@@ -972,14 +973,9 @@ fn window_lights(
                 state.light_selected = None;
             }
             renderer.update_light(&lights);
-            if let Some(raytracer) = raytracer.as_mut() {
-                raytracer.update_materials_and_lights(&materials, &lights);
-            }
-        }
-        if update_sky {
             renderer.set_skydome(state.sky_selected);
             if let Some(raytracer) = raytracer.as_mut() {
-                raytracer.set_skylight(state.sky_selected);
+                raytracer.update_materials_and_lights(&materials, &lights, state.sky_selected);
             }
         }
     }
