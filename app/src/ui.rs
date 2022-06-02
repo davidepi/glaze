@@ -688,7 +688,12 @@ fn window_materials(
                 if let Some(raytracer) = raytracer.as_mut() {
                     let materials = renderer.scene().materials().to_vec();
                     let lights = renderer.scene().lights().to_vec();
-                    raytracer.update_materials_and_lights(&materials, &lights, state.sky_selected);
+                    raytracer.update_materials_and_lights(
+                        &materials,
+                        &lights,
+                        renderer.scene().textures(),
+                        state.sky_selected,
+                    );
                 }
             }
         }
@@ -975,7 +980,12 @@ fn window_lights(
             renderer.update_light(&lights);
             renderer.set_skydome(state.sky_selected);
             if let Some(raytracer) = raytracer.as_mut() {
-                raytracer.update_materials_and_lights(&materials, &lights, state.sky_selected);
+                raytracer.update_materials_and_lights(
+                    &materials,
+                    &lights,
+                    renderer.scene().textures(),
+                    state.sky_selected,
+                );
             }
         }
     }

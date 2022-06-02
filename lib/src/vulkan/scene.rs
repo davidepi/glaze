@@ -3,30 +3,32 @@ use super::cmd::CommandManager;
 #[cfg(feature = "vulkan-interactive")]
 use super::descriptor::{Descriptor, DescriptorSetManager};
 use super::device::Device;
+use super::imgui::as_u8_slice;
 use super::instance::Instance;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::build_compute_pipeline;
 #[cfg(feature = "vulkan-interactive")]
 use super::pipeline::Pipeline;
 use super::raytrace_structures::{RTInstance, RTLight, RTMaterial, RTSky};
-use super::UnfinishedExecutions;
-use crate::geometry::SkyLight;
+use super::{AllocatedImage, UnfinishedExecutions};
+use crate::geometry::{Distribution1D, Distribution2D, SkyLight};
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{
-    include_shader, Camera, Light, LightType, Material, Mesh, MeshInstance, Meta, Metal,
+    include_shader, Camera, ColorRGB, Light, LightType, Material, Mesh, MeshInstance, Meta, Metal,
     ParsedScene, PipelineBuilder, RayTraceInstance, Spectrum, Vertex,
 };
 #[cfg(feature = "vulkan-interactive")]
 use crate::{PresentInstance, ShaderMat, Texture, Transform};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
-use cgmath::{InnerSpace, Matrix4, SquareMatrix, Vector3 as Vec3};
+use cgmath::{InnerSpace, SquareMatrix, Vector3 as Vec3};
 #[cfg(feature = "vulkan-interactive")]
 use fnv::{FnvBuildHasher, FnvHashMap};
 use gpu_allocator::MemoryLocation;
 #[cfg(feature = "vulkan-interactive")]
 use std::collections::hash_map::Entry;
+use std::f32::consts::PI;
 #[cfg(feature = "vulkan-interactive")]
 use std::ffi::c_void;
 #[cfg(feature = "vulkan-interactive")]
@@ -158,7 +160,7 @@ impl VulkanScene {
             with_raytrace,
         );
         let instances = instances_to_map(&parsed.instances().unwrap_or_default());
-        let sampler = create_sampler(device);
+        let sampler = create_sampler(device, false);
         let raw_textures = parsed
             .textures()
             .unwrap_or_else(|_| vec![Texture::default()]);
@@ -354,7 +356,7 @@ impl VulkanScene {
             let mm = self.instance.allocator();
             let mut tcmdm =
                 CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
-            *data = Some(build_skydome(
+            *data = Some(build_skydome_realtime(
                 device,
                 mm,
                 render_size,
@@ -428,7 +430,7 @@ impl VulkanScene {
             let mm = self.instance.allocator();
             let mut tcmdm =
                 CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
-            let render_data = build_skydome(
+            let render_data = build_skydome_realtime(
                 device,
                 mm,
                 render_size,
@@ -587,7 +589,7 @@ fn gen_icosphere(order: u8) -> (Vec<f32>, Vec<u32>) {
     (vertices, indices)
 }
 
-fn build_skydome(
+fn build_skydome_realtime(
     device: &Device,
     mm: &MemoryManager,
     extent: vk::Extent2D,
@@ -663,14 +665,20 @@ fn build_skydome(
 
 /// Creates the default sampler for this scene.
 /// Uses anisotropic filtering with the max anisotropy supported by the GPU.
-fn create_sampler(device: &Device) -> vk::Sampler {
+/// pass true to create a nearest neighbour filter.
+fn create_sampler(device: &Device, nn: bool) -> vk::Sampler {
     let max_anisotropy = device.physical().properties.limits.max_sampler_anisotropy;
+    let filter = if nn {
+        vk::Filter::NEAREST
+    } else {
+        vk::Filter::LINEAR
+    };
     let ci = vk::SamplerCreateInfo {
         s_type: vk::StructureType::SAMPLER_CREATE_INFO,
         p_next: ptr::null(),
         flags: vk::SamplerCreateFlags::empty(),
-        mag_filter: vk::Filter::LINEAR,
-        min_filter: vk::Filter::LINEAR,
+        mag_filter: filter,
+        min_filter: filter,
         mipmap_mode: vk::SamplerMipmapMode::LINEAR,
         address_mode_u: vk::SamplerAddressMode::REPEAT,
         address_mode_v: vk::SamplerAddressMode::REPEAT,
@@ -1303,7 +1311,8 @@ pub fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
 pub struct RayTraceScene<T: Instance + Send + Sync> {
     pub(crate) camera: Camera,
     pub(crate) descriptor: Descriptor,
-    sampler: vk::Sampler,
+    linear_sampler: vk::Sampler,
+    nn_sampler: vk::Sampler,
     vertex_buffer: Arc<AllocatedBuffer>,
     index_buffer: Arc<AllocatedBuffer>,
     instance_buffer: AllocatedBuffer,
@@ -1313,7 +1322,7 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     transforms_buffer: Arc<AllocatedBuffer>,
     // (material_id, transform_ids)
     material_instance_ids: FnvHashMap<u16, Vec<u16>>,
-    sky_buffer: AllocatedBuffer,
+    sky_buffer: SkyBuffers,
     // does not account for skylights
     pub(crate) lights_no: u32,
     pub(crate) meta: Meta,
@@ -1384,10 +1393,11 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         );
         let transforms_buffer =
             load_transforms_to_gpu(device, mm, &mut tcmdm, &mut unf, &transforms);
+        let raw_textures = parsed
+            .textures()
+            .unwrap_or_else(|_| vec![Texture::default()]);
         let textures = Arc::new(RwLock::new(
-            parsed
-                .textures()
-                .unwrap_or_else(|_| vec![Texture::default()])
+            raw_textures
                 .iter()
                 .map(|tex| load_texture_to_gpu(instance.clone(), mm, &mut tcmdm, &mut unf, tex))
                 .collect::<Vec<_>>(),
@@ -1412,33 +1422,17 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             load_raytrace_instances_to_gpu(device, mm, &mut tcmdm, &mut unf, &meshes, &instances);
         let material_buffer =
             load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
-        let sampler = create_sampler(device);
-        let skylight = lights
+        let linear_sampler = create_sampler(device, false);
+        let nn_sampler = create_sampler(device, true);
+        let sky = lights
             .iter()
             .find_map(|s| match s {
                 Light::Sky(s) => Some(s),
                 _ => None,
             })
             .copied();
-        let rtskylight = if let Some(s) = skylight {
-            RTSky {
-                world2obj: s.rotation_matrix().invert().unwrap(),
-                tex_id: s.tex_id as u32,
-            }
-        } else {
-            RTSky {
-                world2obj: Matrix4::identity(),
-                tex_id: u32::MAX,
-            }
-        };
-        let sky_buffer = upload_buffer(
-            device,
-            mm,
-            &mut tcmdm,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            &mut unf,
-            &[rtskylight],
-        );
+        let sky_buffer =
+            build_sky_raytrace_buffers(device, mm, &mut tcmdm, &mut unf, sky, &raw_textures);
         lights.retain(|l| l.ltype() != LightType::SKY);
         let light_buffer = load_raytrace_lights_to_gpu(
             device,
@@ -1446,7 +1440,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &mut tcmdm,
             &mut unf,
             &lights,
-            skylight,
+            sky,
             &material_instance_ids,
         );
         let descriptor = build_raytrace_descriptor(
@@ -1461,14 +1455,16 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &transforms_buffer,
             &sky_buffer,
             &textures.read().unwrap(),
-            sampler,
+            linear_sampler,
+            nn_sampler,
         );
         let meta = parsed.meta().unwrap_or_default();
         unf.wait_completion();
         RayTraceScene {
             camera,
             descriptor,
-            sampler,
+            linear_sampler,
+            nn_sampler,
             vertex_buffer: Arc::new(vertex_buffer),
             index_buffer: Arc::new(index_buffer),
             instance_buffer,
@@ -1501,7 +1497,8 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.transforms_buffer,
             &self.sky_buffer,
             &self.textures.read().unwrap(),
-            self.sampler,
+            self.linear_sampler,
+            self.nn_sampler,
         );
     }
 
@@ -1511,14 +1508,16 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         materials: &[Material],
         lights: &[Light],
         sky: Option<SkyLight>,
+        textures: &[Texture],
         tcmdm: &mut CommandManager,
         unf: &mut UnfinishedExecutions,
     ) {
+        let device = self.instance.device();
         let mm = self.instance.allocator();
         let mut mat_buffer =
             load_raytrace_materials_to_gpu(self.instance.device(), mm, tcmdm, unf, materials);
         let mut light_buffer = load_raytrace_lights_to_gpu(
-            self.instance.device(),
+            device,
             mm,
             tcmdm,
             unf,
@@ -1526,32 +1525,16 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             sky,
             &self.material_instance_ids,
         );
-        let rtskylight = if let Some(s) = sky {
-            RTSky {
-                world2obj: s.rotation_matrix().invert().unwrap(),
-                tex_id: s.tex_id as u32,
-            }
-        } else {
-            RTSky {
-                world2obj: Matrix4::identity(),
-                tex_id: u32::MAX,
-            }
-        };
-        let mut sky_buffer = upload_buffer(
-            self.instance.device(),
-            mm,
-            tcmdm,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            unf,
-            &[rtskylight],
-        );
+        let mut sky_buffer = build_sky_raytrace_buffers(device, mm, tcmdm, unf, sky, textures);
         // cannot drop yet, the loading is not finished yet
         std::mem::swap(&mut self.material_buffer, &mut mat_buffer);
         std::mem::swap(&mut self.light_buffer, &mut light_buffer);
         std::mem::swap(&mut self.sky_buffer, &mut sky_buffer);
         unf.add_buffer(mat_buffer);
         unf.add_buffer(light_buffer);
-        unf.add_buffer(sky_buffer);
+        unf.add_buffer(sky_buffer.ssbo);
+        unf.add_image(sky_buffer.conditional_values);
+        unf.add_image(sky_buffer.conditional_cdf);
         self.lights_no = lights.len() as u32;
         self.refresh_descriptors();
     }
@@ -1563,7 +1546,11 @@ impl<T: Instance + Send + Sync> Drop for RayTraceScene<T> {
             self.instance
                 .device()
                 .logical()
-                .destroy_sampler(self.sampler, None)
+                .destroy_sampler(self.linear_sampler, None);
+            self.instance
+                .device()
+                .logical()
+                .destroy_sampler(self.nn_sampler, None);
         }
     }
 }
@@ -1635,25 +1622,15 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             scene.skylight.as_ref().map(|(s, _)| s).copied(),
             &material_instance_ids,
         );
-        let sampler = create_sampler(device);
-        let skylight = if let Some((s, _)) = &scene.skylight {
-            RTSky {
-                world2obj: s.rotation_matrix().invert().unwrap(),
-                tex_id: s.tex_id as u32,
-            }
-        } else {
-            RTSky {
-                world2obj: Matrix4::identity(),
-                tex_id: u32::MAX,
-            }
-        };
-        let sky_buffer = upload_buffer(
+        let linear_sampler = create_sampler(device, false);
+        let nn_sampler = create_sampler(device, true);
+        let sky_buffer = build_sky_raytrace_buffers(
             device,
             mm,
             &mut tcmdm,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
             &mut unf,
-            &[skylight],
+            scene.skydome(),
+            &scene.raw_textures,
         );
         let descriptor = build_raytrace_descriptor(
             &mut dm,
@@ -1667,14 +1644,16 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             &transforms_buffer,
             &sky_buffer,
             &textures.read().unwrap(),
-            sampler,
+            linear_sampler,
+            nn_sampler,
         );
         let meta = scene.meta;
         unf.wait_completion();
         RayTraceScene {
             camera: scene.current_cam,
             descriptor,
-            sampler,
+            linear_sampler,
+            nn_sampler,
             vertex_buffer,
             index_buffer,
             instance_buffer,
@@ -1918,6 +1897,129 @@ fn upload_buffer<T: Sized + 'static>(
     gpu_buffer
 }
 
+fn upload_2d_buffer<T: Sized + 'static>(
+    device: &Device,
+    mm: &MemoryManager,
+    tcmdm: &mut CommandManager,
+    unfinished: &mut UnfinishedExecutions,
+    dimensions: (usize, usize),
+    format: vk::Format,
+    data: &[T],
+) -> AllocatedImage {
+    let size = (std::mem::size_of::<T>() * data.len()) as u64;
+    let extent = vk::Extent2D {
+        width: dimensions.0 as u32,
+        height: dimensions.1 as u32,
+    };
+    let cpu_buf = mm.create_buffer(
+        "2D Buffer (CPU)",
+        size,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+        MemoryLocation::CpuToGpu,
+    );
+    let gpu_buf = mm.create_image_gpu(
+        "2D Buffer (GPU)",
+        format,
+        extent,
+        vk::ImageUsageFlags::SAMPLED
+            | vk::ImageUsageFlags::TRANSFER_SRC
+            | vk::ImageUsageFlags::TRANSFER_DST,
+        vk::ImageAspectFlags::COLOR,
+        1,
+    );
+    let mapped = cpu_buf
+        .allocation()
+        .mapped_ptr()
+        .expect("Failed to map memory")
+        .cast()
+        .as_ptr();
+    unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), mapped, data.len()) };
+    let subresource_range = vk::ImageSubresourceRange {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        base_mip_level: 0,
+        level_count: 1,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let barrier_transfer = vk::ImageMemoryBarrier {
+        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+        p_next: ptr::null(),
+        src_access_mask: vk::AccessFlags::empty(),
+        dst_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+        old_layout: vk::ImageLayout::UNDEFINED,
+        new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        image: gpu_buf.image,
+        subresource_range,
+    };
+    let barrier_use = vk::ImageMemoryBarrier {
+        s_type: vk::StructureType::IMAGE_MEMORY_BARRIER,
+        p_next: ptr::null(),
+        src_access_mask: vk::AccessFlags::TRANSFER_WRITE,
+        dst_access_mask: vk::AccessFlags::SHADER_READ,
+        old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        new_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        src_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        dst_queue_family_index: vk::QUEUE_FAMILY_IGNORED,
+        image: gpu_buf.image,
+        subresource_range,
+    };
+    let image_subresource = vk::ImageSubresourceLayers {
+        aspect_mask: vk::ImageAspectFlags::COLOR,
+        mip_level: 0,
+        base_array_layer: 0,
+        layer_count: 1,
+    };
+    let copy_region = vk::BufferImageCopy {
+        buffer_offset: 0,
+        buffer_row_length: 0,   // 0 = same as image width
+        buffer_image_height: 0, // 0 = same as image height
+        image_subresource,
+        image_offset: vk::Offset3D { x: 0, y: 0, z: 0 },
+        image_extent: vk::Extent3D {
+            width: dimensions.0 as u32,
+            height: dimensions.1 as u32,
+            depth: 1,
+        },
+    };
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_transfer],
+            );
+            device.cmd_copy_buffer_to_image(
+                cmd,
+                cpu_buf.buffer,
+                gpu_buf.image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[copy_region],
+            );
+            // prepare the texture for shader reading
+            device.cmd_pipeline_barrier(
+                cmd,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_use],
+            );
+        }
+    };
+    let cmd = tcmdm.get_cmd_buffer();
+    let transfer_queue = device.transfer_queue();
+    let fence = device.immediate_execute(cmd, transfer_queue, command);
+    unfinished.add(fence, cpu_buf);
+    gpu_buf
+}
+
 fn calculate_geometric_derivatives<T: Instance>(
     instance: &T,
     dm: &mut DescriptorSetManager,
@@ -1996,6 +2098,144 @@ fn calculate_geometric_derivatives<T: Instance>(
     buffer
 }
 
+fn calculate_skymap_distributions(map: &Texture) -> Distribution2D<f32> {
+    let raw = map.raw(0);
+    let pixel_size = map.bytes_per_pixel();
+    assert!(pixel_size >= 3);
+    let (width, height) = map.dimensions(0);
+    let values = raw
+        .chunks_exact(pixel_size * width as usize)
+        .enumerate()
+        .flat_map(|(y, row)| {
+            let sint = f32::sin(PI * (y as f32 + 0.5) / height as f32);
+            //TODO: according to PBRT I should filter the pixel lookup
+            // however I have no filtering implemented on the CPU side yet and no time to make one
+            // so currently is Nearest neighbour
+            row.chunks_exact(pixel_size).map(move |pixel| {
+                let pixel_rgb: [u8; 3] = pixel[0..3].try_into().unwrap();
+                Spectrum::from_rgb(ColorRGB::from(pixel_rgb), true).luminance() * sint
+            })
+        });
+    Distribution2D::new(values, width as usize)
+}
+
+struct SkyBuffers {
+    ssbo: AllocatedBuffer,
+    conditional_values: AllocatedImage,
+    conditional_cdf: AllocatedImage,
+}
+
+fn build_sky_raytrace_buffers(
+    device: &Device,
+    mm: &MemoryManager,
+    tcmdm: &mut CommandManager,
+    unf: &mut UnfinishedExecutions,
+    sky: Option<SkyLight>,
+    textures: &[Texture],
+) -> SkyBuffers {
+    let skylight = sky.unwrap_or_default();
+    let rtlight = RTSky {
+        obj2world: skylight.rotation_matrix(),
+        world2obj: skylight.rotation_matrix().invert().unwrap(),
+        tex_id: skylight.tex_id as u32,
+    };
+    let distribution = calculate_skymap_distributions(&textures[rtlight.tex_id as usize]);
+    let values = distribution
+        .conditional()
+        .iter()
+        .flat_map(Distribution1D::values)
+        .copied()
+        .collect::<Vec<_>>();
+    let cdfs = distribution
+        .conditional()
+        .iter()
+        .flat_map(Distribution1D::cdf)
+        .copied()
+        .collect::<Vec<_>>();
+    let conditional_values = upload_2d_buffer(
+        device,
+        mm,
+        tcmdm,
+        unf,
+        distribution.dimensions_values(),
+        vk::Format::R32_SFLOAT,
+        &values,
+    );
+    let conditional_cdf = upload_2d_buffer(
+        device,
+        mm,
+        tcmdm,
+        unf,
+        distribution.dimensions_cdf(),
+        vk::Format::R32_SFLOAT,
+        &cdfs,
+    );
+    let mut ssbo_data = unsafe { as_u8_slice(&rtlight) }.to_vec();
+    let marginal_values = distribution
+        .marginal()
+        .values()
+        .iter()
+        .flat_map(|x| x.to_le_bytes());
+    let marginal_cdf = distribution
+        .marginal()
+        .cdf()
+        .iter()
+        .flat_map(|x| x.to_le_bytes());
+    let conditional_integrals = distribution
+        .conditional()
+        .iter()
+        .map(Distribution1D::integral)
+        .flat_map(|x| x.to_le_bytes());
+    let marginal_cdf_count = distribution.marginal().cdf().len() as u32;
+    let conditional_integrals_offset =
+        ((distribution.marginal().values().len() + distribution.marginal().cdf().len()) * 4) as u32;
+    let conditional_cdf_count = distribution.conditional().first().unwrap().cdf().len() as u32;
+    ssbo_data.extend_from_slice(&marginal_cdf_count.to_le_bytes());
+    ssbo_data.extend_from_slice(&conditional_integrals_offset.to_le_bytes());
+    ssbo_data.extend_from_slice(&conditional_cdf_count.to_le_bytes());
+    ssbo_data.extend(marginal_cdf);
+    ssbo_data.extend(marginal_values);
+    ssbo_data.extend(conditional_integrals);
+    let cpu_buffer = mm.create_buffer(
+        "Sky SSBO CPU",
+        ssbo_data.len() as u64,
+        vk::BufferUsageFlags::TRANSFER_SRC,
+        MemoryLocation::CpuToGpu,
+    );
+    let gpu_buffer = mm.create_buffer(
+        "Sky SSBO GPU",
+        ssbo_data.len() as u64,
+        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+        MemoryLocation::GpuOnly,
+    );
+    let mapped = cpu_buffer
+        .allocation()
+        .mapped_ptr()
+        .expect("Failed to map memory")
+        .cast()
+        .as_ptr();
+    unsafe { std::ptr::copy_nonoverlapping(ssbo_data.as_ptr(), mapped, ssbo_data.len()) };
+    let copy_region = vk::BufferCopy {
+        // these are not the allocation offset, but the buffer offset!
+        src_offset: 0,
+        dst_offset: 0,
+        size: cpu_buffer.size,
+    };
+    let command = unsafe {
+        |device: &ash::Device, cmd: vk::CommandBuffer| {
+            device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+        }
+    };
+    let cmd = tcmdm.get_cmd_buffer();
+    let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
+    unf.add(fence, cpu_buffer);
+    SkyBuffers {
+        ssbo: gpu_buffer,
+        conditional_values,
+        conditional_cdf,
+    }
+}
+
 fn build_raytrace_descriptor(
     dm: &mut DescriptorSetManager,
     acc: &SceneAS,
@@ -2006,9 +2246,10 @@ fn build_raytrace_descriptor(
     light_buffer: &AllocatedBuffer,
     derivative_buffer: &AllocatedBuffer,
     transforms_buffer: &AllocatedBuffer,
-    sky_buffer: &AllocatedBuffer,
+    sky_buffers: &SkyBuffers,
     textures: &[TextureLoaded],
-    sampler: vk::Sampler,
+    linear_sampler: vk::Sampler,
+    nn_sampler: vk::Sampler,
 ) -> Descriptor {
     let textures_memory = textures
         .iter()
@@ -2053,7 +2294,7 @@ fn build_raytrace_descriptor(
         .bind_image_array(
             &textures_memory,
             vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-            sampler,
+            linear_sampler,
             vk::ShaderStageFlags::RAYGEN_KHR
                 | vk::ShaderStageFlags::CLOSEST_HIT_KHR
                 | vk::ShaderStageFlags::ANY_HIT_KHR
@@ -2070,9 +2311,23 @@ fn build_raytrace_descriptor(
             vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .bind_buffer(
-            sky_buffer,
-            vk::DescriptorType::UNIFORM_BUFFER,
-            vk::ShaderStageFlags::RAYGEN_KHR,
+            &sky_buffers.ssbo,
+            vk::DescriptorType::STORAGE_BUFFER,
+            vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CALLABLE_KHR,
+        )
+        .bind_image(
+            &sky_buffers.conditional_values,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            nn_sampler,
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            vk::ShaderStageFlags::CALLABLE_KHR,
+        )
+        .bind_image(
+            &sky_buffers.conditional_cdf,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            nn_sampler,
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            vk::ShaderStageFlags::CALLABLE_KHR,
         )
         .build()
 }

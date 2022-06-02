@@ -75,6 +75,36 @@ impl From<ColorRGB> for [f32; 4] {
     }
 }
 
+impl From<ColorRGB> for [u8; 3] {
+    fn from(col: ColorRGB) -> Self {
+        [
+            (col.r.clamp(0.0, 1.0) * 255.0) as u8,
+            (col.g.clamp(0.0, 1.0) * 255.0) as u8,
+            (col.b.clamp(0.0, 1.0) * 255.0) as u8,
+        ]
+    }
+}
+
+impl From<[u8; 3]> for ColorRGB {
+    fn from(col: [u8; 3]) -> Self {
+        ColorRGB {
+            r: col[0] as f32 / 255.0,
+            g: col[1] as f32 / 255.0,
+            b: col[2] as f32 / 255.0,
+        }
+    }
+}
+
+impl From<[u8; 4]> for ColorRGB {
+    fn from(col: [u8; 4]) -> Self {
+        ColorRGB {
+            r: col[0] as f32 / 255.0,
+            g: col[1] as f32 / 255.0,
+            b: col[2] as f32 / 255.0,
+        }
+    }
+}
+
 impl From<ColorXYZ> for ColorRGB {
     fn from(col: ColorXYZ) -> Self {
         const EXP: f32 = 1.0 / 2.4;

@@ -79,66 +79,59 @@ impl Spectrum {
     /// The `is_light` parameter, specifies if the color is emitted directly from a light.
     pub fn from_rgb(c: ColorRGB, is_light: bool) -> Self {
         let mut res = Spectrum::default();
-        if !is_light {
-            if c.r <= c.g && c.r <= c.b {
-                res += SPECTRUM_WHITE * c.r;
-                if c.g <= c.b {
-                    res += SPECTRUM_CYAN * (c.g - c.r);
-                    res += SPECTRUM_BLUE * (c.b - c.g);
-                } else {
-                    res += SPECTRUM_CYAN * (c.b - c.r);
-                    res += SPECTRUM_GREEN * (c.g - c.b);
-                }
-            } else if c.g <= c.r && c.g <= c.b {
-                res += SPECTRUM_WHITE * c.g;
-                if c.r <= c.b {
-                    res += SPECTRUM_MAGENTA * (c.r - c.g);
-                    res += SPECTRUM_BLUE * (c.b - c.r);
-                } else {
-                    res += SPECTRUM_MAGENTA * (c.b - c.g);
-                    res += SPECTRUM_RED * (c.r - c.b);
-                }
-            } else {
-                res += SPECTRUM_WHITE * c.b;
-                if c.r <= c.g {
-                    res += SPECTRUM_YELLOW * (c.r - c.b);
-                    res += SPECTRUM_GREEN * (c.g - c.r);
-                } else {
-                    res += SPECTRUM_YELLOW * (c.g - c.b);
-                    res += SPECTRUM_RED * (c.r - c.g);
-                }
-            }
-            res *= 0.94;
+        let sp = if !is_light {
+            [
+                SPECTRUM_WHITE,
+                SPECTRUM_CYAN,
+                SPECTRUM_MAGENTA,
+                SPECTRUM_YELLOW,
+                SPECTRUM_RED,
+                SPECTRUM_GREEN,
+                SPECTRUM_BLUE,
+            ]
         } else {
-            if c.r <= c.g && c.r <= c.b {
-                res += SPECTRUM_WHITEL * c.r;
-                if c.g <= c.b {
-                    res += SPECTRUM_CYANL * (c.g - c.r);
-                    res += SPECTRUM_BLUEL * (c.b - c.g);
-                } else {
-                    res += SPECTRUM_CYANL * (c.b - c.r);
-                    res += SPECTRUM_GREENL * (c.g - c.b);
-                }
-            } else if c.g <= c.r && c.g <= c.b {
-                res += SPECTRUM_WHITEL * c.g;
-                if c.r <= c.b {
-                    res += SPECTRUM_MAGENTAL * (c.r - c.g);
-                    res += SPECTRUM_BLUEL * (c.b - c.r);
-                } else {
-                    res += SPECTRUM_MAGENTAL * (c.b - c.g);
-                    res += SPECTRUM_REDL * (c.r - c.b);
-                }
+            [
+                SPECTRUM_WHITEL,
+                SPECTRUM_CYANL,
+                SPECTRUM_MAGENTAL,
+                SPECTRUM_YELLOWL,
+                SPECTRUM_REDL,
+                SPECTRUM_GREENL,
+                SPECTRUM_BLUEL,
+            ]
+        };
+        if c.r <= c.g && c.r <= c.b {
+            res += sp[0] * c.r;
+            if c.g <= c.b {
+                res += sp[1] * (c.g - c.r);
+                res += sp[6] * (c.b - c.g);
             } else {
-                res += SPECTRUM_WHITEL * c.b;
-                if c.r <= c.g {
-                    res += SPECTRUM_YELLOWL * (c.r - c.b);
-                    res += SPECTRUM_GREENL * (c.g - c.r);
-                } else {
-                    res += SPECTRUM_YELLOWL * (c.g - c.b);
-                    res += SPECTRUM_REDL * (c.r - c.g);
-                }
+                res += sp[1] * (c.b - c.r);
+                res += sp[5] * (c.g - c.b);
             }
-            res *= 0.86445;
+        } else if c.g <= c.r && c.g <= c.b {
+            res += sp[0] * c.g;
+            if c.r <= c.b {
+                res += sp[2] * (c.r - c.g);
+                res += sp[6] * (c.b - c.r);
+            } else {
+                res += sp[2] * (c.b - c.g);
+                res += sp[4] * (c.r - c.b);
+            }
+        } else {
+            res += sp[0] * c.b;
+            if c.r <= c.g {
+                res += sp[3] * (c.r - c.b);
+                res += sp[5] * (c.g - c.r);
+            } else {
+                res += sp[3] * (c.g - c.b);
+                res += sp[4] * (c.r - c.g);
+            }
+        }
+        if is_light {
+            res *= 0.86445
+        } else {
+            res *= 0.94
         }
         for i in 0..Spectrum::SAMPLES {
             res.wavelength[i] = res.wavelength[i].clamp(0.0, 1.0);

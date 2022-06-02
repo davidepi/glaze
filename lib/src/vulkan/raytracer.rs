@@ -13,7 +13,7 @@ use crate::vulkan::pipeline::build_raytracing_pipeline;
 use crate::vulkan::FRAMES_IN_FLIGHT;
 #[cfg(feature = "vulkan-interactive")]
 use crate::PresentInstance;
-use crate::{Camera, Light, Material, Pipeline, RayTraceInstance, RealtimeRenderer};
+use crate::{Camera, Light, Material, Pipeline, RayTraceInstance, RealtimeRenderer, Texture};
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
 use cgmath::SquareMatrix;
@@ -236,11 +236,18 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         &mut self,
         materials: &[Material],
         lights: &[Light],
+        textures: &[Texture],
         sky: Option<SkyLight>,
     ) {
         let mut unf = UnfinishedExecutions::new(self.instance.device());
-        self.scene
-            .update_materials_and_lights(materials, lights, sky, &mut self.tcmdm, &mut unf);
+        self.scene.update_materials_and_lights(
+            materials,
+            lights,
+            sky,
+            textures,
+            &mut self.tcmdm,
+            &mut unf,
+        );
         unf.wait_completion();
         self.request_new_frame = true;
     }

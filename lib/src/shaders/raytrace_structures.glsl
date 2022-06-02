@@ -59,6 +59,7 @@ struct RTLight
 
 struct RTSky
 {
+  mat4 obj2world;
   mat4 world2obj;
   uint tex_id;
 };

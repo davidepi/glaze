@@ -10,6 +10,8 @@ mod spectrum;
 pub use self::spectrum::Spectrum;
 mod light;
 pub use self::light::{Light, LightType, SkyLight};
+mod distribution;
+pub use self::distribution::{Distribution1D, Distribution2D};
 
 #[cfg(feature = "vulkan")]
 pub use self::light::SBT_LIGHT_STRIDE;

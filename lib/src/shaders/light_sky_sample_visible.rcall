@@ -1,6 +1,102 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 
+#include "raytrace_structures.glsl"
+#include "raytrace_commons.glsl"
+
+layout(location = 0)  callableDataInEXT SampledLight sam;
+
+layout(set=1, binding=9, std430) readonly buffer skyBuf {
+  RTSky sky;
+  uint marginal_cdf_count;
+  uint conditional_integral_offset;
+  uint conditional_cdf_count;
+  float marginal_integral;
+  float marginal[];
+} SkyBuf;
+layout(set = 1, binding=10) uniform sampler2D cond_val;
+layout(set = 1, binding=11) uniform sampler2D cond_cdf;
+
+float sample_marginal(in float rand, out uint conditional_index, out float pdf)
+{
+  // use binary search to find the cdf interval
+  int size = int(SkyBuf.marginal_cdf_count);
+  int first = 0;
+  int len = size;
+  while (len > 0)
+  {
+    int halff = len >> 1;
+    int middle = first + halff;
+    if(SkyBuf.marginal[middle] >= rand)
+    {
+      first = middle +1;
+      len -= halff + 1;
+    }
+    else
+    {
+      len = halff;
+    }
+  }
+  uint offset = uint(clamp(first-1, 0, size-2));
+  float cur = SkyBuf.marginal[offset];
+  float next = SkyBuf.marginal[offset + 1];
+  float du = rand - cur; // how far is rand from prev. 0.0 if rand == prev, 1.0 if rand == next
+  if(next - cur > 0.0)
+  {
+    du /= next - cur;
+  }
+  uint values_offset = SkyBuf.marginal_cdf_count * 4; // 4 == sizeof(float)
+  pdf = SkyBuf.marginal[values_offset + offset] / SkyBuf.marginal_integral;
+  conditional_index = offset;
+  // reweight the sample in the interval (0.0, 1.0)
+  return (float(offset) + du) / float(SkyBuf.marginal_cdf_count);
+}
+
+// exactly the same as sample_marginal, but uses a 2D image
+float sample_conditional(in float rand, in uint conditional_index, out float pdf)
+{
+  int size = int(SkyBuf.conditional_cdf_count);
+  int first = 0;
+  int len = size;
+  while (len > 0)
+  {
+    int halff = len >> 1;
+    int middle = first + halff;
+    if(texture(cond_cdf, vec2(middle, conditional_index)).x >= rand)
+    {
+      first = middle +1;
+      len -= halff + 1;
+    }
+    else
+    {
+      len = halff;
+    }
+  }
+  uint offset = uint(clamp(first-1, 0, size-2));
+  float cur = texture(cond_cdf, vec2(offset, conditional_index)).x;
+  float next = texture(cond_cdf, vec2(offset + 1, conditional_index)).x;
+  float du = rand - cur;
+  if(next - cur > 0.0)
+  {
+    du /= next - cur;
+  }
+  pdf = texture(cond_val, vec2(offset, conditional_index)).x /
+        SkyBuf.marginal[SkyBuf.conditional_integral_offset + conditional_index];
+  return (float(offset) + du) / float(SkyBuf.conditional_cdf_count);
+
+}
+
+vec2 sample_distribution(in vec2 rand_sample, out float pdf)
+{
+  float u_pdf;
+  float v_pdf;
+  uint conditional_index;
+  float v = sample_marginal(rand_sample.y, conditional_index, v_pdf);
+  float u = sample_conditional(rand_sample.x, conditional_index, u_pdf);
+  pdf = u_pdf * v_pdf;
+  return vec2(u, v);
+}
+
 void main()
 {
 }

@@ -76,6 +76,7 @@ pub struct RTLight {
 #[repr(C, align(16))]
 #[derive(Debug, Copy, Clone)]
 pub struct RTSky {
+    pub obj2world: Matrix4<f32>,
     pub world2obj: Matrix4<f32>,
     pub tex_id: u32,
 }
@@ -86,6 +87,6 @@ pub const PT_STEPS: usize = 6;
 #[derive(Debug, Copy, Clone)]
 pub struct PTLastVertex {
     pub importance: Spectrum,
-    pub wi: [f32; 4],  //wi.z indicates if the last bounce was specular
-    pub hit: [f32; 4], //hit.z indicates the bounce number
+    pub wi: [f32; 4],  // wi.z indicates if the last bounce was specular
+    pub hit: [f32; 4], // hit.z indicates the bounce number
 }
