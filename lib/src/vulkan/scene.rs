@@ -76,9 +76,9 @@ pub struct VulkanScene {
     pub(super) instances: FnvHashMap<u16, Vec<u16>>,
     /// Scene level descriptor set
     pub(super) scene_desc: Descriptor,
-    /// skylighy used for the skydome.
-    skylight: Option<(SkyLight, Option<SkydomeDrawData>)>,
-    /// All the lights in the scene.
+    /// skylight draw data.
+    pub(super) skydome_data: Option<SkydomeDrawData>,
+    /// All the lights in the scene, including skylight. Skylight is ALWAYS the last member.
     lights: Vec<Light>,
     /// Instance storing this scene.
     instance: Arc<PresentInstance>,
@@ -171,7 +171,7 @@ impl VulkanScene {
         let materials = parsed
             .materials()
             .unwrap_or_else(|_| vec![Material::default()]);
-        let mut lights = parsed.lights().unwrap_or_default();
+        let lights = parsed.lights().unwrap_or_default();
         let params_buffer = load_materials_parameters(device, &materials, mm, &mut tcmdm, &mut unf);
         unf.wait_completion();
         let materials_desc = materials
@@ -203,14 +203,9 @@ impl VulkanScene {
             MemoryLocation::CpuToGpu,
         );
         sort_meshes(&mut meshes, &materials_desc);
-        let skylight = lights.iter().find_map(|l| match l {
-            Light::Sky(s) => Some((*s, None)),
-            _ => None,
-        });
-        lights = lights
-            .into_iter()
-            .filter(|l| l.ltype() != LightType::SKY)
-            .collect();
+        // ensures a single skylight and as last member. This guarantee is not satisfied by the
+        // parser but by the scene.
+        let lights = reorder_lights(lights);
         let meta = parsed.meta().unwrap_or_default();
         let scene_desc = build_realtime_descriptor(&mut dm, &transforms);
         VulkanScene {
@@ -235,7 +230,7 @@ impl VulkanScene {
             scene_desc,
             lights,
             instance,
-            skylight,
+            skydome_data: None,
         }
     }
 
@@ -351,18 +346,18 @@ impl VulkanScene {
                 )
             });
         }
-        if let Some((sky, data)) = &mut self.skylight {
+        if let Some(light) = self.lights.last().and_then(Light::as_sky) {
             let device = self.instance.device();
             let mm = self.instance.allocator();
             let mut tcmdm =
                 CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
-            *data = Some(build_skydome_realtime(
+            self.skydome_data = Some(build_skydome_realtime(
                 device,
                 mm,
                 render_size,
                 &mut tcmdm,
                 &mut self.dm,
-                *sky,
+                light,
                 &self.textures.read().unwrap(),
                 self.sampler,
                 renderpass,
@@ -373,9 +368,7 @@ impl VulkanScene {
     /// Destroys the scene's pipelines.
     pub(super) fn deinit_pipelines(&mut self) {
         self.pipelines.clear();
-        if let Some((_, data)) = &mut self.skylight {
-            *data = None;
-        }
+        self.skydome_data = None;
     }
 
     /// Returns a material in the scene, given its ID.
@@ -404,47 +397,7 @@ impl VulkanScene {
 
     /// Returns the light used as skydome.
     pub fn skydome(&self) -> Option<SkyLight> {
-        if let Some((sky, _)) = self.skylight {
-            Some(sky)
-        } else {
-            None
-        }
-    }
-
-    pub(super) fn skydome_data(&self) -> Option<(SkyLight, &SkydomeDrawData)> {
-        if let Some((sky, Some(dd))) = &self.skylight {
-            Some((*sky, dd))
-        } else {
-            None
-        }
-    }
-
-    pub(super) fn set_skydome(
-        &mut self,
-        skydome: Option<SkyLight>,
-        render_size: vk::Extent2D,
-        renderpass: vk::RenderPass,
-    ) {
-        self.skylight = if let Some(sky) = skydome {
-            let device = self.instance.device();
-            let mm = self.instance.allocator();
-            let mut tcmdm =
-                CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
-            let render_data = build_skydome_realtime(
-                device,
-                mm,
-                render_size,
-                &mut tcmdm,
-                &mut self.dm,
-                sky,
-                &self.textures.read().unwrap(),
-                self.sampler,
-                renderpass,
-            );
-            Some((sky, Some(render_data)))
-        } else {
-            None
-        };
+        self.lights.last().and_then(Light::as_sky)
     }
 
     /// Adds a single texture to the scene.
@@ -473,20 +426,45 @@ impl VulkanScene {
     }
 
     /// Returns all the lights in the scene.
+    /// The sky is ALWAYS the last light in this slice.
+    ///
+    /// If the last element is not a [LightType::SKY] no such type can be found in the slice.
     pub fn lights(&self) -> &[Light] {
         &self.lights
     }
 
-    pub fn update_lights(&mut self, lights: &[Light]) {
-        self.lights = lights.to_vec();
+    pub(super) fn update_lights(
+        &mut self,
+        lights: &[Light],
+        render_size: vk::Extent2D,
+        renderpass: vk::RenderPass,
+    ) {
+        self.lights = reorder_lights(lights.to_vec());
+        if let Some(sky) = self.lights.last().and_then(Light::as_sky) {
+            // update skydome
+            let device = self.instance.device();
+            let mm = self.instance.allocator();
+            let mut tcmdm =
+                CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
+            self.skydome_data = Some(build_skydome_realtime(
+                device,
+                mm,
+                render_size,
+                &mut tcmdm,
+                &mut self.dm,
+                sky,
+                &self.textures.read().unwrap(),
+                self.sampler,
+                renderpass,
+            ));
+        } else {
+            self.skydome_data = None;
+        }
     }
 
     pub fn save(&mut self) -> Result<(), std::io::Error> {
         let cameras = [self.current_cam];
-        let mut lights = self.lights().to_vec();
-        if let Some((sky, _)) = self.skylight {
-            lights.push(Light::Sky(sky));
-        }
+        let lights = self.lights().to_vec();
         let materials = self.materials().to_vec();
         let meta = &self.meta;
         let textures = if self.edited_textures {
@@ -587,6 +565,15 @@ fn gen_icosphere(order: u8) -> (Vec<f32>, Vec<u32>) {
             .collect();
     }
     (vertices, indices)
+}
+
+fn reorder_lights(mut lights: Vec<Light>) -> Vec<Light> {
+    let sky = lights.iter().find_map(|l| l.as_sky());
+    lights.retain(|l| l.ltype() != LightType::SKY);
+    if let Some(sky) = sky {
+        lights.push(Light::Sky(sky));
+    }
+    lights
 }
 
 fn build_skydome_realtime(
@@ -1322,6 +1309,7 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     transforms_buffer: Arc<AllocatedBuffer>,
     // (material_id, transform_ids)
     material_instance_ids: FnvHashMap<u16, Vec<u16>>,
+    sky: Option<SkyLight>,
     sky_buffer: SkyBuffers,
     // does not account for skylights
     pub(crate) lights_no: u32,
@@ -1360,7 +1348,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         let materials = parsed
             .materials()
             .unwrap_or_else(|_| vec![Material::default()]);
-        let mut lights = parsed.lights().unwrap_or_default();
+        let lights = reorder_lights(parsed.lights().unwrap_or_default());
         let mut dm = DescriptorSetManager::new(
             instance.device().logical_clone(),
             &Self::AVG_DESC,
@@ -1424,23 +1412,15 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
         let linear_sampler = create_sampler(device, false);
         let nn_sampler = create_sampler(device, true);
-        let sky = lights
-            .iter()
-            .find_map(|s| match s {
-                Light::Sky(s) => Some(s),
-                _ => None,
-            })
-            .copied();
+        let sky = lights.last().and_then(Light::as_sky);
         let sky_buffer =
             build_sky_raytrace_buffers(device, mm, &mut tcmdm, &mut unf, sky, &raw_textures);
-        lights.retain(|l| l.ltype() != LightType::SKY);
         let light_buffer = load_raytrace_lights_to_gpu(
             device,
             mm,
             &mut tcmdm,
             &mut unf,
             &lights,
-            sky,
             &material_instance_ids,
         );
         let descriptor = build_raytrace_descriptor(
@@ -1473,6 +1453,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             derivative_buffer,
             transforms_buffer: Arc::new(transforms_buffer),
             material_instance_ids,
+            sky,
             sky_buffer,
             lights_no: lights.len() as u32,
             meta,
@@ -1507,7 +1488,6 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         &mut self,
         materials: &[Material],
         lights: &[Light],
-        sky: Option<SkyLight>,
         textures: &[Texture],
         tcmdm: &mut CommandManager,
         unf: &mut UnfinishedExecutions,
@@ -1522,19 +1502,22 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             tcmdm,
             unf,
             lights,
-            sky,
             &self.material_instance_ids,
         );
-        let mut sky_buffer = build_sky_raytrace_buffers(device, mm, tcmdm, unf, sky, textures);
+        let sky = lights.last().and_then(Light::as_sky);
+        if sky != self.sky {
+            let mut sky_buffer = build_sky_raytrace_buffers(device, mm, tcmdm, unf, sky, textures);
+            std::mem::swap(&mut self.sky_buffer, &mut sky_buffer);
+            unf.add_buffer(sky_buffer.ssbo);
+            unf.add_image(sky_buffer.conditional_values);
+            unf.add_image(sky_buffer.conditional_cdf);
+            self.sky = sky;
+        }
         // cannot drop yet, the loading is not finished yet
         std::mem::swap(&mut self.material_buffer, &mut mat_buffer);
         std::mem::swap(&mut self.light_buffer, &mut light_buffer);
-        std::mem::swap(&mut self.sky_buffer, &mut sky_buffer);
         unf.add_buffer(mat_buffer);
         unf.add_buffer(light_buffer);
-        unf.add_buffer(sky_buffer.ssbo);
-        unf.add_image(sky_buffer.conditional_values);
-        unf.add_image(sky_buffer.conditional_cdf);
         self.lights_no = lights.len() as u32;
         self.refresh_descriptors();
     }
@@ -1619,19 +1602,13 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             &mut tcmdm,
             &mut unf,
             &scene.lights,
-            scene.skylight.as_ref().map(|(s, _)| s).copied(),
             &material_instance_ids,
         );
         let linear_sampler = create_sampler(device, false);
         let nn_sampler = create_sampler(device, true);
-        let sky_buffer = build_sky_raytrace_buffers(
-            device,
-            mm,
-            &mut tcmdm,
-            &mut unf,
-            scene.skydome(),
-            &scene.raw_textures,
-        );
+        let sky = scene.skydome();
+        let sky_buffer =
+            build_sky_raytrace_buffers(device, mm, &mut tcmdm, &mut unf, sky, &scene.raw_textures);
         let descriptor = build_raytrace_descriptor(
             &mut dm,
             &acc,
@@ -1662,6 +1639,7 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
             derivative_buffer,
             transforms_buffer,
             material_instance_ids,
+            sky,
             sky_buffer,
             lights_no: scene.lights.len() as u32,
             meta,
@@ -1780,7 +1758,6 @@ fn load_raytrace_lights_to_gpu(
     tcmdm: &mut CommandManager,
     unf: &mut UnfinishedExecutions,
     lights: &[Light],
-    _sky: Option<SkyLight>,
     transform_ids: &FnvHashMap<u16, Vec<u16>>,
 ) -> AllocatedBuffer {
     let mut data = Vec::new();
@@ -2181,6 +2158,7 @@ fn build_sky_raytrace_buffers(
         .cdf()
         .iter()
         .flat_map(|x| x.to_le_bytes());
+    let marginal_integral = distribution.marginal().integral();
     let conditional_integrals = distribution
         .conditional()
         .iter()
@@ -2188,11 +2166,12 @@ fn build_sky_raytrace_buffers(
         .flat_map(|x| x.to_le_bytes());
     let marginal_cdf_count = distribution.marginal().cdf().len() as u32;
     let conditional_integrals_offset =
-        ((distribution.marginal().values().len() + distribution.marginal().cdf().len()) * 4) as u32;
+        (distribution.marginal().values().len() + distribution.marginal().cdf().len()) as u32;
     let conditional_cdf_count = distribution.conditional().first().unwrap().cdf().len() as u32;
     ssbo_data.extend_from_slice(&marginal_cdf_count.to_le_bytes());
     ssbo_data.extend_from_slice(&conditional_integrals_offset.to_le_bytes());
     ssbo_data.extend_from_slice(&conditional_cdf_count.to_le_bytes());
+    ssbo_data.extend_from_slice(&marginal_integral.to_le_bytes());
     ssbo_data.extend(marginal_cdf);
     ssbo_data.extend(marginal_values);
     ssbo_data.extend(conditional_integrals);

@@ -42,7 +42,6 @@ pub struct UiState {
     materials_selected: Option<u16>,
     lights_window: bool,
     light_selected: Option<usize>,
-    sky_selected: Option<SkyLight>,
     spectrum_temperature: bool,
     stats_window: bool,
     info_window: bool,
@@ -72,7 +71,6 @@ impl UiState {
             materials_selected: None,
             lights_window: false,
             light_selected: None,
-            sky_selected: None,
             spectrum_temperature: true,
             stats_window: true,
             info_window: false,
@@ -692,7 +690,6 @@ fn window_materials(
                         &materials,
                         &lights,
                         renderer.scene().textures(),
-                        state.sky_selected,
                     );
                 }
             }
@@ -753,6 +750,7 @@ fn window_lights(
         .begin(ui)
     {
         let scene = renderer.scene();
+        let mut sky = scene.skydome();
         if imgui::Slider::new("Exposure", 1E-3, 1E3)
             .flags(SliderFlags::ALWAYS_CLAMP | SliderFlags::LOGARITHMIC)
             .build(ui, &mut exposure)
@@ -773,7 +771,7 @@ fn window_lights(
         ui.spacing();
         // Skylight
         ui.text("Sky Dome");
-        let dome_preview = match &state.sky_selected {
+        let dome_preview = match &sky {
             Some(sky) => {
                 let texture = renderer.scene().single_texture(sky.tex_id).unwrap();
                 &texture.info().name
@@ -784,7 +782,7 @@ fn window_lights(
             .preview_value(dome_preview)
             .build(ui, || {
                 if Selectable::new("None").build(ui) {
-                    state.sky_selected = None;
+                    sky = None;
                     update_lights = true;
                 }
                 renderer
@@ -794,10 +792,10 @@ fn window_lights(
                     .enumerate()
                     .for_each(|(id, texture)| {
                         if Selectable::new(&texture.info().name).build(ui) {
-                            match state.sky_selected {
-                                Some(mut s) => s.tex_id = id as u16,
+                            match &mut sky {
+                                Some(s) => s.tex_id = id as u16,
                                 None => {
-                                    state.sky_selected = Some(SkyLight {
+                                    sky = Some(SkyLight {
                                         tex_id: id as u16,
                                         ..Default::default()
                                     });
@@ -812,7 +810,7 @@ fn window_lights(
                         }
                     });
             });
-        if let Some(sky) = &mut state.sky_selected {
+        if let Some(sky) = &mut sky {
             ui.same_line();
             if ImageButton::new(TextureId::new(sky.tex_id as usize), [16.0, 16.0])
                 .frame_padding(0)
@@ -978,14 +976,29 @@ fn window_lights(
                 lights.remove(old);
                 state.light_selected = None;
             }
+            // add/modify sky
+            if let Some(last) = lights.last_mut() {
+                if last.ltype() == LightType::SKY {
+                    //modify existing
+                    if let Some(sky) = sky {
+                        *last = Light::Sky(sky);
+                    } else {
+                        // remove
+                        lights.pop();
+                    }
+                } else {
+                    // push new sky
+                    if let Some(sky) = sky {
+                        lights.push(Light::Sky(sky));
+                    }
+                }
+            }
             renderer.update_light(&lights);
-            renderer.set_skydome(state.sky_selected);
             if let Some(raytracer) = raytracer.as_mut() {
                 raytracer.update_materials_and_lights(
                     &materials,
                     &lights,
                     renderer.scene().textures(),
-                    state.sky_selected,
                 );
             }
         }

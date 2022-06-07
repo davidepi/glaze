@@ -9,7 +9,6 @@ use super::scene::VulkanScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
 use super::{UnfinishedExecutions, FRAMES_IN_FLIGHT};
-use crate::geometry::SkyLight;
 use crate::parser::NoScene;
 use crate::{include_shader, Camera, Light, Material, RayTraceRenderer, Texture};
 use ash::vk;
@@ -258,15 +257,6 @@ impl RealtimeRenderer {
         self.forward_pass.clear_color[0].color.float32 = self.clear_color;
     }
 
-    /// Sets the skydome of the scene.
-    pub fn set_skydome(&mut self, sky: Option<SkyLight>) {
-        self.wait_idle();
-        let (width, height) = self.render_size();
-        let render_size = vk::Extent2D { width, height };
-        self.scene
-            .set_skydome(sky, render_size, self.forward_pass.renderpass);
-    }
-
     /// Returns the current stats of the renderer.
     pub fn stats(&self) -> Stats {
         self.stats.last_val
@@ -403,7 +393,12 @@ impl RealtimeRenderer {
     /// Updates the lights in the loaded scene.
     pub fn update_light(&mut self, lights: &[Light]) {
         self.wait_idle();
-        self.scene.update_lights(lights);
+        let render_size = vk::Extent2D {
+            width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
+            height: (self.swapchain.extent().height as f32 * self.render_scale) as u32,
+        };
+        self.scene
+            .update_lights(lights, render_size, self.forward_pass.renderpass);
     }
 
     /// Adds a texture to the loaded scene.
@@ -628,9 +623,11 @@ fn draw_background(
     cmd: vk::CommandBuffer,
     stats: &mut InternalStats,
 ) {
-    if let Some((sky, dd)) = scene.skydome_data() {
+    if let Some(dd) = &scene.skydome_data {
         let camera = scene.current_cam;
         let scale = Matrix4::<f32>::from_scale(10.0);
+        // if skydome_data is some, last member of lights MUST be the sky as per scene constraints.
+        let sky = scene.lights().last().and_then(Light::as_sky).unwrap();
         let rotation = sky.rotation_matrix();
         let translation =
             Matrix4::<f32>::from_translation(camera.position() - Point3::new(0.0, 0.0, 0.0));

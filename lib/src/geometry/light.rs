@@ -224,6 +224,13 @@ impl Light {
             _ => u32::MAX,
         }
     }
+
+    pub fn as_sky(&self) -> Option<SkyLight> {
+        match self {
+            Light::Sky(l) => Some(*l),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

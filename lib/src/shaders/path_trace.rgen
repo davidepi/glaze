@@ -155,7 +155,6 @@ void main()
       vec2 uv = vec2(u, acos(w.z)) * INV_2PI;
       vec3 sampled_texel =
         texture(textures[nonuniformEXT(SkyUniform.sky.tex_id)], uv).rgb;
-      //vec3 sampled_texel = vec3(uv, 0.0);
       update_result(from_illuminant_color(sampled_texel));
     }
     RESET_PATH;

@@ -1,11 +1,21 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier: require
 
 #include "raytrace_structures.glsl"
 #include "raytrace_commons.glsl"
+#include "constants.glsl"
+#include "spectrum.glsl"
 
 layout(location = 0)  callableDataInEXT SampledLight sam;
 
+layout(set=0, binding=0) uniform readonly frameData {
+  uint seed;
+  uint lights_no;
+  vec2 pixel_offset;
+  float scene_radius;
+  bool new_frame;
+}FrameData;
 layout(set=1, binding=9, std430) readonly buffer skyBuf {
   RTSky sky;
   uint marginal_cdf_count;
@@ -14,6 +24,7 @@ layout(set=1, binding=9, std430) readonly buffer skyBuf {
   float marginal_integral;
   float marginal[];
 } SkyBuf;
+layout(set=1, binding=6) uniform sampler2D textures[];
 layout(set = 1, binding=10) uniform sampler2D cond_val;
 layout(set = 1, binding=11) uniform sampler2D cond_cdf;
 
@@ -27,7 +38,7 @@ float sample_marginal(in float rand, out uint conditional_index, out float pdf)
   {
     int halff = len >> 1;
     int middle = first + halff;
-    if(SkyBuf.marginal[middle] >= rand)
+    if(SkyBuf.marginal[middle] <= rand)
     {
       first = middle +1;
       len -= halff + 1;
@@ -45,7 +56,7 @@ float sample_marginal(in float rand, out uint conditional_index, out float pdf)
   {
     du /= next - cur;
   }
-  uint values_offset = SkyBuf.marginal_cdf_count * 4; // 4 == sizeof(float)
+  uint values_offset = SkyBuf.marginal_cdf_count;
   pdf = SkyBuf.marginal[values_offset + offset] / SkyBuf.marginal_integral;
   conditional_index = offset;
   // reweight the sample in the interval (0.0, 1.0)
@@ -62,7 +73,7 @@ float sample_conditional(in float rand, in uint conditional_index, out float pdf
   {
     int halff = len >> 1;
     int middle = first + halff;
-    if(texture(cond_cdf, vec2(middle, conditional_index)).x >= rand)
+    if(texture(cond_cdf, vec2(middle, conditional_index)).x <= rand)
     {
       first = middle +1;
       len -= halff + 1;
@@ -99,4 +110,26 @@ vec2 sample_distribution(in vec2 rand_sample, out float pdf)
 
 void main()
 {
+  float pdf;
+  vec2 uv = sample_distribution(sam.rand_sample.xy, pdf);
+  float theta = uv.y * PI;
+  float sint = sin(theta);
+  if(pdf > 0.0 && sint != 0.0)
+  {
+    float phi = uv.x * TWO_PI;
+    float cost = cos(theta);
+    float cosp = cos(phi);
+    float sinp = sin(phi);
+    sam.pdf = pdf / (2.0 * PI * PI * sint);
+    vec3 wi = vec3(sint * cosp, sint * sinp, cost);
+    sam.wiW = normalize(SkyBuf.sky.obj2world * vec4(wi, 0.0)).xyz;
+    sam.distance = 2.0*FrameData.scene_radius+1;
+    vec3 sampled_texel =
+      texture(textures[nonuniformEXT(SkyBuf.sky.tex_id)], uv).rgb;
+    sam.emission = from_illuminant_color(sampled_texel);
+  }
+  else
+  {
+    sam.pdf = 0.0;
+  }
 }
