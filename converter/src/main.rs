@@ -641,7 +641,7 @@ fn benchmark(
         let preprocess_end = Instant::now();
         let conversion = convert_input(preprocessed, input, gen_mm)?;
         let conversion_end = Instant::now();
-        let _ = write_output(conversion, version, file.to_str().unwrap())?;
+        write_output(conversion, version, file.to_str().unwrap())?;
         let compression_end = Instant::now();
         writeln!(&mut conv_results, "--- Writing ---")?;
         writeln!(

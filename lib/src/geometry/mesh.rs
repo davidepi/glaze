@@ -3,7 +3,7 @@ use cgmath::Matrix;
 use cgmath::{Matrix4, SquareMatrix};
 
 /// A collection of triangles in 3D space, having the same material.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mesh {
     /// Unique ID for the current mesh.
     pub id: u16,

@@ -309,11 +309,11 @@ impl VulkanScene {
         // keep the list of lights aligned
         let old = &self.materials[mat_id as usize];
         if new.emissive_col.is_some() || old.emissive_col.is_some() {
-            if new.emissive_col.is_some() && !old.emissive_col.is_some() {
+            if new.emissive_col.is_some() && old.emissive_col.is_none() {
                 // lights should be added
                 self.lights
                     .push(Light::new_area(new.name.clone(), mat_id as u32, 1.0));
-            } else if !new.emissive_col.is_some() && old.emissive_col.is_some() {
+            } else if new.emissive_col.is_none() && old.emissive_col.is_some() {
                 // light should be removed
                 self.lights
                     .retain(|x| x.ltype() != LightType::AREA || x.material_id() != mat_id as u32);

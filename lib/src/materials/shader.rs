@@ -174,12 +174,12 @@ impl ShaderMat {
 
     /// Returns true if the shader can use a normal map.
     pub fn use_normal(&self) -> bool {
-        return true;
+        true
     }
 
     /// Returns true if the shader can use an opacity map.
     pub fn use_opacity(&self) -> bool {
-        return true;
+        true
     }
 
     /// Returns true if the shader can model a Fresnel conductor.
@@ -212,10 +212,7 @@ impl ShaderMat {
 
     /// Returns true if the shader can have an emissive color
     pub fn use_emission(&self) -> bool {
-        match self {
-            ShaderMat::FLAT | ShaderMat::LAMBERT => true,
-            _ => false,
-        }
+        matches!(self, ShaderMat::FLAT | ShaderMat::LAMBERT)
     }
 
     /// Returns a builder useful to create the pipeline for the shader.
