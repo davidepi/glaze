@@ -15,8 +15,8 @@ glaze = {path = "../lib", default-features=false}
 clap = {version="3.1", features=["derive"]}
 cgmath = "0.18"
 russimp = "0.2.3"
-indicatif = "0.17.0-rc.9"
+indicatif = "0.17.0-rc.11"
 console = "0.15"
-image = "0.23"
+image = "0.24"
 rayon = "1.5"
 tempfile = "3.2"

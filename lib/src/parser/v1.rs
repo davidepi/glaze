@@ -6,8 +6,8 @@ use crate::{
 };
 use cgmath::{Point2, Point3, Vector3 as Vec3};
 use fnv::FnvHashMap;
-use image::png::{CompressionType, FilterType, PngDecoder, PngEncoder};
-use image::{GrayImage, ImageDecoder, RgbaImage};
+use image::codecs::png::{CompressionType, FilterType, PngDecoder, PngEncoder};
+use image::{GrayImage, ImageDecoder, ImageEncoder, RgbaImage};
 use rayon::iter::ParallelIterator;
 use rayon::prelude::IntoParallelIterator;
 use std::convert::TryInto;
@@ -783,8 +783,8 @@ fn texture_to_bytes(texture: &Texture) -> Vec<u8> {
         let (w_mip, h_mip) = texture.dimensions(level);
         let mip = texture.raw(level);
         // ad-hoc compression surely better than general purpose one
-        PngEncoder::new_with_quality(&mut mip_data, CompressionType::Fast, FilterType::Up)
-            .encode(
+        PngEncoder::new_with_quality(&mut mip_data, CompressionType::Fast, FilterType::Adaptive)
+            .write_image(
                 mip,
                 w_mip as u32,
                 h_mip as u32,
@@ -1144,7 +1144,6 @@ mod tests {
         Transform,
     };
     use cgmath::{Matrix4, Point2, Point3, Vector3 as Vec3};
-    use image::GenericImageView;
     use rand::distributions::Alphanumeric;
     use rand::prelude::*;
     use rand::Rng;

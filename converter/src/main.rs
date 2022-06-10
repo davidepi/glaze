@@ -11,7 +11,6 @@ use glaze::{
     Transform, Vertex, DEFAULT_TEXTURE_ID,
 };
 use image::io::Reader as ImageReader;
-use image::GenericImageView;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use russimp::material::{MaterialProperty, PropertyTypeInfo};
 use russimp::scene::{PostProcess, Scene as RussimpScene};

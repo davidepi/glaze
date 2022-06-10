@@ -46,7 +46,7 @@ fn compile_spirv(variants: &[(&str, &str, &str)]) -> Result<(), Box<dyn Error>> 
             .push((*define, *outname));
     }
     std::fs::create_dir_all(outdir.clone())?;
-    let mut compiler = Compiler::new().expect("Failed to find a SPIR-V compiler");
+    let compiler = Compiler::new().expect("Failed to find a SPIR-V compiler");
     let mut options = CompileOptions::new().expect("Error while initializing compiler");
     options.set_include_callback(handle_includes);
     options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
