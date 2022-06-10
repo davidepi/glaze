@@ -2,6 +2,7 @@ use super::cmd::CommandManager;
 use super::device::Device;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::scene::VulkanMesh;
+use super::Instance;
 use crate::{Material, MeshInstance, Transform, Vertex};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
@@ -37,18 +38,25 @@ pub struct SceneASBuilder<'scene, 'renderer> {
     mm: &'renderer MemoryManager,
     ccmdm: &'renderer mut CommandManager,
     device: &'renderer Device,
+    properties: vk::PhysicalDeviceAccelerationStructurePropertiesKHR,
     loader: Arc<AccelerationLoader>,
 }
 
 impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
-    pub fn new(
-        device: &'renderer Device,
+    pub fn new<T: Instance>(
+        instance: &'renderer T,
         loader: Arc<AccelerationLoader>,
         mm: &'renderer MemoryManager,
         ccmdm: &'renderer mut CommandManager,
         vertex_buffer: &'scene AllocatedBuffer,
         index_buffer: &'scene AllocatedBuffer,
     ) -> Self {
+        let properties = unsafe {
+            AccelerationLoader::get_properties(
+                instance.instance(),
+                instance.device().physical().device,
+            )
+        };
         SceneASBuilder {
             vkmeshes: &[],
             instances: &[],
@@ -58,7 +66,8 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             ib: index_buffer,
             mm,
             ccmdm,
-            device,
+            device: instance.device(),
+            properties,
             loader,
         }
     }
@@ -169,9 +178,12 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             blas_ci.push((mesh.mesh_id, build_info, build_range, geometry, req_mem));
         }
         // allocates buffer
+        let min_align = self
+            .properties
+            .min_acceleration_structure_scratch_offset_alignment as u64;
         let scratch_buf = self.mm.create_buffer(
             "BLAS scratch",
-            scratch_size,
+            scratch_size + min_align,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             MemoryLocation::GpuOnly,
         );
@@ -180,7 +192,8 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             p_next: ptr::null(),
             buffer: scratch_buf.buffer,
         };
-        let scratch_addr = unsafe { vkdevice.get_buffer_device_address(&scratch_addr_info) };
+        let mut scratch_addr = unsafe { vkdevice.get_buffer_device_address(&scratch_addr_info) };
+        scratch_addr += min_align - scratch_addr % min_align;
         // create blases in chunks of 512MB (compaction is done after ALL the blases are created)
         // thats why I need to split in chunks.
         const MAX_CHUNK_SIZE: u64 = 536870912;
@@ -429,9 +442,12 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             req_mem.acceleration_structure_size,
             false,
         );
+        let min_align = self
+            .properties
+            .min_acceleration_structure_scratch_offset_alignment as u64;
         let scratch_buf = self.mm.create_buffer(
             "TLAS scratch",
-            req_mem.build_scratch_size,
+            req_mem.build_scratch_size + min_align,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             MemoryLocation::GpuOnly,
         );
@@ -440,7 +456,8 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             p_next: ptr::null(),
             buffer: scratch_buf.buffer,
         };
-        let scratch_addr = unsafe { vkdevice.get_buffer_device_address(&scratch_addr_info) };
+        let mut scratch_addr = unsafe { vkdevice.get_buffer_device_address(&scratch_addr_info) };
+        scratch_addr += min_align - scratch_addr % min_align;
         // build the tlas
         build_info.dst_acceleration_structure = tlas.accel;
         build_info.scratch_data = vk::DeviceOrHostAddressKHR {

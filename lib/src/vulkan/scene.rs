@@ -1404,7 +1404,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         ));
         let material_instance_ids = map_materials_to_instances(&meshes, &instances);
         let builder = SceneASBuilder::new(
-            device,
+            instance.as_ref(),
             loader,
             mm,
             &mut ccmdm,
@@ -1594,7 +1594,7 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
         );
         let material_instance_ids = map_materials_to_instances(&scene.meshes, &instances);
         let builder = SceneASBuilder::new(
-            device,
+            instance.as_ref(),
             loader,
             mm,
             &mut ccmdm,
