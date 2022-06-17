@@ -147,7 +147,7 @@ void main()
   traceRayEXT(scene, 0, 0xFF, 0, 0, 0, origin, 0.0001, direction, INFINITY, 0);
   if(isinf(hit.distance))
   {
-    if(BOUNCE_NUMBER == 0.0 && SkyUniform.sky.tex_id > 0)
+    if((BOUNCE_NUMBER == 0.0 || LAST_BOUNCE_SPECULAR == 1.0) && SkyUniform.sky.tex_id > 0)
     {
       vec3 w = normalize((SkyUniform.sky.world2obj * vec4(direction, 0.0)).xyz);
       float u = atan(w.y, w.x); // just call it atan2 like everybody else...
@@ -155,7 +155,7 @@ void main()
       vec2 uv = vec2(u, acos(w.z)) * INV_2PI;
       vec3 sampled_texel =
         texture(textures[nonuniformEXT(SkyUniform.sky.tex_id)], uv).rgb;
-      update_result(from_illuminant_color(sampled_texel));
+      update_result(mul(importance, from_illuminant_color(sampled_texel)));
     }
     RESET_PATH;
     return;
