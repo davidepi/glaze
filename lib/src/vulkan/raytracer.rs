@@ -25,10 +25,11 @@ use std::iter::repeat;
 use std::ptr;
 use std::sync::Arc;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum Integrator {
     DIRECT,
+    #[default]
     PATH_TRACE,
 }
 
@@ -56,12 +57,6 @@ impl Integrator {
             Integrator::DIRECT => 1,
             Integrator::PATH_TRACE => PT_STEPS, // worst case
         }
-    }
-}
-
-impl Default for Integrator {
-    fn default() -> Self {
-        Self::PATH_TRACE
     }
 }
 

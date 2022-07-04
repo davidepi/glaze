@@ -1,8 +1,9 @@
 #![allow(clippy::excessive_precision)]
 use crate::Spectrum;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Metal {
+    #[default]
     SILVER,
     ALUMINIUM,
     GOLD,
@@ -401,12 +402,6 @@ impl Metal {
                 3.6095002, 3.6194999,
             ]),
         }
-    }
-}
-
-impl Default for Metal {
-    fn default() -> Self {
-        Metal::SILVER
     }
 }
 
