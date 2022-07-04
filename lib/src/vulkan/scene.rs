@@ -37,7 +37,7 @@ use std::sync::{Arc, RwLock};
 
 /// A scene optimized to be rendered using this crates vulkan implementation.
 #[cfg(feature = "vulkan-interactive")]
-pub struct VulkanScene {
+pub struct RealtimeScene {
     /// The scene on disk.
     file: Box<dyn ParsedScene + Send>,
     /// Not used in this scene, but required in case of updates.
@@ -45,8 +45,10 @@ pub struct VulkanScene {
     /// The camera for the current scene.
     pub current_cam: Camera,
     /// The buffer containing all vertices for the current scene.
+    /// Might be shared with the RayTraceScene.
     pub(super) vertex_buffer: Arc<AllocatedBuffer>,
     /// The buffer containing all indices for the current scene.
+    /// Might be shared with the RayTraceScene.
     pub(super) index_buffer: Arc<AllocatedBuffer>,
     /// Buffer used during a single material update, as a transfer buffer to the GPU
     update_buffer: AllocatedBuffer,
@@ -65,6 +67,7 @@ pub struct VulkanScene {
     /// Map of all shaders in the scene with their pipeline.
     pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
     /// All textures in the scene.
+    /// Might be shared with RayTraceScene.
     pub(super) textures: Arc<RwLock<Vec<TextureLoaded>>>,
     /// Raw textures.
     raw_textures: Vec<Texture>,
@@ -99,6 +102,7 @@ pub struct VulkanMesh {
     pub material: u16,
 }
 
+/// Data required to draw the skydome in the non-raytraced renderer.
 pub struct SkydomeDrawData {
     /// Number of vertices in the skydome
     pub index_count: u32,
@@ -113,7 +117,7 @@ pub struct SkydomeDrawData {
 }
 
 #[cfg(feature = "vulkan-interactive")]
-impl VulkanScene {
+impl RealtimeScene {
     /// Converts a parsed scene into a vulkan scene.
     ///
     /// `wchan` is used to send feedbacks about the current loading status.
@@ -208,7 +212,7 @@ impl VulkanScene {
         let lights = reorder_lights(lights);
         let meta = parsed.meta().unwrap_or_default();
         let scene_desc = build_realtime_descriptor(&mut dm, &transforms);
-        VulkanScene {
+        RealtimeScene {
             file: parsed,
             meta,
             current_cam,
@@ -433,6 +437,9 @@ impl VulkanScene {
         &self.lights
     }
 
+    /// Changes the lights in the scene.
+    /// If there is a skylight in the scene it is expected to be the last element of the input
+    /// slice.
     pub(super) fn update_lights(
         &mut self,
         lights: &[Light],
@@ -462,6 +469,7 @@ impl VulkanScene {
         }
     }
 
+    /// Saves the scene on the disk.
     pub fn save(&mut self) -> Result<(), std::io::Error> {
         let cameras = [self.current_cam];
         let lights = self.lights().to_vec();
@@ -483,7 +491,7 @@ impl VulkanScene {
 }
 
 #[cfg(feature = "vulkan-interactive")]
-impl Drop for VulkanScene {
+impl Drop for RealtimeScene {
     fn drop(&mut self) {
         self.deinit_pipelines();
         unsafe {
@@ -495,6 +503,7 @@ impl Drop for VulkanScene {
     }
 }
 
+/// Build the scene-bound descriptor for the realtime renderer.
 fn build_realtime_descriptor(
     dm: &mut DescriptorSetManager,
     transforms_buffer: &AllocatedBuffer,
@@ -507,7 +516,9 @@ fn build_realtime_descriptor(
         )
         .build()
 }
-fn gen_icosphere(order: u8) -> (Vec<f32>, Vec<u32>) {
+
+/// Generates a icosphere.
+fn gen_icosphere(subdivisions: u8) -> (Vec<f32>, Vec<u32>) {
     // move a vertex over the unit sphere
     fn unit_sphere(x: f32, y: f32, z: f32) -> [f32; 3] {
         let len = f32::sqrt(x * x + y * y + z * z);
@@ -539,7 +550,7 @@ fn gen_icosphere(order: u8) -> (Vec<f32>, Vec<u32>) {
         })
     }
 
-    // order 0
+    // subdv 0
     let mut cache = FnvHashMap::default();
     let mid = 0.8506508;
     let one = 0.5257311;
@@ -553,7 +564,7 @@ fn gen_icosphere(order: u8) -> (Vec<f32>, Vec<u32>) {
         1, 8, 3, 9, 4, 3, 4, 2, 3, 2, 6, 3, 6, 8, 3, 8, 9, 4, 9, 5, 2, 4, 11, 6, 2, 10, 8, 6, 7, 9,
         8, 1,
     ];
-    for _ in 0..order {
+    for _ in 0..subdivisions {
         indices = indices
             .chunks_exact(3)
             .flat_map(|f| {
@@ -567,6 +578,8 @@ fn gen_icosphere(order: u8) -> (Vec<f32>, Vec<u32>) {
     (vertices, indices)
 }
 
+/// reorder the lights, so there is only a single LightType::SKY and is the last element of the
+/// array.
 fn reorder_lights(mut lights: Vec<Light>) -> Vec<Light> {
     let sky = lights.iter().find_map(|l| l.as_sky());
     lights.retain(|l| l.ltype() != LightType::SKY);
@@ -576,6 +589,7 @@ fn reorder_lights(mut lights: Vec<Light>) -> Vec<Light> {
     lights
 }
 
+/// Build the skydome for the realtime renderer (including its pipelines).
 fn build_skydome_realtime(
     device: &Device,
     mm: &MemoryManager,
@@ -1267,7 +1281,7 @@ fn sort_meshes(meshes: &mut [VulkanMesh], mats: &[(ShaderMat, Descriptor)]) {
     });
 }
 
-/// Material parameters representation used by the shaders.
+/// Material parameters representation used by the shaders in realtime.
 #[repr(C)]
 struct MaterialParams {
     /// Multiplier for the diffuse color.
@@ -1295,28 +1309,51 @@ pub fn padding<T: Into<u64>>(n: T, align: T) -> u64 {
     ((!n.into()).wrapping_add(1)) & (align.into().wrapping_sub(1))
 }
 
+/// A scene suitable to be rendered by the [RayTraceRenderer](crate::RayTraceRenderer)
 pub struct RayTraceScene<T: Instance + Send + Sync> {
+    /// camera used in the scene.
     pub(crate) camera: Camera,
+    /// scene-bound descriptor.
     pub(crate) descriptor: Descriptor,
+    /// linear sampler.
     linear_sampler: vk::Sampler,
+    /// nearest neighbour sampler.
     nn_sampler: vk::Sampler,
+    /// The buffer containing all vertices for the current scene.
+    /// Might be shared with the realtime scene.
     vertex_buffer: Arc<AllocatedBuffer>,
+    /// The buffer containing all indices for the current scene. May be shared with realtime scene.
+    /// Might be shared with the realtime scene.
     index_buffer: Arc<AllocatedBuffer>,
+    /// Buffer containing instances (defined in the RTInstance struct)
     instance_buffer: AllocatedBuffer,
+    /// The buffer containing all materials for the current scene. These materials are different
+    /// from the one used by the realtime renderer.
     material_buffer: AllocatedBuffer,
+    /// The buffer containing all lights for the current scene.
     light_buffer: AllocatedBuffer,
+    /// Buffer containing the dpdu and dpdv derivatives for the triangles.
     derivative_buffer: AllocatedBuffer,
+    /// Buffer containing the various transformation matrices for each object.
     transforms_buffer: Arc<AllocatedBuffer>,
-    // (material_id, transform_ids)
+    /// maps a material to the various instances using it.
     material_instance_ids: FnvHashMap<u16, Vec<u16>>,
+    /// Skylight used in this scene.
     sky: Option<SkyLight>,
+    /// Buffer containing skylight data.
     sky_buffer: SkyBuffers,
-    // does not account for skylights
+    /// Number of lights in the scene.
     pub(crate) lights_no: u32,
+    /// Additional parameters for the scene.
     pub(crate) meta: Meta,
+    /// All textures in the scene.
+    /// Might be shared with RayTraceScene.
     textures: Arc<RwLock<Vec<TextureLoaded>>>,
+    /// Acceleration structure for the scene.
     acc: SceneAS,
+    /// Descriptor manager for the scene.
     dm: DescriptorSetManager,
+    /// Underlying vulkan instance.
     instance: Arc<T>,
 }
 
@@ -1328,6 +1365,11 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         (vk::DescriptorType::STORAGE_BUFFER, 7.0),
     ];
 
+    /// Creates a new scene from a parsed file.
+    ///
+    /// The scene creates in this way is **NOT** suitable for a realtime raytracer. To obtain a
+    /// scene compatible with a realtime raytracer call the method [From] with the original
+    /// [RealtimeScene] as parameter.
     pub fn new(
         instance: Arc<RayTraceInstance>,
         parsed: Box<dyn ParsedScene>,
@@ -1464,6 +1506,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         }
     }
 
+    /// rebuild the scene descriptor set.
     #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn refresh_descriptors(&mut self) {
         self.descriptor = build_raytrace_descriptor(
@@ -1483,6 +1526,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
         );
     }
 
+    /// update the lights, materials and textures.
     #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn update_materials_and_lights(
         &mut self,
@@ -1539,8 +1583,8 @@ impl<T: Instance + Send + Sync> Drop for RayTraceScene<T> {
 }
 
 #[cfg(feature = "vulkan-interactive")]
-impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
-    fn from(scene: &VulkanScene) -> RayTraceScene<PresentInstance> {
+impl From<&RealtimeScene> for RayTraceScene<PresentInstance> {
+    fn from(scene: &RealtimeScene) -> RayTraceScene<PresentInstance> {
         let instance = Arc::clone(&scene.instance);
         let device = instance.device();
         let loader = Arc::new(AccelerationLoader::new(
@@ -1651,6 +1695,7 @@ impl From<&VulkanScene> for RayTraceScene<PresentInstance> {
     }
 }
 
+/// generates the map (material, vec<instance id>)
 fn map_materials_to_instances(
     meshes: &[VulkanMesh],
     instances: &[MeshInstance],
@@ -1670,6 +1715,7 @@ fn map_materials_to_instances(
     retval
 }
 
+/// load the various mesh instances to the gpu.
 fn load_raytrace_instances_to_gpu(
     device: &Device,
     mm: &MemoryManager,
@@ -1708,6 +1754,7 @@ fn load_raytrace_instances_to_gpu(
     )
 }
 
+/// load the various raytrace materials to the gpu.
 fn load_raytrace_materials_to_gpu(
     device: &Device,
     mm: &MemoryManager,
@@ -1752,6 +1799,7 @@ fn load_raytrace_materials_to_gpu(
     )
 }
 
+/// load the various lights to the gpu
 fn load_raytrace_lights_to_gpu(
     device: &Device,
     mm: &MemoryManager,
@@ -1814,6 +1862,7 @@ fn load_raytrace_lights_to_gpu(
     )
 }
 
+/// converts a u8 color to a f32 color
 fn col_int_to_f32(col: [u8; 3]) -> [f32; 4] {
     [
         col[0] as f32 / 255.0,
@@ -1823,6 +1872,7 @@ fn col_int_to_f32(col: [u8; 3]) -> [f32; 4] {
     ]
 }
 
+/// uploads a buffer, given a slice of objects.
 // 'static in T avoids references that would fuck up the size_of value
 fn upload_buffer<T: Sized + 'static>(
     device: &Device,
@@ -1874,6 +1924,7 @@ fn upload_buffer<T: Sized + 'static>(
     gpu_buffer
 }
 
+/// uploads a 2D buffer (as image) given a slice of objects.
 fn upload_2d_buffer<T: Sized + 'static>(
     device: &Device,
     mm: &MemoryManager,
@@ -1997,6 +2048,7 @@ fn upload_2d_buffer<T: Sized + 'static>(
     gpu_buf
 }
 
+/// calculate the derivatives using the GPU and a comp shader.
 fn calculate_geometric_derivatives<T: Instance>(
     instance: &T,
     dm: &mut DescriptorSetManager,
@@ -2075,6 +2127,7 @@ fn calculate_geometric_derivatives<T: Instance>(
     buffer
 }
 
+/// calculate the distributions used for efficient skymap sampling.
 fn calculate_skymap_distributions(map: &Texture) -> Distribution2D<f32> {
     let raw = map.raw(0);
     let pixel_size = map.bytes_per_pixel();
@@ -2096,12 +2149,25 @@ fn calculate_skymap_distributions(map: &Texture) -> Distribution2D<f32> {
     Distribution2D::new(values, width as usize)
 }
 
+/// Buffers required to efficiently draw the skymap in the raytracer.
 struct SkyBuffers {
+    /// SSBO containing:
+    /// - RTSky structure
+    /// - amount of marginal cumulative distribution function values
+    /// - offset (in elements) of the conditional integrals (the number of integrals is the same of
+    /// the amount of marginal values = same as the number of rows per image).
+    /// - amount of conditional cumulative distribution function values (the same for each
+    /// conditional distribution)
+    /// - values of the marginal integral
+    /// - array containing all the previous values
     ssbo: AllocatedBuffer,
+    /// the conditional values (having chosen an image row of pixels)
     conditional_values: AllocatedImage,
+    /// the conditional cumulative distribution function (having chosen an image row of pixels)
     conditional_cdf: AllocatedImage,
 }
 
+/// build the buffers required to draw the skylight in the raytrace renderer.
 fn build_sky_raytrace_buffers(
     device: &Device,
     mm: &MemoryManager,
@@ -2215,6 +2281,7 @@ fn build_sky_raytrace_buffers(
     }
 }
 
+/// build the scene-level descriptor.
 fn build_raytrace_descriptor(
     dm: &mut DescriptorSetManager,
     acc: &SceneAS,

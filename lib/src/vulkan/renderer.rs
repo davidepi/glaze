@@ -5,7 +5,7 @@ use super::instance::{Instance, PresentInstance};
 use super::memory::AllocatedBuffer;
 use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderpass::RenderPass;
-use super::scene::VulkanScene;
+use super::scene::RealtimeScene;
 use super::swapchain::Swapchain;
 use super::sync::PresentSync;
 use super::{UnfinishedExecutions, FRAMES_IN_FLIGHT};
@@ -52,7 +52,7 @@ pub struct RealtimeRenderer {
     /// Descriptor containing the raytracer output image, will be passed to the copy_pipeline.
     raytrace_copy_desc: Option<Descriptor>,
     /// Scene to be rendered.
-    scene: VulkanScene,
+    scene: RealtimeScene,
     /// Swapchain of the renderer.
     swapchain: Swapchain,
     /// Sampler used to copy the forward pass attachment to the swapchain image.
@@ -104,6 +104,7 @@ impl RealtimeRenderer {
     ///     window.inner_size().width,
     ///     window.inner_size().height,
     ///     1.0,
+    ///     None,
     /// );
     /// ```
     pub fn new(
@@ -112,7 +113,7 @@ impl RealtimeRenderer {
         window_width: u32,
         window_height: u32,
         render_scale: f32,
-        scene: Option<VulkanScene>,
+        scene: Option<RealtimeScene>,
     ) -> Self {
         let avg_desc = [
             (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
@@ -185,7 +186,7 @@ impl RealtimeRenderer {
             &[forward_pass.copy_descriptor.layout],
         );
         let scene =
-            scene.unwrap_or_else(|| VulkanScene::new(Arc::clone(&instance), Box::new(NoScene)));
+            scene.unwrap_or_else(|| RealtimeScene::new(Arc::clone(&instance), Box::new(NoScene)));
         imgui_renderer.load_scene_textures(&scene);
         RealtimeRenderer {
             raytrace_copy_desc: None,
@@ -268,7 +269,7 @@ impl RealtimeRenderer {
     }
 
     /// Returns the current scene being rendered.
-    pub fn scene(&self) -> &VulkanScene {
+    pub fn scene(&self) -> &RealtimeScene {
         &self.scene
     }
 
@@ -343,13 +344,13 @@ impl RealtimeRenderer {
     /// let scene_path = "/path/to/scene";
     /// let parsed = glaze::parse(scene_path).expect("Failed to parse scene");
     /// let (wchan, rchan) = std::sync::mpsc::channel();
-    /// let loaded = glaze::VulkanScene::load(arc_instance, parsed, wchan).unwrap();
+    /// let loaded = glaze::RealtimeScene::load(arc_instance, parsed, wchan).unwrap();
     /// renderer.change_scene(loaded);
     /// ```
-    pub fn change_scene(&mut self, mut scene: VulkanScene) {
+    pub fn change_scene(&mut self, mut scene: RealtimeScene) {
         self.wait_idle();
         // drop memory of current scene
-        self.scene = VulkanScene::new(Arc::clone(&self.instance), Box::new(NoScene));
+        self.scene = RealtimeScene::new(Arc::clone(&self.instance), Box::new(NoScene));
         //
         let render_size = vk::Extent2D {
             width: (self.swapchain.extent().width as f32 * self.render_scale) as u32,
@@ -559,9 +560,9 @@ impl Drop for RealtimeRenderer {
     }
 }
 
-/// Draws all objects belonging to the loaded VulkanScene.
+/// Draws all objects belonging to the loaded RealtimeScene.
 unsafe fn draw_objects(
-    scene: &VulkanScene,
+    scene: &RealtimeScene,
     ar: f32,
     frame_data: &mut FrameDataBuf,
     device: &ash::Device,
@@ -617,7 +618,7 @@ unsafe fn draw_objects(
 }
 
 fn draw_background(
-    scene: &VulkanScene,
+    scene: &RealtimeScene,
     ar: f32,
     device: &ash::Device,
     cmd: vk::CommandBuffer,

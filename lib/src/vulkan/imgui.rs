@@ -5,7 +5,7 @@ use super::instance::Instance;
 use super::memory::{AllocatedBuffer, AllocatedImage};
 use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderer::InternalStats;
-use super::scene::VulkanScene;
+use super::scene::RealtimeScene;
 use super::swapchain::Swapchain;
 use crate::materials::TextureLoaded;
 use crate::{include_shader, PresentInstance, TextureFormat};
@@ -222,7 +222,7 @@ impl ImguiRenderer {
         );
     }
 
-    pub(super) fn load_scene_textures(&mut self, scene: &VulkanScene) {
+    pub(super) fn load_scene_textures(&mut self, scene: &RealtimeScene) {
         let scene_textures = Arc::clone(&scene.textures);
         self.scene_textures = Some(scene_textures);
         self.rebuild_texture_descriptors();

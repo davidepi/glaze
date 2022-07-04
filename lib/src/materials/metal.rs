@@ -1,6 +1,7 @@
 #![allow(clippy::excessive_precision)]
 use crate::Spectrum;
 
+/// Enum representing various metals.
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Metal {
     #[default]
@@ -36,6 +37,7 @@ pub enum Metal {
 }
 
 impl Metal {
+    /// Returns all types of metals.
     pub fn all_types() -> [Self; 29] {
         [
             Metal::SILVER,
@@ -70,6 +72,7 @@ impl Metal {
         ]
     }
 
+    /// Returns the name of the current metal as string.
     pub fn name(&self) -> &str {
         match self {
             Metal::SILVER => "Silver",
@@ -104,6 +107,7 @@ impl Metal {
         }
     }
 
+    /// Returns the complex index of refraction of the current metal.
     pub fn index_of_refraction(&self) -> Spectrum {
         match self {
             Metal::SILVER => Spectrum::from([
@@ -254,6 +258,7 @@ impl Metal {
         }
     }
 
+    /// Returns the absorption coefficient of the current metal.
     pub fn absorption(&self) -> Spectrum {
         match self {
             Metal::SILVER => Spectrum::from([

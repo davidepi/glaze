@@ -1,4 +1,4 @@
-use glaze::{parse, PresentInstance, RayTraceRenderer, RealtimeRenderer, VulkanScene};
+use glaze::{parse, PresentInstance, RayTraceRenderer, RealtimeRenderer, RealtimeScene};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use std::convert::TryFrom;
 use std::error::Error;
@@ -43,7 +43,7 @@ impl InteractiveView {
                 Arc::new(PresentInstance::new(&window).expect("No GPU or window system found"));
             let scene = if let Some(scene_path) = scene_path {
                 match parse(&scene_path) {
-                    Ok(parsed) => Some(VulkanScene::new(Arc::clone(&instance), parsed)),
+                    Ok(parsed) => Some(RealtimeScene::new(Arc::clone(&instance), parsed)),
                     Err(e) => {
                         log::error!("Failed to parse scene {}: {}", scene_path, e.to_string());
                         None

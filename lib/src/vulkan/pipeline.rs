@@ -29,9 +29,6 @@ impl Drop for Pipeline {
 ///
 /// Usually the pipeline is created with [PipelineBuilder::default], then the builder fields edited,
 /// and finally the function [PipelineBuilder::build] called.
-///
-/// Several pipelines can be configured just by using the
-/// [ShaderMat::build_pipeline][crate::ShaderMat::build_pipeline] method.
 pub struct PipelineBuilder {
     /// Shaders to use in the pipeline.
     /// Vector of `(shader SPIR-V data, function name, shader stage)`.
@@ -330,6 +327,7 @@ impl Default for PipelineBuilder {
     }
 }
 
+/// Builds a pipeline with a compute shader.
 pub fn build_compute_pipeline(
     device: Arc<ash::Device>,
     shader: Vec<u8>,
@@ -386,7 +384,7 @@ pub fn build_compute_pipeline(
     }
 }
 
-// bdpt requires 3 different pipelines
+/// Builds a ray tracing pipeline.
 pub fn build_raytracing_pipeline(
     loader: &RTPipelineLoader,
     device: Arc<ash::Device>,

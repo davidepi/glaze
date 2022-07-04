@@ -8,9 +8,9 @@ pub struct Mesh {
     /// Unique ID for the current mesh.
     pub id: u16,
     /// Indices for the triangles vertices. Each triplet of indices represents a triangle.
-    /// The indices are relative to a [Vertex][crate::Vertex] buffer, not contained in the Mesh.
+    /// The indices are relative to a [Vertex](crate::Vertex) buffer, not contained in the Mesh.
     pub indices: Vec<u32>,
-    /// Index of the mesh [Material][crate::Material].
+    /// Index of the mesh [Material](crate::Material).
     /// The material is not contained in the Mesh itself.
     pub material: u16,
 }

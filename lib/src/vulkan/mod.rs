@@ -38,7 +38,7 @@ pub use self::instance::PresentInstance;
 #[cfg(feature = "vulkan-interactive")]
 pub use self::renderer::RealtimeRenderer;
 #[cfg(feature = "vulkan-interactive")]
-pub use self::scene::VulkanScene;
+pub use self::scene::RealtimeScene;
 
 /// Number of frames prepared by the CPU while waiting for the GPU.
 const FRAMES_IN_FLIGHT: usize = 2;

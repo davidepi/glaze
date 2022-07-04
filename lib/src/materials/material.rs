@@ -1,6 +1,6 @@
 use crate::{Metal, ShaderMat};
 
-/// A material used to determine the surface of a [Mesh][crate::Mesh].
+/// A material used to determine the surface of a [Mesh](crate::Mesh).
 #[derive(Debug, PartialEq, Clone)]
 pub struct Material {
     /// Name used to refer to a material. The name is not unique and used only to aid the user.

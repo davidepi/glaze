@@ -27,17 +27,36 @@ use std::sync::Arc;
 
 #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
+/// Integrators available to solve the Rendering Equation.
+///
+/// The integrators contained in this enum have an implementation in the [RayTraceRenderer] and can
+/// be used to solve the rendering equation.
 pub enum Integrator {
+    /// An integrator using only direct lighting.
+    ///
+    /// For each light path, a single ray is traced from the camera. After finding the intersection
+    /// point, a single shadow ray is traced for occlusion testing and the path is considered
+    /// terminated.
     DIRECT,
+    /// An integrator implementing forward path tracing.
+    ///
+    /// For each light path, a ray is traced multiple times in the scene. At each intersection
+    /// point, occlusion testing is done with a shadow ray. Every draw call calculates a single ray
+    /// intersection + occlusion testing, so a single light path is composed of multiple draw
+    /// calls. The final step of the light path does not trace any light (like in bidirectional
+    /// methods, but simply drops the ray). Light paths with low contribution may be dropped
+    /// randomly (russian roulette).
     #[default]
     PATH_TRACE,
 }
 
 impl Integrator {
+    /// Returns all the values of this integrator.
     pub fn values() -> [Integrator; 2] {
         [Integrator::DIRECT, Integrator::PATH_TRACE]
     }
 
+    /// Returns the name of the integrator as string.
     pub fn name(&self) -> &'static str {
         match self {
             Integrator::DIRECT => "Direct light only",
@@ -45,13 +64,17 @@ impl Integrator {
         }
     }
 
-    // how many raygen shaders are necessary for each integrator
+    /// How many raygen shaders are necessary for each integrator
     fn raygen_count(&self) -> u32 {
         match self {
             Integrator::DIRECT | Integrator::PATH_TRACE => 1,
         }
     }
 
+    /// Returns how many draw calls are required for each light path.
+    ///
+    /// In probabilistic integrators (e.g. [Integrator::PATH_TRACE]), returns the worst case
+    /// amount.
     pub fn steps_per_sample(&self) -> usize {
         match self {
             Integrator::DIRECT => 1,
@@ -60,39 +83,82 @@ impl Integrator {
     }
 }
 
+/// Contains addresses of the various raytrace shaders.
 struct ShaderBindingTable {
+    /// Starting address of the raygen shaders.
+    ///
+    /// Only a single raygen shader can be used. In order to use multiple of them we need to store
+    /// the address of each one instead of only the first one (like for the other shaders).
     rgen_addrs: Vec<vk::StridedDeviceAddressRegionKHR>,
+    /// Starting address of the miss shaders.
     miss_addr: vk::StridedDeviceAddressRegionKHR,
+    /// Starting address of the hit/anyhit shaders.
     hit_addr: vk::StridedDeviceAddressRegionKHR,
+    /// Starting address of the callable shaders.
     call_addr: vk::StridedDeviceAddressRegionKHR,
+    /// Buffer containing all the shader handles (the actual SBT).
     _buffer: AllocatedBuffer,
 }
 
+/// Renderer capable of producing a fully raytraced image using different integrators.
+///
+/// This renderer does not support presenting to surface, so the resulting image MUST be passed to
+/// the [RealtimeRenderer] for presentation.
 pub struct RayTraceRenderer<T: Instance + Send + Sync> {
+    /// Raytraced scene.
     scene: RayTraceScene<T>,
+    /// Push constants data, updated before starting each draw.
     push_constants: [u8; 128],
+    /// Additional per-frame data.
     frame_data: Vec<AllocatedBuffer>,
-    rng: Xoshiro128PlusPlus,
-    cumulative_img: AllocatedImage,
-    out32_img: AllocatedImage,
-    out8_img: AllocatedImage,
-    integrator: Integrator,
-    integrator_data: AllocatedBuffer,
-    sample_scheduler: WorkScheduler,
-    request_new_frame: bool,
-    // contains also the out_img
+    /// Descriptor for the current frame. Contains also out8_img.
     frame_desc: Vec<Descriptor>,
+    /// Random number generator, used to generate the random numbers required by the integrators.
+    rng: Xoshiro128PlusPlus,
+    /// Image used to accumulate pixel values. Frames are not independent in this renderer and the
+    /// same one is reused as much as possible.
+    cumulative_img: AllocatedImage,
+    /// The output image, after dividing the cumulative image by the number of samples.
+    out32_img: AllocatedImage,
+    /// Same as out32 but uses R8G8B8A8 instead of R32G32B32A32.
+    out8_img: AllocatedImage,
+    /// The integrator used for rendering.
+    integrator: Integrator,
+    /// Additional buffer required by the integrator to store data between frames.
+    integrator_data: AllocatedBuffer,
+    /// Sampler, transform a discrete pixel into a continuous area to sample.
+    sample_scheduler: WorkScheduler,
+    /// True if a new frame should be requested (e.g. camera moved) and cumulative_img must reset.
+    request_new_frame: bool,
+    /// Extent of the rendered image.
     extent: vk::Extent2D,
+    /// Raytracer SBT.
     sbt: ShaderBindingTable,
+    /// Raytracer pipeline.
     pipeline: Pipeline,
+    /// Descriptor manager for this renderer.
     dm: DescriptorSetManager,
+    /// Transfer Queue command manager for this renderer.
     tcmdm: CommandManager,
+    /// Compute Queue command manager for this renderer.
     ccmdm: CommandManager,
+    /// Loader for RayTracePipeline.
     rploader: RTPipelineLoader,
+    /// Vulkan instance.
     instance: Arc<T>,
 }
 
 impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
+    /// Creates a new raytrace renderer.
+    ///
+    /// Takes the instance, an optional scene, width and height of the expected output.
+    /// # Examples
+    /// Basic usage:
+    /// ```no_run
+    /// let instance = glaze::RayTraceInstance::new().expect("No GPU found");
+    /// let arc_instance = std::sync::Arc::new(instance);
+    /// let renderer = glaze::RaytraceRenderer::create(arc_instance, None, 1920, 1080);
+    /// ```
     pub fn new(
         instance: Arc<RayTraceInstance>,
         scene: Option<RayTraceScene<RayTraceInstance>>,
@@ -113,6 +179,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         unsafe { self.instance.device().logical().device_wait_idle() }.expect("Failed to wait idle")
     }
 
+    /// Sets the exposure for the rendered image.
     pub fn set_exposure(&mut self, exposure: f32) {
         if exposure >= 0.0 {
             // the higher the value, the brighter the image.
@@ -121,6 +188,9 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         // no need to restart the frame, as only the weight for each sample is affected.
     }
 
+    /// Sets the integrator used by the current renderer.
+    ///
+    /// A description of the possible values can be found in the [Integrator] enum.
     pub fn set_integrator(&mut self, integrator: Integrator) {
         if self.integrator != integrator {
             self.wait_idle();
@@ -158,6 +228,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         }
     }
 
+    /// Changes the rendered scene.
     pub fn change_scene(&mut self, scene: RayTraceScene<T>) {
         let instance = &self.instance;
         let device = instance.device();
@@ -183,6 +254,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         self.request_new_frame = true;
     }
 
+    /// Changes the rendered image resolution.
     pub fn change_resolution(&mut self, width: u32, height: u32) {
         self.extent = vk::Extent2D { width, height };
         let mut unf = UnfinishedExecutions::new(self.instance.device());
@@ -221,11 +293,16 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         self.update_camera(self.scene.camera);
     }
 
+    /// Changes the camera values.
     pub fn update_camera(&mut self, camera: Camera) {
         self.push_constants = build_push_constants(&camera, self.extent);
         self.request_new_frame = true;
     }
 
+    /// Updates materials, cameras or textures in the renderer scene.
+    ///
+    /// The scene is owned by the renderer (as it requires tight synchronization with the GPU) and
+    /// cannot be updated otherwise.
     // materials and lights must be handled together because of emissive materials.
     pub fn update_materials_and_lights(
         &mut self,
@@ -245,9 +322,12 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         self.request_new_frame = true;
     }
 
+    /// Refresh binded resources.
+    ///
     /// Must be called after updating textures shared with the realtime renderer.
     ///
-    /// This involves rebuilding the pipeline and the descriptors and is quite costly.
+    /// This involves rebuilding the pipeline and the descriptors and is quite costly in term of
+    /// performance.
     pub fn refresh_binded_textures(&mut self) {
         self.scene.refresh_descriptors();
         let mut unf = UnfinishedExecutions::new(self.instance.device());
@@ -272,10 +352,17 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         unf.wait_completion();
     }
 
+    /// Returns a reference to the output image.
     pub(crate) fn output_image(&self) -> &AllocatedImage {
         &self.out8_img
     }
 
+    /// Draws a frame.
+    ///
+    /// This calculates a single light path step for each pixel. Some integrators require multiple
+    /// calls to complete a light path.
+    ///
+    /// Check the [Integrator::steps_per_sample] function.
     pub(crate) fn draw_frame(
         &mut self,
         wait: &[vk::Semaphore],
@@ -510,6 +597,16 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         }
     }
 
+    /// Draws the raytraced image and produces a frame.
+    ///
+    /// Requires the amount of samples per pixel and a callback function that will be called after
+    /// each sample per pixel is finished.
+    ///
+    /// Samples per pixel are analogous to completed light paths.
+    ///
+    /// This method is **NOT** expected to work in realtime, and a proper realtime variant is
+    /// available with crate visibility. The realtime variant produces faster results by displaying
+    /// unfinished light paths, whereas this function shows only completed ones.
     pub fn draw<F>(&mut self, spp: usize, callback: F) -> image::RgbaImage
     where
         F: Fn(),
@@ -602,6 +699,7 @@ impl TryFrom<&RealtimeRenderer> for RayTraceRenderer<PresentInstance> {
     }
 }
 
+/// Initialize the raytracer.
 fn init_rt<T: Instance + Send + Sync>(
     instance: Arc<T>,
     scene: RayTraceScene<T>,
@@ -698,6 +796,8 @@ fn init_rt<T: Instance + Send + Sync>(
     }
 }
 
+/// Build the engine-level descriptors.
+/// A single one for each one of the FRAMES_IN_FLIGHT.
 fn build_descriptor(
     dm: &mut DescriptorSetManager,
     frame_data: &[AllocatedBuffer],
@@ -748,7 +848,7 @@ fn create_storage_image<T: Instance>(
     let mm = instance.allocator();
     let device = instance.device();
     let clearable_flags = if clearable {
-        // one of the two image (self.cumulative) requires clearing, which in turn requires
+        // one of the two images (self.cumulative) requires clearing, which in turn requires
         // transfer_dst
         vk::ImageUsageFlags::TRANSFER_DST
     } else {
@@ -800,10 +900,12 @@ fn create_storage_image<T: Instance>(
     out_img
 }
 
+/// Increases `size` until it is aligned to `align_to`
 fn roundup_alignment(size: u64, align_to: u64) -> u64 {
     (size + (align_to - 1)) & !(align_to - 1)
 }
 
+/// Calculates and allocates the Shader Binding Table (SBT).
 fn build_sbt<T: Instance>(
     instance: &T,
     rploader: &RTPipelineLoader,
@@ -989,6 +1091,7 @@ fn build_sbt<T: Instance>(
     }
 }
 
+/// Calculates push constants.
 fn build_push_constants(camera: &Camera, extent: vk::Extent2D) -> [u8; 128] {
     // build matrices
     let ar = extent.width as f32 / extent.height as f32;
@@ -1014,6 +1117,7 @@ fn build_push_constants(camera: &Camera, extent: vk::Extent2D) -> [u8; 128] {
     retval
 }
 
+/// Creates the buffer used to store temporary integrator data.
 fn create_integrator_data<T: Instance>(
     instance: &T,
     integrator: Integrator,
@@ -1041,6 +1145,7 @@ fn create_integrator_data<T: Instance>(
     }
 }
 
+/// Updates the buffer containing per-frame data.
 fn update_frame_data(fd: RTFrameData, buf: &mut AllocatedBuffer) {
     let mapped = buf
         .allocation()
@@ -1054,7 +1159,7 @@ fn update_frame_data(fd: RTFrameData, buf: &mut AllocatedBuffer) {
 /// Iterator used to schedule the samples in a pixel.
 /// Starting from the entire pixel area ((0,0),(1,1)) this iterator subdivides the pixel
 /// and choses which area to sample.
-/// In the realtime raytracing the number of samples per pixel is not fixed so this process has to
+/// In realtime raytracing the number of samples per pixel is not fixed so this process has to
 /// be incremental.
 ///
 /// This iterator is unlimited and will never produce None.
@@ -1064,6 +1169,7 @@ struct WorkScheduler {
 }
 
 impl WorkScheduler {
+    /// Creates a new iterator.
     pub fn new() -> Self {
         WorkScheduler {
             current: vec![([0.0, 0.0], [1.0, 1.0])],

@@ -3,8 +3,8 @@
 use cgmath::Point3;
 use glaze::{
     parse, Camera, ColorRGB, Integrator, Light, LightType, Metal, OrthographicCam, PerspectiveCam,
-    PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer, ShaderMat, SkyLight,
-    Spectrum, Texture, TextureFormat, TextureInfo, VulkanScene,
+    PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer, RealtimeScene, ShaderMat,
+    SkyLight, Spectrum, Texture, TextureFormat, TextureInfo,
 };
 use image::GenericImageView;
 use imgui::{
@@ -89,7 +89,7 @@ struct SceneLoad {
     /// Last message extracted from the reader.
     last_message: String,
     /// Thread join handle.
-    join_handle: std::thread::JoinHandle<(VulkanScene, Option<RayTraceScene<PresentInstance>>)>,
+    join_handle: std::thread::JoinHandle<(RealtimeScene, Option<RayTraceScene<PresentInstance>>)>,
 }
 
 pub fn draw_ui(
@@ -698,7 +698,7 @@ fn window_materials(
     }
 }
 
-fn texture_selector(ui: &Ui, text: &str, mut selected: u16, scene: &VulkanScene) -> (u16, bool) {
+fn texture_selector(ui: &Ui, text: &str, mut selected: u16, scene: &RealtimeScene) -> (u16, bool) {
     let mut clicked_on_preview = false;
     let name = &scene.single_texture(selected).unwrap().info().name;
     if let Some(cb) = ComboBox::new(text).preview_value(name).begin(ui) {
@@ -1060,7 +1060,7 @@ fn open_scene(state: &mut UiState) {
                 let thandle = std::thread::spawn(move || {
                     let instance = instance_clone;
                     wchan.send("Loading realtime scene...".to_string()).ok();
-                    let scene = VulkanScene::new(Arc::clone(&instance), parsed);
+                    let scene = RealtimeScene::new(Arc::clone(&instance), parsed);
                     let rtscene = if instance.supports_raytrace() {
                         wchan.send("Loading raytraced scene...".to_string()).ok();
                         Some(RayTraceScene::<PresentInstance>::from(&scene))

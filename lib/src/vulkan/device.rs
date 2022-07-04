@@ -62,7 +62,7 @@ impl Device {
     /// Requires the raw Vulkan instance, a list of device extensions, and a list of physical device
     /// features
     ///
-    /// Unlike the [new_present] method, this one will not check for a depth buffer support.
+    /// Unlike the `new_present` method, this one will not check for a depth buffer support.
     /// However, the graphics queue and transfer queue support (and of course the compute queue) is
     /// still required, albeit without presentation support.
     ///
@@ -93,7 +93,7 @@ impl Device {
 
     /// Returns a queue family with graphics capabilities.
     ///
-    /// If the device is created with the [Self::present] method, this queue is required to support
+    /// If the device is created with the `new_present` method, this queue is required to support
     /// also presentation to a surface.
     pub fn graphic_queue(&self) -> Queue {
         self.graphic_queue
@@ -282,8 +282,8 @@ pub fn create_device(
 ///
 /// Sometimes, especially when copying from CPU to GPU buffers, a buffer can not be deallocated
 /// until the GPU finishes executing. This may be a problem if the buffer goes out of scope as it
-/// prevents assignment of new tasks to the GPU. This struct can be used to temporarily store these
-/// buffers, assign multiple tasks to the GPU and waits for them all at once. The buffers are
+/// will result in errors. This struct can be used to temporarily store these buffers,
+/// assign multiple tasks to the GPU and waits for them all at once. The buffers are
 /// dropped when this struct goes out of scope.
 pub struct UnfinishedExecutions<'device> {
     /// Fences to be waited on.

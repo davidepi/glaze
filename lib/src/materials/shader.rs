@@ -230,6 +230,7 @@ impl ShaderMat {
         ShaderMat::INTERNAL_FLAT_2SIDED
     }
 
+    /// Returns all the callable shader implementations.
     #[cfg(feature = "vulkan")]
     pub(crate) fn callable_shaders() -> [Vec<u8>; SBT_MATERIAL_TYPES * SBT_MATERIAL_STRIDE] {
         [
@@ -248,6 +249,7 @@ impl ShaderMat {
         ]
     }
 
+    /// Returns the callable shader implementation index for the current shader.
     #[cfg(feature = "vulkan")]
     pub(crate) fn sbt_callable_index(&self) -> u32 {
         let base_index = SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE; // lights before mats
