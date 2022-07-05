@@ -9,7 +9,7 @@ mod vulkan;
 
 pub use geometry::{
     Camera, ColorRGB, ColorXYZ, Light, LightType, Mesh, MeshInstance, OrthographicCam,
-    PerspectiveCam, SkyLight, Spectrum, Transform, Vertex,
+    PerspectiveCam, Spectrum, Transform, Vertex,
 };
 #[cfg(feature = "vulkan")]
 pub use materials::{

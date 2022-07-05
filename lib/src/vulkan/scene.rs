@@ -11,7 +11,7 @@ use super::pipeline::build_compute_pipeline;
 use super::pipeline::Pipeline;
 use super::raytrace_structures::{RTInstance, RTLight, RTMaterial, RTSky};
 use super::{AllocatedImage, UnfinishedExecutions};
-use crate::geometry::{Distribution1D, Distribution2D, SkyLight};
+use crate::geometry::{Distribution1D, Distribution2D};
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{
@@ -315,7 +315,7 @@ impl RealtimeScene {
             } else if new.emissive_col.is_none() && old.emissive_col.is_some() {
                 // light should be removed
                 self.lights
-                    .retain(|x| x.ltype() != LightType::AREA || x.material_id() != mat_id as u32);
+                    .retain(|x| x.ltype() != LightType::AREA || x.resource_id() != mat_id as u32);
             }
             // no need to update lights buffer because FOR NOW lights are not
             // rendered in the realtime preview
@@ -350,7 +350,12 @@ impl RealtimeScene {
                 )
             });
         }
-        if let Some(light) = self.lights.last().and_then(Light::as_sky) {
+        if let Some(light) = self
+            .lights
+            .last()
+            .filter(|x| x.ltype() == LightType::SKY)
+            .cloned()
+        {
             let device = self.instance.device();
             let mm = self.instance.allocator();
             let mut tcmdm =
@@ -400,8 +405,11 @@ impl RealtimeScene {
     }
 
     /// Returns the light used as skydome.
-    pub fn skydome(&self) -> Option<SkyLight> {
-        self.lights.last().and_then(Light::as_sky)
+    pub fn skydome(&self) -> Option<Light> {
+        self.lights
+            .last()
+            .filter(|x| x.ltype() == LightType::SKY)
+            .cloned()
     }
 
     /// Adds a single texture to the scene.
@@ -447,7 +455,12 @@ impl RealtimeScene {
         renderpass: vk::RenderPass,
     ) {
         self.lights = reorder_lights(lights.to_vec());
-        if let Some(sky) = self.lights.last().and_then(Light::as_sky) {
+        if let Some(sky) = self
+            .lights
+            .last()
+            .filter(|x| x.ltype() == LightType::SKY)
+            .cloned()
+        {
             // update skydome
             let device = self.instance.device();
             let mm = self.instance.allocator();
@@ -581,10 +594,10 @@ fn gen_icosphere(subdivisions: u8) -> (Vec<f32>, Vec<u32>) {
 /// reorder the lights, so there is only a single LightType::SKY and is the last element of the
 /// array.
 fn reorder_lights(mut lights: Vec<Light>) -> Vec<Light> {
-    let sky = lights.iter().find_map(|l| l.as_sky());
+    let sky = lights.iter().find(|l| l.ltype() == LightType::SKY).cloned();
     lights.retain(|l| l.ltype() != LightType::SKY);
     if let Some(sky) = sky {
-        lights.push(Light::Sky(sky));
+        lights.push(sky);
     }
     lights
 }
@@ -596,7 +609,7 @@ fn build_skydome_realtime(
     extent: vk::Extent2D,
     tcmdm: &mut CommandManager,
     dm: &mut DescriptorSetManager,
-    sky: SkyLight,
+    sky: Light,
     textures: &[TextureLoaded],
     sampler: vk::Sampler,
     rp: vk::RenderPass,
@@ -622,7 +635,7 @@ fn build_skydome_realtime(
         &si,
     );
     // descriptor
-    let bound_sky = &textures[sky.tex_id as usize].image;
+    let bound_sky = &textures[sky.resource_id() as usize].image;
     let descriptor = dm
         .new_set()
         .bind_image(
@@ -1339,7 +1352,7 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     /// maps a material to the various instances using it.
     material_instance_ids: FnvHashMap<u16, Vec<u16>>,
     /// Skylight used in this scene.
-    sky: Option<SkyLight>,
+    sky: Option<Light>,
     /// Buffer containing skylight data.
     sky_buffer: SkyBuffers,
     /// Number of lights in the scene.
@@ -1454,9 +1467,18 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
         let linear_sampler = create_sampler(device, false);
         let nn_sampler = create_sampler(device, true);
-        let sky = lights.last().and_then(Light::as_sky);
-        let sky_buffer =
-            build_sky_raytrace_buffers(device, mm, &mut tcmdm, &mut unf, sky, &raw_textures);
+        let sky = lights
+            .last()
+            .filter(|x| x.ltype() == LightType::SKY)
+            .cloned();
+        let sky_buffer = build_sky_raytrace_buffers(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            sky.clone(),
+            &raw_textures,
+        );
         let light_buffer = load_raytrace_lights_to_gpu(
             device,
             mm,
@@ -1548,9 +1570,13 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             lights,
             &self.material_instance_ids,
         );
-        let sky = lights.last().and_then(Light::as_sky);
+        let sky = lights
+            .last()
+            .filter(|l| l.ltype() == LightType::SKY)
+            .cloned();
         if sky != self.sky {
-            let mut sky_buffer = build_sky_raytrace_buffers(device, mm, tcmdm, unf, sky, textures);
+            let mut sky_buffer =
+                build_sky_raytrace_buffers(device, mm, tcmdm, unf, sky.clone(), textures);
             std::mem::swap(&mut self.sky_buffer, &mut sky_buffer);
             unf.add_buffer(sky_buffer.ssbo);
             unf.add_image(sky_buffer.conditional_values);
@@ -1651,8 +1677,14 @@ impl From<&RealtimeScene> for RayTraceScene<PresentInstance> {
         let linear_sampler = create_sampler(device, false);
         let nn_sampler = create_sampler(device, true);
         let sky = scene.skydome();
-        let sky_buffer =
-            build_sky_raytrace_buffers(device, mm, &mut tcmdm, &mut unf, sky, &scene.raw_textures);
+        let sky_buffer = build_sky_raytrace_buffers(
+            device,
+            mm,
+            &mut tcmdm,
+            &mut unf,
+            sky.clone(),
+            &scene.raw_textures,
+        );
         let descriptor = build_raytrace_descriptor(
             &mut dm,
             &acc,
@@ -1813,8 +1845,8 @@ fn load_raytrace_lights_to_gpu(
         let pos = l.position();
         let mut dir = l.direction();
         if dir.x == 0.0 && dir.y == 0.0 && dir.z == 0.0 {
-            log::warn!("zero length vector was changed to (1.0, 0.0, 0.0)");
-            dir.y = 1.0;
+            log::warn!("zero length vector was changed to (0.0, -1.0, 0.0)");
+            dir.y = -1.0;
         }
         dir.normalize();
         let mut addlight = RTLight {
@@ -1828,7 +1860,7 @@ fn load_raytrace_lights_to_gpu(
         };
         if l.ltype() == LightType::AREA {
             // add all the isntances of the material (material_id to isntance_id conversion)
-            let material_id = l.material_id() as u16;
+            let material_id = l.resource_id() as u16;
             let dflt = vec![0];
             let instances = transform_ids.get(&material_id).unwrap_or(&dflt);
             for instance in instances {
@@ -2173,14 +2205,15 @@ fn build_sky_raytrace_buffers(
     mm: &MemoryManager,
     tcmdm: &mut CommandManager,
     unf: &mut UnfinishedExecutions,
-    sky: Option<SkyLight>,
+    sky: Option<Light>,
     textures: &[Texture],
 ) -> SkyBuffers {
+    // default does not return skylight, but everything else should succeed.
     let skylight = sky.unwrap_or_default();
     let rtlight = RTSky {
         obj2world: skylight.rotation_matrix(),
         world2obj: skylight.rotation_matrix().invert().unwrap(),
-        tex_id: skylight.tex_id as u32,
+        tex_id: skylight.resource_id(),
     };
     let distribution = calculate_skymap_distributions(&textures[rtlight.tex_id as usize]);
     let values = distribution

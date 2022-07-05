@@ -4,7 +4,7 @@ use cgmath::Point3;
 use glaze::{
     parse, Camera, ColorRGB, Integrator, Light, LightType, Metal, OrthographicCam, PerspectiveCam,
     PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer, RealtimeScene, ShaderMat,
-    SkyLight, Spectrum, Texture, TextureFormat, TextureInfo,
+    Spectrum, Texture, TextureFormat, TextureInfo,
 };
 use image::GenericImageView;
 use imgui::{
@@ -773,7 +773,10 @@ fn window_lights(
         ui.text("Sky Dome");
         let dome_preview = match &sky {
             Some(sky) => {
-                let texture = renderer.scene().single_texture(sky.tex_id).unwrap();
+                let texture = renderer
+                    .scene()
+                    .single_texture(sky.resource_id as u16)
+                    .unwrap();
                 &texture.info().name
             }
             _ => "",
@@ -793,12 +796,15 @@ fn window_lights(
                     .for_each(|(id, texture)| {
                         if Selectable::new(&texture.info().name).build(ui) {
                             match &mut sky {
-                                Some(s) => s.tex_id = id as u16,
+                                Some(s) => s.resource_id = id as u32,
                                 None => {
-                                    sky = Some(SkyLight {
-                                        tex_id: id as u16,
-                                        ..Default::default()
-                                    });
+                                    sky = Some(Light::new_sky(
+                                        "Sky".to_string(),
+                                        id as u16,
+                                        0.0,
+                                        0.0,
+                                        0.0,
+                                    ));
                                 }
                             }
                             update_lights = true;
@@ -812,17 +818,17 @@ fn window_lights(
             });
         if let Some(sky) = &mut sky {
             ui.same_line();
-            if ImageButton::new(TextureId::new(sky.tex_id as usize), [16.0, 16.0])
+            if ImageButton::new(TextureId::new(sky.resource_id as usize), [16.0, 16.0])
                 .frame_padding(0)
                 .build(ui)
             {
-                state.textures_selected = Some(sky.tex_id);
+                state.textures_selected = Some(sky.resource_id as u16);
                 state.textures_window = true;
             }
             if ui.is_item_hovered() {
                 ui.tooltip(|| {
-                    ui.text(scene.single_texture(sky.tex_id).unwrap().name());
-                    Image::new(TextureId::new(sky.tex_id as usize), [256.0, 256.0]).build(ui);
+                    ui.text(scene.single_texture(sky.resource_id as u16).unwrap().name());
+                    Image::new(TextureId::new(sky.resource_id as usize), [256.0, 256.0]).build(ui);
                 });
             }
             if Slider::new("Dome Yaw (deg)", 0.0, 360.0).build(ui, &mut sky.yaw_deg)
@@ -949,7 +955,7 @@ fn window_lights(
                         }
                         LightType::SUN => Light::new_sun(new_name, new_color, new_dir),
                         LightType::AREA => {
-                            Light::new_area(new_name, light.material_id(), new_intensity)
+                            Light::new_area(new_name, light.resource_id(), new_intensity)
                         }
                         LightType::SKY => panic!("Skylight should not be selectable"),
                     };
@@ -981,7 +987,7 @@ fn window_lights(
                 if last.ltype() == LightType::SKY {
                     //modify existing
                     if let Some(sky) = sky {
-                        *last = Light::Sky(sky);
+                        *last = sky;
                     } else {
                         // remove
                         lights.pop();
@@ -989,9 +995,11 @@ fn window_lights(
                 } else {
                     // push new sky
                     if let Some(sky) = sky {
-                        lights.push(Light::Sky(sky));
+                        lights.push(sky);
                     }
                 }
+            } else if let Some(sky) = sky {
+                lights.push(sky);
             }
             renderer.update_light(&lights);
             if let Some(raytracer) = raytracer.as_mut() {

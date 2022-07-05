@@ -9,7 +9,7 @@ pub use self::color::{ColorRGB, ColorXYZ};
 mod spectrum;
 pub use self::spectrum::Spectrum;
 mod light;
-pub use self::light::{Light, LightType, SkyLight};
+pub use self::light::{Light, LightType};
 mod distribution;
 pub use self::distribution::{Distribution1D, Distribution2D};
 

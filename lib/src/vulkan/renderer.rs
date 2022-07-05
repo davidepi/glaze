@@ -628,7 +628,7 @@ fn draw_background(
         let camera = scene.current_cam;
         let scale = Matrix4::<f32>::from_scale(10.0);
         // if skydome_data is some, last member of lights MUST be the sky as per scene constraints.
-        let sky = scene.lights().last().and_then(Light::as_sky).unwrap();
+        let sky = scene.lights().last().unwrap();
         let rotation = sky.rotation_matrix();
         let translation =
             Matrix4::<f32>::from_translation(camera.position() - Point3::new(0.0, 0.0, 0.0));
