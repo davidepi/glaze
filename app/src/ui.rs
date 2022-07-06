@@ -2,9 +2,9 @@
 #![allow(clippy::collapsible_if)]
 use cgmath::Point3;
 use glaze::{
-    parse, Camera, ColorRGB, Integrator, Light, LightType, Metal, OrthographicCam, PerspectiveCam,
-    PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer, RealtimeScene, ShaderMat,
-    Spectrum, Texture, TextureFormat, TextureInfo,
+    parse, Camera, ColorRGB, Integrator, Light, LightType, MaterialType, Metal, OrthographicCam,
+    PerspectiveCam, PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer,
+    RealtimeScene, Spectrum, Texture, TextureFormat, TextureInfo,
 };
 use image::GenericImageView;
 use imgui::{
@@ -503,19 +503,19 @@ fn window_materials(
             ui.separator();
             let current = scene.single_material(*selected).unwrap();
             if let Some(shader_combo) = ComboBox::new("Type")
-                .preview_value(current.shader.name())
+                .preview_value(current.mtype.name())
                 .begin(ui)
             {
-                for shader in ShaderMat::all_values() {
-                    if Selectable::new(shader.name()).build(ui) && current.shader != shader {
+                for shader in MaterialType::all_values() {
+                    if Selectable::new(shader.name()).build(ui) && current.mtype != shader {
                         let mut new = current.clone();
-                        new.shader = shader;
+                        new.mtype = shader;
                         new_mat = Some(new);
                     }
                 }
                 shader_combo.end();
             }
-            if current.shader.is_fresnel_conductor() {
+            if current.mtype.is_fresnel_conductor() {
                 let current_metal: Metal = current.metal;
                 if let Some(metal_combo) = ComboBox::new("Metal")
                     .preview_value(current_metal.name())
@@ -531,7 +531,7 @@ fn window_materials(
                     metal_combo.end()
                 }
             }
-            if current.shader.is_fresnel_dielectric() {
+            if current.mtype.is_fresnel_dielectric() {
                 let mut ior = current.ior;
                 if imgui::Slider::new("Dielectric index of refraction", 1.0, 3.0)
                     .flags(SliderFlags::ALWAYS_CLAMP)
@@ -542,7 +542,7 @@ fn window_materials(
                     new_mat = Some(new);
                 }
             }
-            if current.shader.use_diffuse() {
+            if current.mtype.has_diffuse() {
                 let (diff, diff_clicked) = texture_selector(ui, "Diffuse", current.diffuse, scene);
                 if diff != current.diffuse {
                     let mut new = current.clone();
@@ -571,7 +571,7 @@ fn window_materials(
                     new_mat = Some(new);
                 }
             }
-            if current.shader.use_roughness() {
+            if current.mtype.has_roughness() {
                 let (rough, rough_clicked) =
                     texture_selector(ui, "Roughness map", current.roughness, scene);
                 if rough != current.roughness {
@@ -593,7 +593,7 @@ fn window_materials(
                     new_mat = Some(new);
                 }
             }
-            if current.shader.use_metalness() {
+            if current.mtype.has_metalness() {
                 let (rough, rough_clicked) =
                     texture_selector(ui, "Metalness map", current.metalness, scene);
                 if rough != current.metalness {
@@ -615,7 +615,7 @@ fn window_materials(
                     new_mat = Some(new);
                 }
             }
-            if current.shader.use_anisotropy() {
+            if current.mtype.has_anisotropy() {
                 let mut ani = current.anisotropy;
                 if imgui::Slider::new("Anisotropy", -0.999, 0.999)
                     .flags(imgui::SliderFlags::ALWAYS_CLAMP)
@@ -626,7 +626,7 @@ fn window_materials(
                     new_mat = Some(new);
                 }
             }
-            if current.shader.use_normal() {
+            if current.mtype.has_normal() {
                 let (norm, norm_clicked) = texture_selector(ui, "Normal", current.normal, scene);
                 if norm != current.normal {
                     let mut new = current.clone();
@@ -638,7 +638,7 @@ fn window_materials(
                     state.textures_window = true;
                 }
             }
-            if current.shader.use_opacity() {
+            if current.mtype.has_opacity() {
                 let (opac, opac_clicked) = texture_selector(ui, "Opacity", current.opacity, scene);
                 if opac != current.opacity {
                     let mut new = current.clone();
@@ -650,7 +650,7 @@ fn window_materials(
                     state.textures_window = true;
                 }
             }
-            if current.shader.use_emission() {
+            if current.mtype.has_emission() {
                 let mut emissive = current.emissive_col.is_some();
                 if ui.checkbox("Emits light", &mut emissive) {
                     let mut new = current.clone();

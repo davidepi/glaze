@@ -1,7 +1,5 @@
 mod material;
-pub use self::material::Material;
-mod shader;
-pub use self::shader::ShaderMat;
+pub use self::material::{Material, MaterialType};
 mod metal;
 mod texture;
 pub use self::metal::Metal;

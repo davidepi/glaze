@@ -15,11 +15,11 @@ use crate::geometry::{Distribution1D, Distribution2D};
 #[cfg(feature = "vulkan-interactive")]
 use crate::materials::{TextureFormat, TextureLoaded};
 use crate::{
-    include_shader, Camera, ColorRGB, Light, LightType, Material, Mesh, MeshInstance, Meta, Metal,
-    ParsedScene, PipelineBuilder, RayTraceInstance, Spectrum, Vertex,
+    include_shader, Camera, ColorRGB, Light, LightType, Material, MaterialType, Mesh, MeshInstance,
+    Meta, Metal, ParsedScene, PipelineBuilder, RayTraceInstance, Spectrum, Vertex,
 };
 #[cfg(feature = "vulkan-interactive")]
-use crate::{PresentInstance, ShaderMat, Texture, Transform};
+use crate::{PresentInstance, Texture, Transform};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use cgmath::{InnerSpace, SquareMatrix, Vector3 as Vec3};
@@ -61,11 +61,11 @@ pub struct RealtimeScene {
     /// Manages descriptors in the current scene.
     dm: DescriptorSetManager,
     /// All materials descriptors in the scene.
-    pub(super) materials_desc: Vec<(ShaderMat, Descriptor)>,
+    pub(super) materials_desc: Vec<(MaterialType, Descriptor)>,
     /// All the materials in the scene.
     materials: Vec<Material>,
     /// Map of all shaders in the scene with their pipeline.
-    pub(super) pipelines: FnvHashMap<ShaderMat, Pipeline>,
+    pub(super) pipelines: FnvHashMap<MaterialType, Pipeline>,
     /// All textures in the scene.
     /// Might be shared with RayTraceScene.
     pub(super) textures: Arc<RwLock<Vec<TextureLoaded>>>,
@@ -298,7 +298,7 @@ impl RealtimeScene {
         );
         // build the new shader if not existing
         self.pipelines.entry(new_shader).or_insert_with(|| {
-            new.shader.build_viewport_pipeline().build(
+            build_realtime_pipeline(new.mtype).build(
                 device.logical_clone(),
                 rpass,
                 render_size,
@@ -335,10 +335,10 @@ impl RealtimeScene {
         frame_desc_layout: vk::DescriptorSetLayout,
     ) {
         self.pipelines = FnvHashMap::default();
-        for (shader, desc) in &self.materials_desc {
+        for (mtype, desc) in &self.materials_desc {
             let device = self.instance.device().logical_clone();
-            self.pipelines.entry(*shader).or_insert_with(|| {
-                shader.build_viewport_pipeline().build(
+            self.pipelines.entry(*mtype).or_insert_with(|| {
+                build_realtime_pipeline(*mtype).build(
                     device,
                     renderpass,
                     render_size,
@@ -528,6 +528,27 @@ fn build_realtime_descriptor(
             vk::ShaderStageFlags::VERTEX,
         )
         .build()
+}
+
+/// Build the realtime pipeline for each material type
+fn build_realtime_pipeline(mtype: MaterialType) -> PipelineBuilder {
+    let mut pipeline = PipelineBuilder::default();
+    let vertex_shader = include_shader!("flat.vert");
+    let fragment_shader = match mtype {
+        MaterialType::INTERNAL_FLAT_2SIDED => include_shader!("flat_twosided.frag").to_vec(),
+        _ => include_shader!("flat.frag").to_vec(),
+    };
+    pipeline.push_shader(vertex_shader, "main", ash::vk::ShaderStageFlags::VERTEX);
+    pipeline.push_shader(
+        &fragment_shader,
+        "main",
+        ash::vk::ShaderStageFlags::FRAGMENT,
+    );
+    pipeline.push_constants(4, vk::ShaderStageFlags::VERTEX);
+    if mtype == MaterialType::INTERNAL_FLAT_2SIDED {
+        pipeline.rasterizer.cull_mode = vk::CullModeFlags::NONE;
+    }
+    pipeline
 }
 
 /// Generates a icosphere.
@@ -870,10 +891,10 @@ fn build_mat_desc_set(
     id: u16,
     material: &Material,
     dm: &mut DescriptorSetManager,
-) -> (ShaderMat, Descriptor) {
+) -> (MaterialType, Descriptor) {
     use crate::materials::DEFAULT_TEXTURE_ID;
 
-    let mut shader = material.shader;
+    let mut shader = material.mtype;
     let dflt_tex = &textures[DEFAULT_TEXTURE_ID as usize];
     let diffuse = textures.get(material.diffuse as usize).unwrap_or(dflt_tex);
     let align = device
@@ -903,7 +924,7 @@ fn build_mat_desc_set(
             vk::ShaderStageFlags::FRAGMENT,
         );
     if material.opacity != 0 {
-        shader = material.shader.two_sided_viewport(); // use a two-sided shader
+        shader = material.mtype.two_sided_viewport(); // use a two-sided shader
         let opacity = textures.get(material.opacity as usize).unwrap_or(dflt_tex);
         descriptor = descriptor.bind_image(
             &opacity.image,
@@ -1282,7 +1303,7 @@ fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
 
 // sort mehses by shader id (first) and then material id (second) to minimize binding changes
 #[cfg(feature = "vulkan-interactive")]
-fn sort_meshes(meshes: &mut [VulkanMesh], mats: &[(ShaderMat, Descriptor)]) {
+fn sort_meshes(meshes: &mut [VulkanMesh], mats: &[(MaterialType, Descriptor)]) {
     meshes.sort_unstable_by(|a, b| {
         let (_, desc_a) = &mats[a.material as usize];
         let (_, desc_b) = &mats[b.material as usize];
@@ -1810,12 +1831,12 @@ fn load_raytrace_materials_to_gpu(
                 metalness: mat.metalness as u32,
                 opacity: mat.opacity as u32,
                 normal: mat.normal as u32,
-                bsdf_index: mat.shader.sbt_callable_index(),
+                bsdf_index: mat.mtype.sbt_callable_index(),
                 roughness_mul: mat.roughness_mul,
                 metalness_mul: mat.metalness_mul as f32,
                 anisotropy: mat.anisotropy,
                 ior_dielectric: mat.ior,
-                is_specular: mat.shader.is_specular() as u32,
+                is_specular: mat.mtype.is_specular() as u32,
                 is_emissive: mat.emissive_col.is_some() as u32,
                 emissive_col: col_int_to_f32(mat.emissive_col.unwrap_or([0, 0, 0])),
             }

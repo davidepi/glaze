@@ -246,7 +246,7 @@ fn const_to_c_define(con: ItemConst) -> String {
                 },
                 _ => panic!("Constant value must be a literal"),
             };
-            return format!("#define {} {}\n", con.ident, val);
+            format!("#define {} {}\n", con.ident, val)
         }
         _ => panic!("Only literals are supported as conts"),
     }

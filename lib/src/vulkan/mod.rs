@@ -42,3 +42,13 @@ pub use self::scene::RealtimeScene;
 
 /// Number of frames prepared by the CPU while waiting for the GPU.
 const FRAMES_IN_FLIGHT: usize = 2;
+
+/// Macro used to include the shader contained inside the /shader directory as a `[u8; _]`.
+///
+/// Probably will not work outside this crate.
+#[macro_export]
+macro_rules! include_shader {
+    ($shader_name : expr) => {
+        include_bytes!(concat!(env!("OUT_DIR"), "/shaders/", $shader_name, ".spv"))
+    };
+}

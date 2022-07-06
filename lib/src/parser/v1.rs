@@ -1,9 +1,7 @@
 use super::{write_header, Meta, ParsedScene, HEADER_LEN};
 use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
-use crate::materials::{TextureFormat, TextureInfo};
-use crate::{
-    Light, LightType, Material, MeshInstance, Metal, ShaderMat, Spectrum, Texture, Transform,
-};
+use crate::materials::{MaterialType, TextureFormat, TextureInfo};
+use crate::{Light, LightType, Material, MeshInstance, Metal, Spectrum, Texture, Transform};
 use cgmath::{Point2, Point3, Vector3 as Vec3};
 use fnv::FnvHashMap;
 use image::codecs::png::{CompressionType, FilterType, PngDecoder, PngEncoder};
@@ -891,7 +889,7 @@ fn material_to_bytes(material: &Material) -> Vec<u8> {
         + 5 * std::mem::size_of::<u16>() // diff, rough, metal, normal, opacity textures
         + str_len; // material name
     let mut retval = Vec::with_capacity(max_len);
-    retval.push(material.shader.into());
+    retval.push(material.mtype.into());
     retval.push(material.metal.into());
     retval.extend(material.diffuse_mul);
     if let Some(col) = material.emissive_col {
@@ -915,7 +913,7 @@ fn material_to_bytes(material: &Material) -> Vec<u8> {
 
 /// Converts a vector of bytes to a Material.
 fn bytes_to_material(data: &[u8]) -> Material {
-    let shader = ShaderMat::from(data[0]);
+    let mtype = MaterialType::from(data[0]);
     let metal = Metal::from(data[1]);
     let mut index = 2;
     let diffuse_mul = data[index..index + 3].try_into().unwrap();
@@ -950,7 +948,7 @@ fn bytes_to_material(data: &[u8]) -> Material {
     let name = String::from_utf8(data[index..].to_vec()).unwrap();
     Material {
         name,
-        shader,
+        mtype,
         metal,
         ior,
         diffuse,
@@ -1120,15 +1118,14 @@ mod tests {
         texture_to_bytes, transform_to_bytes, vertex_to_bytes,
     };
     use crate::geometry::{Camera, Mesh, OrthographicCam, PerspectiveCam, Vertex};
-    use crate::materials::{TextureFormat, TextureInfo};
+    use crate::materials::{MaterialType, TextureFormat, TextureInfo};
     use crate::parser::v1::{
         bytes_to_instance, bytes_to_light, bytes_to_material, instance_to_bytes, light_to_bytes,
         material_to_bytes, HASH_SIZE,
     };
     use crate::parser::{parse, Meta, ParserVersion, HEADER_LEN};
     use crate::{
-        Light, LightType, Material, MeshInstance, Metal, Serializer, ShaderMat, Spectrum, Texture,
-        Transform,
+        Light, LightType, Material, MeshInstance, Metal, Serializer, Spectrum, Texture, Transform,
     };
     use cgmath::{Matrix4, Point2, Point3, Vector3 as Vec3};
     use rand::distributions::Alphanumeric;
@@ -1259,8 +1256,8 @@ mod tests {
         let mut rng = Xoshiro128StarStar::seed_from_u64(seed);
         let mut data = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            let shaders = ShaderMat::all_values();
-            let shader = shaders[rng.gen_range(0..shaders.len())];
+            let types = MaterialType::all_values();
+            let mtype = types[rng.gen_range(0..types.len())];
             let ior = rng.gen_range(1.0..3.0);
             let diffuse = rng.gen_range(0..u16::MAX - 1);
             let roughness = rng.gen_range(0..u16::MAX - 1);
@@ -1300,7 +1297,7 @@ mod tests {
             };
             let material = Material {
                 name,
-                shader,
+                mtype,
                 metal,
                 ior,
                 diffuse,

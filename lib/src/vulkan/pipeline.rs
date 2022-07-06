@@ -1,5 +1,6 @@
 use crate::geometry::Vertex;
-use crate::{include_shader, Integrator, LightType, ShaderMat};
+use crate::materials::MaterialType;
+use crate::{include_shader, Integrator, LightType};
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
 use cgmath::Matrix4;
@@ -487,7 +488,7 @@ pub fn build_raytracing_pipeline(
             p_shader_group_capture_replay_handle: ptr::null(),
         });
     }
-    for mat_rcall in ShaderMat::callable_shaders() {
+    for mat_rcall in MaterialType::callable_shaders() {
         shader_stages.push(create_ci(&mat_rcall, vk::ShaderStageFlags::CALLABLE_KHR));
         shader_groups.push(vk::RayTracingShaderGroupCreateInfoKHR {
             s_type: vk::StructureType::RAY_TRACING_SHADER_GROUP_CREATE_INFO_KHR,
