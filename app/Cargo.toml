@@ -16,5 +16,5 @@ imgui = {version="0.8", features=["tables-api"]}
 image = "0.24"
 imgui-winit-support = "0.8"
 cgmath = "0.18"
-native-dialog = "0.6"
+rfd = {version="0.9", default-features=false, features=["xdg-portal"]}
 clap = {version="3.1", features=["derive"]}

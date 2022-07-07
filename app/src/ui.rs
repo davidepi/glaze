@@ -11,7 +11,7 @@ use imgui::{
     CollapsingHeader, ColorEdit, ComboBox, Condition, Image, ImageButton, InputText, MenuItem,
     PopupModal, Selectable, Slider, SliderFlags, TextureId, Ui,
 };
-use native_dialog::FileDialog;
+use rfd::FileDialog;
 use std::path::PathBuf;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{mpsc, Arc};
@@ -101,12 +101,24 @@ pub fn draw_ui(
 ) {
     ui.main_menu_bar(|| {
         ui.menu("File", || {
-            if MenuItem::new("Open").build(ui) && state.loading_scene.is_none() {
-                open_scene(state);
+            if MenuItem::new("Open scene...").build(ui) && state.loading_scene.is_none() {
+                select_and_load_scene(state);
             }
             if MenuItem::new("Save").build(ui) {
                 if let Err(error) = renderer.save_scene() {
                     log::error!("Failed to save scene: {}", error);
+                }
+            }
+            if MenuItem::new("Save as...").build(ui) {
+                let dialog_pick = FileDialog::new()
+                    .set_title("Save As...")
+                    .add_filter("Glaze scene", &["glaze"])
+                    .save_file();
+                if let Some(path) = dialog_pick {
+                    if let Err(error) = renderer.scene().save_as(path.as_os_str().to_str().unwrap())
+                    {
+                        log::error!("Failed to save scene: {}", error);
+                    }
                 }
             }
         });
@@ -354,8 +366,21 @@ fn window_textures(
                 .hint("Texture path...")
                 .build();
             ui.same_line();
-            if ui.button("Select") {
-                if let Ok(Some(path)) = FileDialog::new().show_open_single_file() {
+            if ui.button("Select...") {
+                if let Some(path) = FileDialog::new()
+                    .set_title("Select texture...")
+                    .add_filter("PNG image", &["png"])
+                    .add_filter("JPEG image", &["jpeg"])
+                    .add_filter("GIF image", &["gif"])
+                    .add_filter("BMP image", &["bmp"])
+                    .add_filter("ICO image", &["ico"])
+                    .add_filter("TIFF image", &["tiff"])
+                    .add_filter("WebP image", &["webp"])
+                    .add_filter("DDS image", &["dds"])
+                    .add_filter("TGA image", &["tga"])
+                    .add_filter("Netpbm image", &["pnm", "pbm", "pgm", "ppm"])
+                    .pick_file()
+                {
                     *texture_path = path.to_str().unwrap().to_string();
                 }
             }
@@ -1058,10 +1083,13 @@ fn window_info(ui: &Ui, state: &mut UiState) {
     }
 }
 
-fn open_scene(state: &mut UiState) {
-    let dialog = FileDialog::new().show_open_single_file();
-    match dialog {
-        Ok(Some(path)) => match parse(path) {
+fn select_and_load_scene(state: &mut UiState) {
+    let dialog_pick = FileDialog::new()
+        .set_title("Open scene...")
+        .add_filter("Glaze scene", &["glaze"])
+        .pick_file();
+    if let Some(path) = dialog_pick {
+        match parse(path) {
             Ok(parsed) => {
                 let (wchan, rchan) = mpsc::channel();
                 let instance_clone = Arc::clone(&state.instance);
@@ -1088,8 +1116,6 @@ fn open_scene(state: &mut UiState) {
                 state.open_loading_popup = true;
             }
             Err(err) => log::error!("Failed to parse scene file: {}", err),
-        },
-        Ok(None) => (),
-        _ => log::error!("Error opening file dialog"),
+        }
     }
 }

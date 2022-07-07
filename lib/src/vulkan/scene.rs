@@ -14,7 +14,7 @@ use crate::{
     ParsedScene, RayTraceInstance, Spectrum, Texture, TextureFormat, Transform, Vertex,
 };
 #[cfg(feature = "vulkan-interactive")]
-use crate::{MaterialType, Pipeline, PipelineBuilder, PresentInstance};
+use crate::{MaterialType, Pipeline, PipelineBuilder, PresentInstance, Serializer};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use cgmath::{InnerSpace, SquareMatrix, Vector3 as Vec3};
@@ -490,6 +490,23 @@ impl RealtimeScene {
             textures,
             Some(meta),
         )
+    }
+
+    /// Saves the scene as a new file.
+    ///
+    /// The file is saved using [ParserVersion::V1]
+    pub fn save_as(&self, path: &str) -> Result<(), std::io::Error> {
+        Serializer::new(path, crate::ParserVersion::V1)
+            .with_vertices(&self.file.vertices()?)
+            .with_meshes(&self.file.meshes()?)
+            .with_instances(&self.file.instances()?)
+            .with_transforms(&self.file.transforms()?)
+            .with_cameras(&[self.current_cam])
+            .with_lights(self.lights())
+            .with_materials(self.materials())
+            .with_metadata(&self.meta)
+            .with_textures(&self.raw_textures[..])
+            .serialize()
     }
 }
 
