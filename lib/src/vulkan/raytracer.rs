@@ -13,7 +13,9 @@ use crate::vulkan::pipeline::build_raytracing_pipeline;
 use crate::vulkan::FRAMES_IN_FLIGHT;
 #[cfg(feature = "vulkan-interactive")]
 use crate::PresentInstance;
-use crate::{Camera, Light, Material, Pipeline, RayTraceInstance, RealtimeRenderer, Texture};
+#[cfg(feature = "vulkan-interactive")]
+use crate::RealtimeRenderer;
+use crate::{Camera, Light, Material, Pipeline, RayTraceInstance, Texture};
 use ash::extensions::khr::RayTracingPipeline as RTPipelineLoader;
 use ash::vk;
 use cgmath::SquareMatrix;
@@ -681,6 +683,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
     }
 }
 
+#[cfg(feature = "vulkan-interactive")]
 impl TryFrom<&RealtimeRenderer> for RayTraceRenderer<PresentInstance> {
     type Error = std::io::Error;
 

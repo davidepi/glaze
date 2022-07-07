@@ -1,5 +1,3 @@
-#[cfg(feature = "vulkan")]
-use crate::include_shader;
 use crate::Spectrum;
 use cgmath::{Matrix4, Point3, Vector3 as Vec3};
 
@@ -12,7 +10,6 @@ pub const SBT_LIGHT_STRIDE: usize = 1;
 
 /// Enumerator listing all different types of lights.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(non_camel_case_types)]
 pub enum LightType {
     /// Omnidirectional light.
     OMNI,
@@ -104,13 +101,13 @@ impl LightType {
     }
 
     /// Returns all the callable shader implementations for the lights.
-    #[cfg(feature = "vulkan")]
+    #[cfg(all(feature = "vulkan", not(target_os = "macos")))]
     pub(crate) fn callable_shaders() -> [Vec<u8>; SBT_LIGHT_TYPES * SBT_LIGHT_STRIDE] {
         [
-            include_shader!("light_omni_sample_visible.rcall").to_vec(),
-            include_shader!("light_sun_sample_visible.rcall").to_vec(),
-            include_shader!("light_area_sample_visible.rcall").to_vec(),
-            include_shader!("light_sky_sample_visible.rcall").to_vec(),
+            crate::include_shader!("light_omni_sample_visible.rcall").to_vec(),
+            crate::include_shader!("light_sun_sample_visible.rcall").to_vec(),
+            crate::include_shader!("light_area_sample_visible.rcall").to_vec(),
+            crate::include_shader!("light_sky_sample_visible.rcall").to_vec(),
         ]
     }
 

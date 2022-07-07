@@ -1,7 +1,7 @@
 #[cfg(feature = "vulkan")]
 use shaderc::{
-    CompileOptions, Compiler, EnvVersion, IncludeCallbackResult, IncludeType, OptimizationLevel,
-    ResolvedInclude, ShaderKind, TargetEnv,
+    CompileOptions, Compiler, IncludeCallbackResult, IncludeType, OptimizationLevel,
+    ResolvedInclude, ShaderKind,
 };
 #[cfg(feature = "vulkan")]
 use std::collections::HashMap;
@@ -51,7 +51,11 @@ fn compile_spirv(variants: &[(&str, &str, &str)]) -> Result<(), Box<dyn Error>> 
     let compiler = Compiler::new().expect("Failed to find a SPIR-V compiler");
     let mut options = CompileOptions::new().expect("Error while initializing compiler");
     options.set_include_callback(handle_includes);
-    options.set_target_env(TargetEnv::Vulkan, EnvVersion::Vulkan1_2 as u32);
+    #[cfg(not(target_os = "macos"))] // moltenVK in macos is limited to vulkan 1.1
+    options.set_target_env(
+        shaderc::TargetEnv::Vulkan,
+        shaderc::EnvVersion::Vulkan1_2 as u32,
+    );
     if is_debug {
         options.set_optimization_level(OptimizationLevel::Zero);
     } else {
@@ -68,10 +72,15 @@ fn compile_spirv(variants: &[(&str, &str, &str)]) -> Result<(), Box<dyn Error>> 
                         "vert" => Some(ShaderKind::Vertex),
                         "comp" => Some(ShaderKind::Compute),
                         "frag" => Some(ShaderKind::Fragment),
+                        #[cfg(not(target_os = "macos"))] // no raytracing on macOS
                         "rgen" => Some(ShaderKind::RayGeneration),
+                        #[cfg(not(target_os = "macos"))] // no raytracing on macOS
                         "rahit" => Some(ShaderKind::AnyHit),
+                        #[cfg(not(target_os = "macos"))] // no raytracing on macOS
                         "rchit" => Some(ShaderKind::ClosestHit),
+                        #[cfg(not(target_os = "macos"))] // no raytracing on macOS
                         "rmiss" => Some(ShaderKind::Miss),
+                        #[cfg(not(target_os = "macos"))] // no raytracing on macOS
                         "rcall" => Some(ShaderKind::Callable),
                         _ => None,
                     });

@@ -1,37 +1,26 @@
 use super::acceleration::{SceneAS, SceneASBuilder};
 use super::cmd::CommandManager;
-#[cfg(feature = "vulkan-interactive")]
 use super::descriptor::{Descriptor, DescriptorSetManager};
 use super::device::Device;
-use super::imgui::as_u8_slice;
 use super::instance::Instance;
 use super::memory::{AllocatedBuffer, MemoryManager};
 use super::pipeline::build_compute_pipeline;
-#[cfg(feature = "vulkan-interactive")]
-use super::pipeline::Pipeline;
 use super::raytrace_structures::{RTInstance, RTLight, RTMaterial, RTSky};
-use super::{AllocatedImage, UnfinishedExecutions};
+use super::{as_u8_slice, AllocatedImage, UnfinishedExecutions};
 use crate::geometry::{Distribution1D, Distribution2D};
-#[cfg(feature = "vulkan-interactive")]
-use crate::materials::{TextureFormat, TextureLoaded};
+use crate::materials::TextureLoaded;
 use crate::{
-    include_shader, Camera, ColorRGB, Light, LightType, Material, MaterialType, Mesh, MeshInstance,
-    Meta, Metal, ParsedScene, PipelineBuilder, RayTraceInstance, Spectrum, Vertex,
+    include_shader, Camera, ColorRGB, Light, LightType, Material, Mesh, MeshInstance, Meta, Metal,
+    ParsedScene, RayTraceInstance, Spectrum, Texture, TextureFormat, Transform, Vertex,
 };
 #[cfg(feature = "vulkan-interactive")]
-use crate::{PresentInstance, Texture, Transform};
+use crate::{MaterialType, Pipeline, PipelineBuilder, PresentInstance};
 use ash::extensions::khr::AccelerationStructure as AccelerationLoader;
 use ash::vk;
 use cgmath::{InnerSpace, SquareMatrix, Vector3 as Vec3};
-#[cfg(feature = "vulkan-interactive")]
-use fnv::{FnvBuildHasher, FnvHashMap};
+use fnv::FnvHashMap;
 use gpu_allocator::MemoryLocation;
-#[cfg(feature = "vulkan-interactive")]
-use std::collections::hash_map::Entry;
 use std::f32::consts::PI;
-#[cfg(feature = "vulkan-interactive")]
-use std::ffi::c_void;
-#[cfg(feature = "vulkan-interactive")]
 use std::ptr;
 use std::sync::{Arc, RwLock};
 
@@ -103,6 +92,7 @@ pub struct VulkanMesh {
 }
 
 /// Data required to draw the skydome in the non-raytraced renderer.
+#[cfg(feature = "vulkan-interactive")]
 pub struct SkydomeDrawData {
     /// Number of vertices in the skydome
     pub index_count: u32,
@@ -517,6 +507,7 @@ impl Drop for RealtimeScene {
 }
 
 /// Build the scene-bound descriptor for the realtime renderer.
+#[cfg(feature = "vulkan-interactive")]
 fn build_realtime_descriptor(
     dm: &mut DescriptorSetManager,
     transforms_buffer: &AllocatedBuffer,
@@ -531,6 +522,7 @@ fn build_realtime_descriptor(
 }
 
 /// Build the realtime pipeline for each material type
+#[cfg(feature = "vulkan-interactive")]
 fn build_realtime_pipeline(mtype: MaterialType) -> PipelineBuilder {
     let mut pipeline = PipelineBuilder::default();
     let vertex_shader = include_shader!("flat.vert");
@@ -552,6 +544,7 @@ fn build_realtime_pipeline(mtype: MaterialType) -> PipelineBuilder {
 }
 
 /// Generates a icosphere.
+#[cfg(feature = "vulkan-interactive")]
 fn gen_icosphere(subdivisions: u8) -> (Vec<f32>, Vec<u32>) {
     // move a vertex over the unit sphere
     fn unit_sphere(x: f32, y: f32, z: f32) -> [f32; 3] {
@@ -624,6 +617,7 @@ fn reorder_lights(mut lights: Vec<Light>) -> Vec<Light> {
 }
 
 /// Build the skydome for the realtime renderer (including its pipelines).
+#[cfg(feature = "vulkan-interactive")]
 fn build_skydome_realtime(
     device: &Device,
     mm: &MemoryManager,
@@ -760,7 +754,6 @@ fn load_vertices_to_gpu(
 /// Loads all transforms to GPU.
 /// Likely this will become a per-object binding.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
-#[cfg(feature = "vulkan-interactive")]
 fn load_transforms_to_gpu(
     device: &Device,
     mm: &MemoryManager,
@@ -860,6 +853,9 @@ fn load_indices_to_gpu(
 /// The slice is expected to contain One-to-Many relationships.
 #[cfg(feature = "vulkan-interactive")]
 fn instances_to_map(instances: &[MeshInstance]) -> FnvHashMap<u16, Vec<u16>> {
+    use fnv::FnvBuildHasher;
+    use std::collections::hash_map::Entry;
+
     // first iteration, record the amount of tranformations for each mesh
     let mut map = FnvHashMap::with_capacity_and_hasher(instances.len(), FnvBuildHasher::default());
     for instance in instances {
@@ -976,7 +972,7 @@ fn load_materials_parameters(
         let params = MaterialParams::from(mat);
         unsafe {
             std::ptr::copy_nonoverlapping(&params, mapped, 1);
-            let mapped_void = mapped as *mut c_void;
+            let mapped_void = mapped as *mut std::ffi::c_void;
             mapped = mapped_void.add((PARAMS_SIZE + padding) as usize).cast();
         }
     }
@@ -999,7 +995,6 @@ fn load_materials_parameters(
 
 /// Loads a single texture to the GPU with optimal layout.
 /// Updates the UnfinishedExecutions with the buffers to free and fences to wait on.
-#[cfg(feature = "vulkan-interactive")]
 fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
     instance: Arc<T>,
     mm: &MemoryManager,
@@ -1550,7 +1545,6 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
     }
 
     /// rebuild the scene descriptor set.
-    #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn refresh_descriptors(&mut self) {
         self.descriptor = build_raytrace_descriptor(
             &mut self.dm,
@@ -1570,7 +1564,6 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
     }
 
     /// update the lights, materials and textures.
-    #[cfg(feature = "vulkan-interactive")]
     pub(crate) fn update_materials_and_lights(
         &mut self,
         materials: &[Material],

@@ -1,9 +1,10 @@
 use ash::vk;
-use std::convert::TryInto;
 use std::ptr;
+#[cfg(feature = "vulkan-interactive")]
 use std::sync::Arc;
 
 /// Contains the necessary synchronization objects used during a draw operation for a single frame.
+#[cfg(feature = "vulkan-interactive")]
 pub struct PresentFrameSync {
     /// Fence used to stop the CPU until an image is ready to be acquired.
     pub acquire: vk::Fence,
@@ -16,6 +17,7 @@ pub struct PresentFrameSync {
     device: Arc<ash::Device>,
 }
 
+#[cfg(feature = "vulkan-interactive")]
 impl PresentFrameSync {
     /// Creates a new PresentFrameSync object
     fn create(device: Arc<ash::Device>) -> Self {
@@ -40,6 +42,7 @@ impl PresentFrameSync {
     }
 }
 
+#[cfg(feature = "vulkan-interactive")]
 impl Drop for PresentFrameSync {
     fn drop(&mut self) {
         unsafe {
@@ -51,6 +54,7 @@ impl Drop for PresentFrameSync {
     }
 }
 
+#[cfg(feature = "vulkan-interactive")]
 impl std::fmt::Debug for PresentFrameSync {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PresentFrameSync")
@@ -63,10 +67,12 @@ impl std::fmt::Debug for PresentFrameSync {
 }
 
 /// Constains all the synchronization objects for all frames.
+#[cfg(feature = "vulkan-interactive")]
 pub struct PresentSync<const FRAMES_IN_FLIGHT: usize> {
     frames: [PresentFrameSync; FRAMES_IN_FLIGHT],
 }
 
+#[cfg(feature = "vulkan-interactive")]
 impl<const FRAMES_IN_FLIGHT: usize> PresentSync<FRAMES_IN_FLIGHT> {
     /// Creates a PresentSync object
     pub fn create(device: Arc<ash::Device>) -> Self {
@@ -85,8 +91,8 @@ impl<const FRAMES_IN_FLIGHT: usize> PresentSync<FRAMES_IN_FLIGHT> {
     }
 }
 
-/// Creates a fence
-pub(crate) fn create_fence(device: &ash::Device, signaled: bool) -> vk::Fence {
+/// Creates a fence in vulkan
+pub fn create_fence(device: &ash::Device, signaled: bool) -> vk::Fence {
     let ci = vk::FenceCreateInfo {
         s_type: vk::StructureType::FENCE_CREATE_INFO,
         p_next: ptr::null(),
@@ -99,8 +105,8 @@ pub(crate) fn create_fence(device: &ash::Device, signaled: bool) -> vk::Fence {
     unsafe { device.create_fence(&ci, None) }.expect("Failed to create fence")
 }
 
-/// Creates a semaphore
-pub(crate) fn create_semaphore(device: &ash::Device) -> vk::Semaphore {
+/// Creates a semaphore in vulkan
+pub fn create_semaphore(device: &ash::Device) -> vk::Semaphore {
     let ci = vk::SemaphoreCreateInfo {
         s_type: vk::StructureType::SEMAPHORE_CREATE_INFO,
         p_next: ptr::null(),

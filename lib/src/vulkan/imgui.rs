@@ -1,3 +1,4 @@
+use super::as_u8_slice;
 use super::cmd::CommandManager;
 use super::descriptor::{DLayoutCache, Descriptor, DescriptorSetManager};
 use super::device::Device;
@@ -696,9 +697,4 @@ fn upload_image(
     let transfer_queue = device.transfer_queue();
     let fence = device.immediate_execute(cmd, transfer_queue, command);
     device.wait_completion(&[fence]);
-}
-
-/// Reads a struct as a sequence of bytes
-pub(crate) unsafe fn as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-    std::slice::from_raw_parts((p as *const T) as *const u8, std::mem::size_of::<T>())
 }

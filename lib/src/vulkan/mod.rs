@@ -18,7 +18,6 @@ mod scene;
 mod surface;
 #[cfg(feature = "vulkan-interactive")]
 mod swapchain;
-#[cfg(feature = "vulkan-interactive")]
 mod sync;
 
 // used in the material module
@@ -51,4 +50,9 @@ macro_rules! include_shader {
     ($shader_name : expr) => {
         include_bytes!(concat!(env!("OUT_DIR"), "/shaders/", $shader_name, ".spv"))
     };
+}
+
+/// Reads a struct as a sequence of bytes
+unsafe fn as_u8_slice<T: Sized>(p: &T) -> &[u8] {
+    std::slice::from_raw_parts((p as *const T) as *const u8, std::mem::size_of::<T>())
 }

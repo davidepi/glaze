@@ -1,11 +1,14 @@
 #[cfg(feature = "vulkan")]
 use crate::geometry::{SBT_LIGHT_STRIDE, SBT_LIGHT_TYPES};
-#[cfg(feature = "vulkan")]
-use crate::include_shader;
-#[cfg(feature = "vulkan")]
-use crate::materials::{SBT_MATERIAL_STRIDE, SBT_MATERIAL_TYPES};
 use crate::Metal;
 use std::error::Error;
+
+#[cfg(feature = "vulkan")]
+/// Different types of materials in the SBT.
+pub const SBT_MATERIAL_TYPES: usize = 6;
+#[cfg(feature = "vulkan")]
+/// For each type of material in the SBT, how many shaders exists.
+pub const SBT_MATERIAL_STRIDE: usize = 2;
 
 /// Categorize the light interacts with a material.
 ///
@@ -216,21 +219,21 @@ impl MaterialType {
     }
 
     /// Returns all the callable shaders implementations for every material type.
-    #[cfg(feature = "vulkan")]
+    #[cfg(all(feature = "vulkan", not(target_os = "macos")))]
     pub(crate) fn callable_shaders() -> [Vec<u8>; SBT_MATERIAL_TYPES * SBT_MATERIAL_STRIDE] {
         [
-            include_shader!("mat_lambert_value.rcall").to_vec(),
-            include_shader!("mat_lambert_sample_value.rcall").to_vec(),
-            include_shader!("mat_mirror_value.rcall").to_vec(),
-            include_shader!("mat_mirror_sample_value.rcall").to_vec(),
-            include_shader!("mat_glass_value.rcall").to_vec(),
-            include_shader!("mat_glass_sample_value.rcall").to_vec(),
-            include_shader!("mat_metal_value.rcall").to_vec(),
-            include_shader!("mat_metal_sample_value.rcall").to_vec(),
-            include_shader!("mat_frosted_value.rcall").to_vec(),
-            include_shader!("mat_frosted_sample_value.rcall").to_vec(),
-            include_shader!("mat_uber_value.rcall").to_vec(),
-            include_shader!("mat_uber_sample_value.rcall").to_vec(),
+            crate::include_shader!("mat_lambert_value.rcall").to_vec(),
+            crate::include_shader!("mat_lambert_sample_value.rcall").to_vec(),
+            crate::include_shader!("mat_mirror_value.rcall").to_vec(),
+            crate::include_shader!("mat_mirror_sample_value.rcall").to_vec(),
+            crate::include_shader!("mat_glass_value.rcall").to_vec(),
+            crate::include_shader!("mat_glass_sample_value.rcall").to_vec(),
+            crate::include_shader!("mat_metal_value.rcall").to_vec(),
+            crate::include_shader!("mat_metal_sample_value.rcall").to_vec(),
+            crate::include_shader!("mat_frosted_value.rcall").to_vec(),
+            crate::include_shader!("mat_frosted_sample_value.rcall").to_vec(),
+            crate::include_shader!("mat_uber_value.rcall").to_vec(),
+            crate::include_shader!("mat_uber_sample_value.rcall").to_vec(),
         ]
     }
 

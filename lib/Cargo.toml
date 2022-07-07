@@ -40,6 +40,5 @@ float-cmp = "0.9"
 env_logger = "0.9" # log validation errors in vulkan tests
 
 [features]
-default = ["vulkan-interactive"]
-vulkan = ["ash", "gpu-allocator", "memoffset", "shaderc", "syn"]
 vulkan-interactive = ["vulkan", "winit", "imgui", "font-kit", "metal", "cocoa", "winapi"]
+vulkan = ["ash", "gpu-allocator", "memoffset", "shaderc", "syn"]
