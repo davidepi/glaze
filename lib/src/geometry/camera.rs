@@ -128,14 +128,15 @@ impl Camera {
     }
 
     /// Returns the projection matrix for the current camera.
-    pub fn projection(&self, aspect_ratio: f32) -> Matrix4<f32> {
+    pub fn projection(&self, width: u32, height: u32) -> Matrix4<f32> {
         match self {
             Camera::Perspective(cam) => {
-                perspective(Rad(cam.fovy(aspect_ratio)), aspect_ratio, cam.near, cam.far)
+                let ar = width as f32 / height as f32;
+                perspective(Rad(cam.fovy(ar)), ar, cam.near, cam.far)
             }
 
             Camera::Orthographic(cam) => ortho(
-                -cam.scale, cam.scale, -cam.scale, cam.scale, cam.near, cam.far,
+                -cam.scale, cam.scale, -cam.scale, cam.scale, -cam.far, cam.far,
             ),
         }
     }

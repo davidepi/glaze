@@ -460,10 +460,16 @@ impl RealtimeRenderer {
                 // if raytracer is not requested, draw the objects
                 self.forward_pass.begin(cmd);
                 if raytracer.is_none() {
-                    let ar = self.swapchain.extent().width as f32
-                        / self.swapchain.extent().height as f32;
-                    draw_background(&self.scene, ar, device, cmd, &mut self.stats);
-                    draw_objects(&self.scene, ar, frame_data, device, cmd, &mut self.stats);
+                    let extent = self.swapchain.extent();
+                    draw_background(&self.scene, extent, device, cmd, &mut self.stats);
+                    draw_objects(
+                        &self.scene,
+                        extent,
+                        frame_data,
+                        device,
+                        cmd,
+                        &mut self.stats,
+                    );
                 }
                 self.forward_pass.end(cmd);
                 acquired.renderpass.begin(cmd);
@@ -563,14 +569,14 @@ impl Drop for RealtimeRenderer {
 /// Draws all objects belonging to the loaded RealtimeScene.
 unsafe fn draw_objects(
     scene: &RealtimeScene,
-    ar: f32,
+    extent: vk::Extent2D,
     frame_data: &mut FrameDataBuf,
     device: &ash::Device,
     cmd: vk::CommandBuffer,
     stats: &mut InternalStats,
 ) {
     let cam = scene.current_cam;
-    let mut proj = cam.projection(ar);
+    let mut proj = cam.projection(extent.width, extent.height);
     proj[1][1] *= -1.0;
     let view = cam.look_at_rh();
     frame_data.data.projview = proj * view;
@@ -619,7 +625,7 @@ unsafe fn draw_objects(
 
 fn draw_background(
     scene: &RealtimeScene,
-    ar: f32,
+    extent: vk::Extent2D,
     device: &ash::Device,
     cmd: vk::CommandBuffer,
     stats: &mut InternalStats,
@@ -633,7 +639,7 @@ fn draw_background(
         let translation =
             Matrix4::<f32>::from_translation(camera.position() - Point3::new(0.0, 0.0, 0.0));
         let model = translation * rotation * scale;
-        let mut proj = camera.projection(ar);
+        let mut proj = camera.projection(extent.width, extent.height);
         proj[1][1] *= -1.0;
         let view = camera.look_at_rh();
         let mvp = proj * view * model;

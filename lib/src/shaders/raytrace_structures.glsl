@@ -16,6 +16,7 @@ struct RTFrameData
   float exposure;
   vec2 scene_size;
   vec4 scene_centre;
+  bool camera_persp;
 };
 
 struct RTInstance
