@@ -223,24 +223,23 @@ fn window_settings(
     raytracer: &mut Option<RayTraceRenderer<PresentInstance>>,
 ) {
     let mut closed = state.settings_window;
-
     imgui::Window::new("Settings")
         .size([400.0, 400.0], Condition::Appearing)
         .opened(&mut closed)
         .save_settings(false)
         .build(ui, || {
+            let w_size = window.inner_size();
             if CollapsingHeader::new("Viewport Options").build(ui) {
                 ui.text("Current render scale:");
                 ui.text(format!(
                     "Render scale: {}x ({}x{})",
                     state.render_scale_cur,
-                    (window.inner_size().width as f32 * state.render_scale_cur) as u32,
-                    (window.inner_size().height as f32 * state.render_scale_cur) as u32,
+                    (w_size.width as f32 * state.render_scale_cur) as u32,
+                    (w_size.height as f32 * state.render_scale_cur) as u32,
                 ));
                 ui.separator();
                 Slider::new("Render scale", 0.1, 2.5).build(ui, &mut state.render_scale_sel);
                 if ui.button("Apply") {
-                    let w_size = window.inner_size();
                     renderer.update_render_size(
                         w_size.width,
                         w_size.height,
@@ -269,6 +268,7 @@ fn window_settings(
                 };
                 ui.text(format!("Current camera type: {}", camera_name));
                 let old_cam = renderer.camera();
+                let mut update_cam = false;
                 let mut new_cam = old_cam;
                 ComboBox::new("Camera type")
                     .preview_value(camera_name)
@@ -276,53 +276,61 @@ fn window_settings(
                         if Selectable::new("Perspective").build(ui) {
                             if let Camera::Perspective(_) = old_cam {
                             } else {
+                                update_cam = true;
                                 new_cam = Camera::Perspective(PerspectiveCam {
                                     position: old_cam.position(),
                                     target: old_cam.target(),
                                     up: old_cam.up(),
-                                    fovx: 90.0_f32.to_radians(),
-                                    near: 0.1,
-                                    far: 250.0,
+                                    near: old_cam.near_plane(),
+                                    far: old_cam.far_plane(),
+                                    ..Default::default()
                                 });
                             }
                         }
                         if Selectable::new("Orthographic").build(ui) {
                             if let Camera::Orthographic(_) = old_cam {
                             } else {
-                                renderer.set_camera(Camera::Orthographic(OrthographicCam {
+                                update_cam = true;
+                                new_cam = Camera::Orthographic(OrthographicCam {
                                     position: old_cam.position(),
                                     target: old_cam.target(),
                                     up: old_cam.up(),
-                                    scale: 5.0,
-                                    near: 0.1,
-                                    far: 250.0,
-                                }));
+                                    near: old_cam.near_plane(),
+                                    far: old_cam.far_plane(),
+                                    ..Default::default()
+                                });
                             }
                         }
                     });
-                match new_cam {
-                    Camera::Perspective(mut cam) => {
+                match &mut new_cam {
+                    Camera::Perspective(cam) => {
+                        update_cam |= Slider::new("Near clipping plane", 0.01, 1.0)
+                            .flags(SliderFlags::ALWAYS_CLAMP)
+                            .build(ui, &mut cam.near)
+                            || Slider::new("Far clipping plane", 100.0, 1E4)
+                                .flags(SliderFlags::LOGARITHMIC)
+                                .flags(SliderFlags::ALWAYS_CLAMP)
+                                .build(ui, &mut cam.far);
                         let mut fovx = cam.fovx.to_degrees();
-                        Slider::new("Near clipping plane", 0.01, 1.0)
-                            .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut cam.near);
-                        Slider::new("Far clipping plane", 100.0, 10000.0)
-                            .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut cam.far);
-                        Slider::new("Field of View", 1.0, 150.0).build(ui, &mut fovx);
-                        cam.fovx = fovx.to_radians();
+                        if Slider::new("Field of View", 1.0, 150.0).build(ui, &mut fovx) {
+                            cam.fovx = fovx.to_radians();
+                            update_cam = true;
+                        }
                     }
-                    Camera::Orthographic(mut cam) => {
-                        Slider::new("Near clipping plane", 0.01, 1.0)
+                    Camera::Orthographic(cam) => {
+                        update_cam |= Slider::new("Near clipping plane", 0.01, 1.0)
                             .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut cam.near);
-                        Slider::new("Far clipping plane", 100.0, 10000.0)
-                            .flags(SliderFlags::ALWAYS_CLAMP)
-                            .build(ui, &mut cam.far);
-                        Slider::new("Scale", 1.0, 10.0).build(ui, &mut cam.scale);
+                            .build(ui, &mut cam.near)
+                            || Slider::new("Far clipping plane", 100.0, 1E4)
+                                .flags(SliderFlags::ALWAYS_CLAMP)
+                                .build(ui, &mut cam.far)
+                            || Slider::new("Scale", 0.1, 1E4)
+                                .flags(SliderFlags::ALWAYS_CLAMP)
+                                .flags(SliderFlags::LOGARITHMIC)
+                                .build(ui, &mut cam.scale)
                     }
                 };
-                if old_cam != new_cam {
+                if update_cam {
                     renderer.set_camera(new_cam);
                     if let Some(raytracer) = raytracer.as_mut() {
                         raytracer.update_camera(new_cam);

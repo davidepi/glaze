@@ -11,6 +11,7 @@ pub struct RTFrameData {
     pub exposure: f32,
     pub scene_size: [f32; 2],
     pub scene_centre: [f32; 4],
+    pub camera_persp: bool,
 }
 
 impl Default for RTFrameData {
@@ -23,6 +24,7 @@ impl Default for RTFrameData {
             pixel_offset: [0.0; 2],
             scene_size: [0.0; 2],
             scene_centre: [0.0; 4],
+            camera_persp: true,
         }
     }
 }

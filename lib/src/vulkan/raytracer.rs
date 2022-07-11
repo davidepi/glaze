@@ -478,6 +478,10 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         if self.request_new_frame {
             self.sample_scheduler.rewind();
         }
+        let camera_persp = match self.scene.camera {
+            Camera::Perspective(_) => true,
+            Camera::Orthographic(_) => false,
+        };
         let fd = RTFrameData {
             seed: self.rng.gen(),
             lights_no: self.scene.lights_no,
@@ -491,6 +495,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
                 self.scene.meta.scene_centre[2],
                 0.0,
             ],
+            camera_persp,
         };
         update_frame_data(fd, &mut self.frame_data[frame_index]);
         let queue = device.compute_queue();
@@ -1097,9 +1102,8 @@ fn build_sbt<T: Instance>(
 /// Calculates push constants.
 fn build_push_constants(camera: &Camera, extent: vk::Extent2D) -> [u8; 128] {
     // build matrices
-    let ar = extent.width as f32 / extent.height as f32;
     let view_inv = camera.look_at_rh().invert().unwrap();
-    let mut proj = camera.projection(ar);
+    let mut proj = camera.projection(extent.width, extent.height);
     proj[1][1] *= -1.0; // cgmath is made for openGL and vulkan projection is slightly different
     let proj_inv = proj.invert().unwrap();
     // save matrices to byte array
