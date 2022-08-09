@@ -404,3 +404,4 @@ impl ParsedScene for NoScene {
 }
 
 mod v1;
+mod gltf;

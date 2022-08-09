@@ -691,7 +691,7 @@ fn camera_to_bytes(camera: &Camera) -> [u8; 49] {
             position = cam.position;
             target = cam.target;
             up = cam.up;
-            other_arg = cam.fovx;
+            other_arg = cam.fovy;
             near_plane = cam.near;
             far_plane = cam.far;
         }
@@ -751,7 +751,7 @@ fn bytes_to_camera(data: [u8; 49]) -> Camera {
             position,
             target,
             up,
-            fovx: other_val,
+            fovy: other_val,
             near,
             far,
         }),
@@ -1187,7 +1187,7 @@ mod tests {
                     position,
                     target,
                     up,
-                    fovx: other_arg,
+                    fovy: other_arg,
                     near,
                     far,
                 }),

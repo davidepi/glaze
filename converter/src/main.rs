@@ -380,7 +380,8 @@ fn convert_cameras(cams: &[russimp::camera::Camera], pb: ProgressBar, radius: f3
             position: Point3::new(camera.position.x, camera.position.y, camera.position.z),
             target: Point3::new(camera.look_at.x, camera.look_at.y, camera.look_at.z),
             up: Vec3::new(camera.up.x, camera.up.y, camera.up.z),
-            fovx: camera.horizontal_fov,
+            fovy: camera.horizontal_fov * 1.77, // gltf provides fov_y, russimp fov_x. Assuming a
+            // default aspect_ratio of 16:9 and converting to y
             near: camera.clip_plane_near,
             far: camera.clip_plane_far,
         }));
@@ -388,12 +389,9 @@ fn convert_cameras(cams: &[russimp::camera::Camera], pb: ProgressBar, radius: f3
     }
     if retval_cameras.is_empty() {
         retval_cameras.push(Camera::Perspective(PerspectiveCam {
-            position: Point3::new(0.0, 0.0, 0.0),
-            target: Point3::new(0.0, 0.0, 100.0),
-            up: Vec3::new(0.0, 1.0, 0.0),
-            fovx: f32::to_radians(90.0),
             near: f32::max(1E-3, radius * 2.0 * 1E-5),
             far: f32::max(100.0, radius * 2.0),
+            ..Default::default()
         }));
         pb.inc(1);
     }

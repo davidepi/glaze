@@ -229,6 +229,7 @@ fn window_settings(
         .save_settings(false)
         .build(ui, || {
             let w_size = window.inner_size();
+            let ar = w_size.width as f32 / w_size.height as f32;
             if CollapsingHeader::new("Viewport Options").build(ui) {
                 ui.text("Current render scale:");
                 ui.text(format!(
@@ -311,9 +312,9 @@ fn window_settings(
                                 .flags(SliderFlags::LOGARITHMIC)
                                 .flags(SliderFlags::ALWAYS_CLAMP)
                                 .build(ui, &mut cam.far);
-                        let mut fovx = cam.fovx.to_degrees();
+                        let mut fovx = PerspectiveCam::fovy_to_fovx(cam.fovy, ar).to_degrees();
                         if Slider::new("Field of View", 1.0, 150.0).build(ui, &mut fovx) {
-                            cam.fovx = fovx.to_radians();
+                            cam.fovy = PerspectiveCam::fovx_to_fovy(fovx, ar).to_radians();
                             update_cam = true;
                         }
                     }
