@@ -130,6 +130,9 @@ fn camera_trans_to_vec(trans: gltf::scene::Transform) -> (Point3<f32>, Point3<f3
 
 #[cfg(test)]
 mod tests {
+    use super::ContentGLTF;
+    use crate::ParsedScene;
+    use cgmath::Point3;
     use curl::easy::Easy;
     use sha2::{Digest, Sha256};
     use std::fs::{self, File};
@@ -187,11 +190,40 @@ mod tests {
         }
     }
 
+    fn open_file(name: &'static str) -> Result<ContentGLTF, IOError> {
+        let path = format!("{}/{}", RES_DIR, name);
+        let file = File::open(path.clone())?;
+        ContentGLTF::parse_gltf(path, file)
+    }
+
     #[test]
     fn camera_test() -> Result<(), IOError> {
         download_gltf_asset(
             "2.0/Cameras/glTF-Embedded/Cameras.gltf",
             "601cd3af3728de69b45aa3a91f8a6849799479ae41eede3912ee0ac92190b2f2",
-        )
+        )?;
+        let gltf = open_file("Cameras.gltf")?;
+        let cameras = gltf.cameras()?;
+        assert_eq!(cameras.len(), 2);
+        println!("{:?}", cameras[0].up());
+        match cameras[0] {
+            crate::Camera::Perspective(p) => {
+                assert_eq!(p.position, Point3::new(0.5, 0.5, 3.0));
+                assert_eq!(p.fovy, 0.7);
+                assert_eq!(p.far, 100.0);
+                assert_eq!(p.near, 0.01);
+            }
+            crate::Camera::Orthographic(_) => panic!("Wrong type of camera"),
+        }
+        match cameras[1] {
+            crate::Camera::Orthographic(o) => {
+                assert_eq!(o.position, Point3::new(0.5, 0.5, 3.0));
+                assert_eq!(o.scale, 1.0);
+                assert_eq!(o.far, 100.0);
+                assert_eq!(o.near, 0.01);
+            }
+            crate::Camera::Perspective(_) => panic!("Wrong type of camera"),
+        }
+        Ok(())
     }
 }
