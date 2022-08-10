@@ -39,6 +39,8 @@ winapi = {version="0.3.9", optional=true}
 tempfile = "3.2"
 float-cmp = "0.9"
 env_logger = "0.9" # log validation errors in vulkan tests
+curl = "0.4" # used to download gltf assets
+sha2 = "0.10" # used to download gltf assets
 
 [features]
 vulkan-interactive = ["vulkan", "winit", "imgui", "font-kit", "metal", "cocoa", "winapi"]

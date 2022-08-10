@@ -127,3 +127,71 @@ fn camera_trans_to_vec(trans: gltf::scene::Transform) -> (Point3<f32>, Point3<f3
     let target = position + dir * 100.0;
     (position, target, up)
 }
+
+#[cfg(test)]
+mod tests {
+    use curl::easy::Easy;
+    use sha2::{Digest, Sha256};
+    use std::fs::{self, File};
+    use std::io::{Error as IOError, ErrorKind, Read, Write};
+    use std::path::Path;
+
+    const RES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../resources/gltf");
+    // downloads a gltf assets from the github repository KhronosGroup/glTF-Sample-Models
+    //
+    // using commit 16e8034
+    fn download_gltf_asset(url: &'static str, sha256: &'static str) -> Result<(), IOError> {
+        // creates the folder if not existing, extract filename
+        fs::create_dir_all(RES_DIR)?;
+        let filename = Path::new(&url).file_name().unwrap().to_str().unwrap();
+        const BASE_URL: &str = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/16e803435fca5b07dde3dbdc5bd0e9b8374b2750/";
+        let download_url = format!("{}{}", BASE_URL, url);
+        let file_path = format!("{}/{}", RES_DIR, filename);
+        let mut data = Vec::new();
+        // try to read the file, if existing
+        if let Ok(mut existing_file) = File::open(file_path.clone()) {
+            if existing_file.read_to_end(&mut data).is_ok() {
+                // check sha1 and return if correct, otherwise download a new file
+                let mut hasher = Sha256::new();
+                hasher.update(&data);
+                let result = format!("{:x}", hasher.finalize());
+                if result == sha256 {
+                    return Ok(());
+                }
+            }
+        }
+        // download file
+        let mut easy = Easy::new();
+        easy.url(&download_url)?;
+        easy.follow_location(true)?;
+        {
+            let mut transfer = easy.transfer();
+            transfer.write_function(|c| {
+                data.extend_from_slice(c);
+                Ok(c.len())
+            })?;
+            transfer.perform()?;
+        }
+        // ensures the sha matches
+        let mut hasher = Sha256::new();
+        hasher.update(&data);
+        let result = format!("{:x}", hasher.finalize());
+        if result == sha256 {
+            let mut file = File::create(file_path)?;
+            file.write_all(&data)
+        } else {
+            Err(IOError::new(
+                ErrorKind::InvalidData,
+                "Downloaded file with wrong sha256",
+            ))
+        }
+    }
+
+    #[test]
+    fn camera_test() -> Result<(), IOError> {
+        download_gltf_asset(
+            "2.0/Cameras/glTF-Embedded/Cameras.gltf",
+            "601cd3af3728de69b45aa3a91f8a6849799479ae41eede3912ee0ac92190b2f2",
+        )
+    }
+}

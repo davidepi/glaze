@@ -1,4 +1,7 @@
 imgui.ini
+# downloaded on demand by tests
+resources/gltf/
+
 # Created by https://www.toptal.com/developers/gitignore/api/rust,windows,macos,visualstudiocode,intellij
 # Edit at https://www.toptal.com/developers/gitignore?templates=rust,windows,macos,visualstudiocode,intellij
 
