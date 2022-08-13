@@ -1,3 +1,4 @@
+use super::device::Queue;
 use ash::vk;
 use std::ptr;
 use std::sync::Arc;
@@ -81,7 +82,7 @@ impl PoolManager {
     }
 }
 
-/// Manages a set of command pools.
+/// Manages a set of command pools, associated to a Queue.
 pub struct CommandManager {
     /// The current pool being used to distribute buffers around.
     current_pool: Option<PoolManager>,
@@ -89,20 +90,20 @@ pub struct CommandManager {
     free_pools: Vec<PoolManager>,
     /// List of pools completely used.
     used_pools: Vec<PoolManager>,
+    /// Queue used by this manager.
+    queue: Queue,
     /// Device being used.
     device: Arc<ash::Device>,
-    /// Queue family for which the command pools are allocated.
-    queue_family_index: u32,
 }
 
 impl CommandManager {
     /// Creates a new command manager for a given device and queue family.
     /// Pre-allocates the given number of command pools.
     /// Additional pools are allocated on demand.
-    pub fn new(device: Arc<ash::Device>, queue_family_index: u32, num_pools: usize) -> Self {
+    pub fn new(device: Arc<ash::Device>, queue: Queue, num_pools: usize) -> Self {
         let mut free_pools = (0..num_pools)
             .into_iter()
-            .map(|_| PoolManager::create(&device, queue_family_index))
+            .map(|_| PoolManager::create(&device, queue.family()))
             .collect::<Vec<_>>();
         let current_pool = free_pools.pop();
         CommandManager {
@@ -110,8 +111,13 @@ impl CommandManager {
             current_pool,
             used_pools: Vec::with_capacity(num_pools),
             device,
-            queue_family_index,
+            queue,
         }
+    }
+
+    /// Returns the queue associated with this command manager.
+    pub fn queue(&self) -> Queue {
+        self.queue
     }
 
     /// Returns a command buffer from the pool. Changes and resets pools if necessary.
@@ -145,7 +151,7 @@ impl CommandManager {
             // thread_exclusive_manager. Just create a new one. Only one because this call is
             // EXTREMELY unlikely (or so do I think until I profile the application)
             self.free_pools
-                .push(PoolManager::create(&self.device, self.queue_family_index));
+                .push(PoolManager::create(&self.device, self.queue.family()));
             self.get_cmd_buffer()
         }
     }

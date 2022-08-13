@@ -1,12 +1,12 @@
 use super::cmd::CommandManager;
 use super::descriptor::{Descriptor, DescriptorSetManager};
+use super::device::swapchain::Swapchain;
 use super::imgui::ImguiRenderer;
 use super::instance::{Instance, PresentInstance};
 use super::memory::AllocatedBuffer;
 use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderpass::RenderPass;
 use super::scene::RealtimeScene;
-use super::swapchain::Swapchain;
 use super::sync::PresentSync;
 use super::{UnfinishedExecutions, FRAMES_IN_FLIGHT};
 use crate::parser::NoScene;
@@ -119,22 +119,15 @@ impl RealtimeRenderer {
             (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
             (vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0),
         ];
+        let device = instance.device();
         let mut dm = DescriptorSetManager::new(
-            instance.device().logical_clone(),
+            device.logical_clone(),
             &avg_desc,
             instance.desc_layout_cache(),
         );
         let mm = instance.allocator();
-        let gcmdm = CommandManager::new(
-            instance.device().logical_clone(),
-            instance.device().graphic_queue().idx,
-            15,
-        );
-        let tcmdm = CommandManager::new(
-            instance.device().logical_clone(),
-            instance.device().transfer_queue().idx,
-            1,
-        );
+        let gcmdm = CommandManager::new(device.logical_clone(), device.graphic_queue(), 15);
+        let tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue(), 1);
         let swapchain = Swapchain::create(instance.clone(), window_width, window_height);
         let render_size = vk::Extent2D {
             width: (window_width as f32 * render_scale) as u32,
@@ -166,11 +159,11 @@ impl RealtimeRenderer {
                 descriptor,
             });
         }
-        let sync = PresentSync::create(instance.device().logical_clone());
-        let copy_sampler = create_copy_sampler(instance.device().logical());
+        let sync = PresentSync::create(device.logical_clone());
+        let copy_sampler = create_copy_sampler(device.logical());
         let clear_color = [0.15, 0.15, 0.15, 1.0];
         let mut forward_pass = RenderPass::forward(
-            instance.device().logical_clone(),
+            device.logical_clone(),
             copy_sampler,
             mm,
             &mut dm,
@@ -180,7 +173,7 @@ impl RealtimeRenderer {
         let mut imgui_renderer =
             ImguiRenderer::new(imgui, instance.clone(), dm.cache(), &swapchain);
         let copy_pipeline = create_copy_pipeline(
-            instance.device().logical_clone(),
+            device.logical_clone(),
             swapchain.extent(),
             swapchain.renderpass(),
             &[forward_pass.copy_descriptor.layout],
@@ -426,8 +419,8 @@ impl RealtimeRenderer {
     ) {
         self.stats.update();
         let frame_sync = self.sync.get(self.frame_no);
-        let device = self.instance.device().logical();
-        frame_sync.wait_acquire(device);
+        let vkdevice = self.instance.device().logical();
+        frame_sync.wait_acquire(vkdevice);
         if let Some(acquired) = self.swapchain.acquire_next_image(frame_sync) {
             let current_time = Instant::now();
             let frame_data = &mut self.frame_data[self.frame_no % FRAMES_IN_FLIGHT];
@@ -454,19 +447,19 @@ impl RealtimeRenderer {
                 p_inheritance_info: ptr::null(),
             };
             unsafe {
-                device
+                vkdevice
                     .begin_command_buffer(cmd, &cmd_ci)
                     .expect("Failed to begin command buffer");
                 // if raytracer is not requested, draw the objects
                 self.forward_pass.begin(cmd);
                 if raytracer.is_none() {
                     let extent = self.swapchain.extent();
-                    draw_background(&self.scene, extent, device, cmd, &mut self.stats);
+                    draw_background(&self.scene, extent, vkdevice, cmd, &mut self.stats);
                     draw_objects(
                         &self.scene,
                         extent,
                         frame_data,
-                        device,
+                        vkdevice,
                         cmd,
                         &mut self.stats,
                     );
@@ -490,7 +483,7 @@ impl RealtimeRenderer {
                         desc
                     });
                     copy_to_swapchain(
-                        device,
+                        vkdevice,
                         cmd,
                         &self.copy_pipeline,
                         &copy_desc,
@@ -498,7 +491,7 @@ impl RealtimeRenderer {
                     );
                 } else {
                     copy_to_swapchain(
-                        device,
+                        vkdevice,
                         cmd,
                         &self.copy_pipeline,
                         &self.forward_pass.copy_descriptor,
@@ -513,7 +506,7 @@ impl RealtimeRenderer {
                     }
                 }
                 acquired.renderpass.end(cmd);
-                device
+                vkdevice
                     .end_command_buffer(cmd)
                     .expect("Failed to end command buffer");
             }
@@ -539,13 +532,11 @@ impl RealtimeRenderer {
                 p_image_indices: &acquired.index,
                 p_results: ptr::null_mut(),
             };
-            let queue = self.instance.device().graphic_queue();
-            unsafe {
-                device
-                    .queue_submit(queue.queue, &[submit_ci], frame_sync.acquire)
-                    .expect("Failed to submit render task");
-            }
-            self.swapchain.queue_present(queue.queue, &present_ci);
+            let acquire = frame_sync.acquire; // acquire next frame when this fence is signalled
+            self.instance()
+                .device()
+                .submit(&self.gcmdm, &[submit_ci], acquire);
+            self.swapchain.queue_present(&self.gcmdm, &present_ci);
             self.frame_no += 1;
             self.stats.done_frame();
         } else {

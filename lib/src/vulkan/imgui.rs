@@ -1,13 +1,13 @@
 use super::as_u8_slice;
 use super::cmd::CommandManager;
 use super::descriptor::{DLayoutCache, Descriptor, DescriptorSetManager};
+use super::device::swapchain::Swapchain;
 use super::device::Device;
 use super::instance::Instance;
 use super::memory::{AllocatedBuffer, AllocatedImage};
 use super::pipeline::{Pipeline, PipelineBuilder};
 use super::renderer::InternalStats;
 use super::scene::RealtimeScene;
-use super::swapchain::Swapchain;
 use crate::materials::TextureLoaded;
 use crate::{include_shader, PresentInstance, TextureFormat};
 use ash::vk;
@@ -81,7 +81,7 @@ impl ImguiRenderer {
         let index_size = INITIAL_INDEX_SIZE;
         let avg_sizes = [(vk::DescriptorType::COMBINED_IMAGE_SAMPLER, 1.0)];
         let mut dm = DescriptorSetManager::new(device.logical_clone(), &avg_sizes, layout_cache);
-        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
+        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue(), 1);
         let fonts_gpu_buf;
         {
             let mut fonts_ref = context.fonts();
@@ -693,8 +693,6 @@ fn upload_image(
             );
         }
     };
-    let cmd = tcmdm.get_cmd_buffer();
-    let transfer_queue = device.transfer_queue();
-    let fence = device.immediate_execute(cmd, transfer_queue, command);
+    let fence = device.submit_immediate(tcmdm, command);
     device.wait_completion(&[fence]);
 }

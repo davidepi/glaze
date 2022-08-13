@@ -227,7 +227,6 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             for (index, (id, mut build_info, build_range, geometry, req_mem)) in
                 blas_chunk.into_iter().enumerate()
             {
-                let cmd = self.ccmdm.get_cmd_buffer();
                 let blas = allocate_as(
                     self.loader.clone(),
                     self.mm,
@@ -274,8 +273,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                         );
                     }
                 };
-                let compute_queue = self.device.compute_queue();
-                fences.push(self.device.immediate_execute(cmd, compute_queue, commands));
+                fences.push(self.device.submit_immediate(self.ccmdm, commands));
             }
             // wait for creation, then start compaction
             self.device.wait_completion(&fences);
@@ -292,7 +290,6 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
             }
             .expect("Failed to get compacted size");
             for (index, (id, blas)) in blas_tmp.iter().enumerate() {
-                let cmd = self.ccmdm.get_cmd_buffer();
                 let compacted_size = compact_size[index];
                 let compacted_blas =
                     allocate_as(self.loader.clone(), self.mm, compacted_size, true);
@@ -309,8 +306,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                         self.loader.cmd_copy_acceleration_structure(cmd, &copy_ci);
                     }
                 };
-                let compute_queue = self.device.compute_queue();
-                fences.push(self.device.immediate_execute(cmd, compute_queue, commands));
+                fences.push(self.device.submit_immediate(self.ccmdm, commands));
             }
             // wait for compaction, then cleanup the tmp blases
             self.device.wait_completion(&fences);
@@ -321,7 +317,6 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
     }
 
     fn build_tlas(&mut self, blases: &FnvHashMap<u16, AllocatedAS>) -> AllocatedAS {
-        let cmd = self.ccmdm.get_cmd_buffer();
         let vkdevice = self.device.logical();
         let mut tlas_ci = Vec::with_capacity(self.instances.len());
         // populates the instances
@@ -493,8 +488,7 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                 );
             }
         };
-        let compute = self.device.compute_queue();
-        let fence = self.device.immediate_execute(cmd, compute, command);
+        let fence = self.device.submit_immediate(self.ccmdm, command);
         self.device.wait_completion(&[fence]);
         tlas
     }

@@ -116,8 +116,8 @@ impl RealtimeScene {
         let mm = instance.allocator();
         let with_raytrace = instance.supports_raytrace();
         let mut unf = UnfinishedExecutions::new(device);
-        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 5);
-        let mut gcmdm = CommandManager::new(device.logical_clone(), device.graphic_queue().idx, 5);
+        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue(), 5);
+        let mut gcmdm = CommandManager::new(device.logical_clone(), device.graphic_queue(), 5);
         let avg_desc = [
             (vk::DescriptorType::UNIFORM_BUFFER, 1.0),
             (vk::DescriptorType::STORAGE_BUFFER, 1.0),
@@ -273,9 +273,7 @@ impl RealtimeScene {
                 );
             }
         };
-        let cmd = tcmdm.get_cmd_buffer();
-        let queue = device.transfer_queue();
-        let fence = device.immediate_execute(cmd, queue, command);
+        let fence = device.submit_immediate(tcmdm, command);
         unf.add_fence(fence); // the buffer is always stored in self
         let (new_shader, new_desc) = build_mat_desc_set(
             device,
@@ -348,8 +346,7 @@ impl RealtimeScene {
         {
             let device = self.instance.device();
             let mm = self.instance.allocator();
-            let mut tcmdm =
-                CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
+            let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue(), 1);
             self.skydome_data = Some(build_skydome_realtime(
                 device,
                 mm,
@@ -408,7 +405,7 @@ impl RealtimeScene {
         let device = self.instance.device();
         let mm = self.instance.allocator();
         let mut unf = UnfinishedExecutions::new(device);
-        let mut gcmdm = CommandManager::new(device.logical_clone(), device.graphic_queue().idx, 5);
+        let mut gcmdm = CommandManager::new(device.logical_clone(), device.graphic_queue(), 5);
         let loaded = load_texture_to_gpu(
             Arc::clone(&self.instance),
             mm,
@@ -454,8 +451,7 @@ impl RealtimeScene {
             // update skydome
             let device = self.instance.device();
             let mm = self.instance.allocator();
-            let mut tcmdm =
-                CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
+            let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue(), 1);
             self.skydome_data = Some(build_skydome_realtime(
                 device,
                 mm,
@@ -858,9 +854,7 @@ fn load_indices_to_gpu(
                 device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
             }
         };
-        let cmd = tcmdm.get_cmd_buffer();
-        let transfer_queue = device.transfer_queue();
-        let fence = device.immediate_execute(cmd, transfer_queue, command);
+        let fence = device.submit_immediate(tcmdm, command);
         unfinished.add(fence, cpu_buffer);
     }
     (converted_meshes, gpu_buffer)
@@ -1003,9 +997,7 @@ fn load_materials_parameters(
             device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
         }
     };
-    let cmd = tcmdm.get_cmd_buffer();
-    let transfer_queue = device.transfer_queue();
-    let fence = device.immediate_execute(cmd, transfer_queue, command);
+    let fence = device.submit_immediate(tcmdm, command);
     unfinished.add(fence, cpu_buffer);
     gpu_buffer
 }
@@ -1302,10 +1294,7 @@ fn load_texture_to_gpu<T: Instance + Send + Sync + 'static>(
             );
         }
     };
-    let cmd = gcmdm.get_cmd_buffer();
-    let device = instance.device();
-    let transfer_queue = device.transfer_queue();
-    let fence = device.immediate_execute(cmd, transfer_queue, command);
+    let fence = instance.device().submit_immediate(gcmdm, command);
     unfinished.add(fence, cpu_buf);
     TextureLoaded {
         format: texture.info().format,
@@ -1427,8 +1416,8 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             device.logical(),
         ));
         let mut unf = UnfinishedExecutions::new(instance.device());
-        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
-        let mut ccmdm = CommandManager::new(device.logical_clone(), device.compute_queue().idx, 1);
+        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue(), 1);
+        let mut ccmdm = CommandManager::new(device.logical_clone(), device.compute_queue(), 1);
         let instances = parsed.instances().unwrap_or_default();
         let transforms = parsed
             .transforms()
@@ -1650,8 +1639,8 @@ impl From<&RealtimeScene> for RayTraceScene<PresentInstance> {
         ));
         let mm = instance.allocator();
         let mut unf = UnfinishedExecutions::new(instance.device());
-        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue().idx, 1);
-        let mut ccmdm = CommandManager::new(device.logical_clone(), device.compute_queue().idx, 11);
+        let mut tcmdm = CommandManager::new(device.logical_clone(), device.transfer_queue(), 1);
+        let mut ccmdm = CommandManager::new(device.logical_clone(), device.compute_queue(), 11);
         let mut dm = DescriptorSetManager::new(
             instance.device().logical_clone(),
             &Self::AVG_DESC,
@@ -1978,8 +1967,7 @@ fn upload_buffer<T: Sized + 'static>(
                 device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
             }
         };
-        let cmd = tcmdm.get_cmd_buffer();
-        let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
+        let fence = device.submit_immediate(tcmdm, command);
         unf.add(fence, cpu_buffer);
     } else {
         gpu_buffer = mm.create_buffer("empty_buffer", 1, flags, MemoryLocation::GpuOnly);
@@ -2104,9 +2092,7 @@ fn upload_2d_buffer<T: Sized + 'static>(
             );
         }
     };
-    let cmd = tcmdm.get_cmd_buffer();
-    let transfer_queue = device.transfer_queue();
-    let fence = device.immediate_execute(cmd, transfer_queue, command);
+    let fence = device.submit_immediate(tcmdm, command);
     unfinished.add(fence, cpu_buf);
     gpu_buf
 }
@@ -2161,7 +2147,6 @@ fn calculate_geometric_derivatives<T: Instance>(
             4,
             &[desc.layout],
         );
-        let cmd = ccmdm.get_cmd_buffer();
         let group_count = (triangles / 256) + 1;
         let command = unsafe {
             |device: &ash::Device, cmd: vk::CommandBuffer| {
@@ -2184,7 +2169,7 @@ fn calculate_geometric_derivatives<T: Instance>(
                 device.cmd_dispatch(cmd, group_count, 1, 1);
             }
         };
-        let fence = device.immediate_execute(cmd, device.compute_queue(), command);
+        let fence = device.submit_immediate(ccmdm, command);
         unf.add_pipeline_execution(fence, pipeline);
     }
     buffer
@@ -2335,8 +2320,7 @@ fn build_sky_raytrace_buffers(
             device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
         }
     };
-    let cmd = tcmdm.get_cmd_buffer();
-    let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
+    let fence = device.submit_immediate(tcmdm, command);
     unf.add(fence, cpu_buffer);
     SkyBuffers {
         ssbo: gpu_buffer,

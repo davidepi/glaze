@@ -16,8 +16,6 @@ mod renderer;
 mod renderpass;
 mod scene;
 mod surface;
-#[cfg(feature = "vulkan-interactive")]
-mod swapchain;
 mod sync;
 
 // used in the material module

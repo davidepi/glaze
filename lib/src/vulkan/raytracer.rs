@@ -498,7 +498,6 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             camera_persp,
         };
         update_frame_data(fd, &mut self.frame_data[frame_index]);
-        let queue = device.compute_queue();
         unsafe {
             vkdevice
                 .begin_command_buffer(cmd, &cmd_begin)
@@ -598,10 +597,8 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
             vkdevice
                 .end_command_buffer(cmd)
                 .expect("Failed to end command buffer");
-            vkdevice
-                .queue_submit(queue.queue, &[submit_ci], fence)
-                .expect("Failed to submit to queue");
         }
+        device.submit(&self.ccmdm, &[submit_ci], fence);
     }
 
     /// Draws the raytraced image and produces a frame.
@@ -675,7 +672,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         }
         let mut gcmdm = CommandManager::new(
             self.instance.device().logical_clone(),
-            self.instance.device().graphic_queue().idx,
+            self.instance.device().graphic_queue(),
             1,
         );
         export(
@@ -722,8 +719,8 @@ fn init_rt<T: Instance + Send + Sync>(
     let rploader = RTPipelineLoader::new(instance.instance(), device.logical());
     let transfer_queue = device.transfer_queue();
     let compute_queue = device.compute_queue();
-    let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue.idx, 1);
-    let ccmdm = CommandManager::new(device.logical_clone(), compute_queue.idx, 15);
+    let mut tcmdm = CommandManager::new(device.logical_clone(), transfer_queue, 1);
+    let ccmdm = CommandManager::new(device.logical_clone(), compute_queue, 15);
     let sample_scheduler = WorkScheduler::new();
     let mut dm = DescriptorSetManager::new(
         device.logical_clone(),
@@ -902,8 +899,7 @@ fn create_storage_image<T: Instance>(
             );
         }
     };
-    let cmd = tcmdm.get_cmd_buffer();
-    let fence = device.immediate_execute(cmd, device.transfer_queue(), command);
+    let fence = device.submit_immediate(tcmdm, command);
     unf.add_fence(fence);
     out_img
 }
@@ -1068,14 +1064,12 @@ fn build_sbt<T: Instance>(
         dst_offset: 0,
         size: cpu_buf.size,
     };
-    let transfer_queue = device.transfer_queue();
-    let cmd = tcmdm.get_cmd_buffer();
     let command = unsafe {
         |device: &ash::Device, cmd: vk::CommandBuffer| {
             device.cmd_copy_buffer(cmd, cpu_buf.buffer, gpu_buf.buffer, &[buffer_copy]);
         }
     };
-    let fence = device.immediate_execute(cmd, transfer_queue, command);
+    let fence = device.submit_immediate(tcmdm, command);
     unf.add(fence, cpu_buf);
     // calculates the groups addresses
     let sbt_addr_info = vk::BufferDeviceAddressInfo {

@@ -465,8 +465,7 @@ pub fn export<T: Instance + ?Sized>(
             );
         }
     };
-    let cmd = gcmdm.get_cmd_buffer();
-    let fence = device.immediate_execute(cmd, device.graphic_queue(), command);
+    let fence = device.submit_immediate(gcmdm, command);
     device.wait_completion(&[fence]);
     // now extract the bytes from the figure
     let size = width as usize * height as usize * 4;
