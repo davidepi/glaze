@@ -116,8 +116,8 @@ impl CommandManager {
     }
 
     /// Returns the queue associated with this command manager.
-    pub fn queue(&self) -> Queue {
-        self.queue
+    pub fn queue(&self) -> &Queue {
+        &self.queue
     }
 
     /// Returns a command buffer from the pool. Changes and resets pools if necessary.

@@ -5,13 +5,12 @@ use super::{AllocatedImage, CommandManager};
 use crate::Pipeline;
 use ash::vk;
 use fnv::FnvHashMap;
-use std::collections::hash_map::Entry;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::ffi::{c_void, CStr};
 use std::ptr;
 use std::sync::{Arc, Mutex};
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 /// Represents a vulkan queue family
 pub struct Queue {
     /// Family index.
@@ -20,6 +19,10 @@ pub struct Queue {
     /// Private in order to enforce the use of Device::execute and Device::immediate_execute and
     /// pass through the main_thread.
     queue: vk::Queue,
+    /// The type of queue.
+    capabilities: vk::QueueFlags,
+    /// Used to track the queue usage
+    exclusive: Arc<()>,
 }
 
 impl Queue {
@@ -39,9 +42,9 @@ impl Queue {
 pub struct Device {
     logical: Arc<ash::Device>,
     physical: Arc<PhysicalDevice>,
-    graphic_queue: Queue,
-    compute_queue: Queue,
-    transfer_queue: Queue,
+    queues: Arc<Mutex<Vec<Queue>>>,
+    // assign each queue only once
+    submit_lock: Option<Arc<Mutex<()>>>,
     immediate_fences: Arc<Mutex<Vec<vk::Fence>>>,
 }
 
@@ -107,17 +110,41 @@ impl Device {
     /// If the device is created with the `new_present` method, this queue is required to support
     /// also presentation to a surface.
     pub fn graphic_queue(&self) -> Queue {
-        self.graphic_queue
+        self.queue(vk::QueueFlags::GRAPHICS)
     }
 
     /// Returns a queue family with compute capabilities.
     pub fn compute_queue(&self) -> Queue {
-        self.compute_queue
+        self.queue(vk::QueueFlags::COMPUTE)
     }
 
     /// Returns a queue family with transfer capabilities.
     pub fn transfer_queue(&self) -> Queue {
-        self.transfer_queue
+        self.queue(vk::QueueFlags::TRANSFER)
+    }
+
+    /// Returns a queue of the given type.
+    /// Handles returning an exclusive queue or a shared queue based on the status of the
+    /// submit_lock field in the device.
+    fn queue(&self, flag: vk::QueueFlags) -> Queue {
+        if self.submit_lock.is_none() {
+            self.queues
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|q| q.capabilities.contains(flag))
+                .find(|q| Arc::strong_count(&q.exclusive) == 1)
+                .expect("Using more queues than requested")
+                .clone()
+        } else {
+            self.queues
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|q| q.capabilities.contains(flag))
+                .unwrap()
+                .clone()
+        }
     }
 
     /// Submits a command to the be executed by the device immediately.
@@ -151,7 +178,6 @@ impl Device {
             p_inheritance_info: ptr::null(),
         };
         let cmd = cmdm.get_cmd_buffer();
-        let queue = cmdm.queue();
         let cmds = [cmd];
         let submit_ci = vk::SubmitInfo {
             s_type: vk::StructureType::SUBMIT_INFO,
@@ -172,16 +198,18 @@ impl Device {
             self.logical
                 .end_command_buffer(cmd)
                 .expect("Failed to end command buffer");
-            self.logical
-                .queue_submit(queue.queue, &[submit_ci], fence)
-                .expect("Failed to submit to queue");
         }
+        self.submit(cmdm, &[submit_ci], fence);
         fence
     }
 
     /// Submits a task with the given submit infos and fence to use.
     pub fn submit(&self, cmdm: &CommandManager, si: &[vk::SubmitInfo], fence: vk::Fence) {
         let queue = cmdm.queue();
+        let _lock;
+        if let Some(submit_lock) = &self.submit_lock {
+            _lock = submit_lock.lock().unwrap();
+        }
         unsafe { self.logical.queue_submit(queue.queue, si, fence) }
             .expect("Failed to submit to queue");
     }
@@ -251,25 +279,23 @@ pub fn create_device(
         })
         .last();
     if let Some(physical) = maybe_physical {
-        let queue_families = get_queues(instance, physical.device, surface);
-        let all_queues = assign_queue_index(queue_families);
-        let logical =
-            create_logical_device(instance, ext, &physical, features, ext_features, all_queues);
-        let gq = unsafe { logical.get_device_queue(all_queues[0].0, all_queues[0].1) };
-        let cq = unsafe { logical.get_device_queue(all_queues[1].0, all_queues[1].1) };
-        let tq = unsafe { logical.get_device_queue(all_queues[2].0, all_queues[2].1) };
-        let graphic_queue = Queue {
-            idx: all_queues[0].0,
-            queue: gq,
-        };
-        let compute_queue = Queue {
-            idx: all_queues[1].0,
-            queue: cq,
-        };
-        let transfer_queue = Queue {
-            idx: all_queues[2].0,
-            queue: tq,
-        };
+        let mut submit_lock = None;
+        // try to reserve 3 queues for each type
+        let mut queue_fams = get_queue_families(instance, physical.device, [3; 3], surface);
+        if queue_fams.is_empty() {
+            // if it fails, just use a single queue per type and use mutexes
+            queue_fams = get_queue_families(instance, physical.device, [1; 3], surface);
+            submit_lock = Some(Arc::new(Mutex::new(())));
+        }
+        let logical = create_logical_device(
+            instance,
+            ext,
+            &physical,
+            features,
+            ext_features,
+            &queue_fams,
+        );
+        let queues = Arc::new(Mutex::new(create_queues(&logical, &queue_fams)));
         let ci = vk::FenceCreateInfo {
             s_type: vk::StructureType::FENCE_CREATE_INFO,
             p_next: ptr::null(),
@@ -285,10 +311,9 @@ pub fn create_device(
         Some(Device {
             logical: Arc::new(logical),
             physical: Arc::new(physical),
-            graphic_queue,
-            compute_queue,
-            transfer_queue,
             immediate_fences,
+            submit_lock,
+            queues,
         })
     } else {
         None
@@ -607,21 +632,74 @@ fn device_support_queues(
     graphics_present_support && compute_support && transfer_support
 }
 
-/// Returns the queue family index for graphics, compute and tranfer queues.
-/// Handle cases where each family index supports a single queue.
+/// Attempts to reserve multiple queues and returns tuples (family index, amount of queues,
+/// family type).
+///
+/// If not enough queues are available, returns empty vector.
+///
+/// `requested` contains the amount of requested queues (if available) in the order [GRAPHICS,
+/// COMPUTE, TRANSFER].
 ///
 /// If the surface is Some, the graphics queue is required to support presentation.
-fn get_queues(
+fn get_queue_families(
     instance: &ash::Instance,
     physical_device: vk::PhysicalDevice,
+    requested: [u32; 3],
     surface: Option<&Surface>,
-) -> [u32; 3] {
-    // filter by resources, takes the index that has the highest availability
+) -> Vec<(u32, u32, vk::QueueFlags)> {
     // intel graphics card can have 1 queue for queue family index, and all supports everything
-    // nvidia has the graphics only on the some indices, but supports more queue
-    let mut qf = unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
-    // graphics queue + optional present to surface
-    let graphics_qfi = qf
+    // nvidia has the graphics only on the some indices, but supports more queues
+    let mut props =
+        unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+    let mut retval = FnvHashMap::default();
+    // filter by queue flag, takes the family index that has the highest availability
+    let transfer_index = props
+        .iter()
+        .enumerate()
+        .filter(|(_, prop)| prop.queue_flags.contains(vk::QueueFlags::TRANSFER))
+        .max_by_key(|(_, prop)| prop.queue_count)
+        .map(|prop| prop.0);
+    if let Some(family_index) = transfer_index {
+        // try to reserve the requested amount of queues
+        if props[family_index].queue_count >= requested[2] {
+            // reduce the amount of available queues and insert the reserved into the map
+            // the procedure for compute and graphics queue is the same
+            retval
+                .entry(family_index)
+                .and_modify(|(count, _)| *count += requested[2])
+                .or_insert((requested[2], props[family_index].queue_flags));
+            props[family_index].queue_count -= requested[2];
+        } else {
+            return Vec::new();
+        }
+    } else {
+        return Vec::new();
+    }
+    // repeat the same for compute flags
+    let compute_index = props
+        .iter()
+        .enumerate()
+        .filter(|(_, &prop)| prop.queue_flags.contains(vk::QueueFlags::COMPUTE))
+        .max_by_key(|(_, prop)| prop.queue_count)
+        .map(|prop| prop.0);
+    if let Some(family_index) = compute_index {
+        // try to reserve the requested amount of queues
+        if props[family_index].queue_count >= requested[1] {
+            // reduce the amount of available queues and insert the reserved into the map
+            // the procedure for compute and graphics queue is the same
+            props[family_index].queue_count -= requested[1];
+            retval
+                .entry(family_index)
+                .and_modify(|(count, _)| *count += requested[1])
+                .or_insert((requested[1], props[family_index].queue_flags));
+        } else {
+            return Vec::new();
+        }
+    } else {
+        return Vec::new();
+    }
+    // same for graphics queue but ensures present to surface capabilities if surface is Some
+    let graphic_index = props
         .iter()
         .enumerate()
         .filter(|(_, &prop)| prop.queue_flags.contains(vk::QueueFlags::GRAPHICS))
@@ -640,48 +718,39 @@ fn get_queues(
             }
         })
         .max_by_key(|(_, prop)| prop.queue_count)
-        .expect("Not enough graphics queues in the device")
-        .0;
-    qf[graphics_qfi].queue_count -= 1;
-    let compute_qfi = qf
-        .iter()
-        .enumerate()
-        .filter(|(_, &prop)| prop.queue_flags.contains(vk::QueueFlags::COMPUTE))
-        .max_by_key(|(_, prop)| prop.queue_count)
-        .expect("Not enough compute queues in the device")
-        .0;
-    qf[compute_qfi].queue_count -= 1;
-    let transfer_qfi = qf
-        .iter()
-        .enumerate()
-        .filter(|(_, &prop)| prop.queue_flags.contains(vk::QueueFlags::TRANSFER))
-        .max_by_key(|(_, prop)| prop.queue_count)
-        .expect("Not enough compute queues in the device")
-        .0;
-    qf[transfer_qfi].queue_count -= 1;
-    [graphics_qfi as u32, compute_qfi as u32, transfer_qfi as u32]
+        .map(|prop| prop.0);
+    if let Some(family_index) = graphic_index {
+        if props[family_index].queue_count >= requested[0] {
+            props[family_index].queue_count -= requested[0];
+            retval
+                .entry(family_index)
+                .and_modify(|(count, _)| *count += requested[0])
+                .or_insert((requested[0], props[family_index].queue_flags));
+        } else {
+            return Vec::new();
+        }
+    } else {
+        return Vec::new();
+    }
+    retval
+        .into_iter()
+        .map(|(family_index, (count, flags))| (family_index as u32, count, flags))
+        .collect()
 }
 
-/// Splits a list of queue families into a list of (family index, queue index) tuples
-fn assign_queue_index<const FAMILIES: usize>(
-    queue_families: [u32; FAMILIES],
-) -> [(u32, u32); FAMILIES] {
-    let mut used_queues = FnvHashMap::with_capacity_and_hasher(FAMILIES, Default::default());
-    let mut retval = [(0, 0); FAMILIES];
-    for (i, family_index) in queue_families.into_iter().enumerate() {
-        let next = match used_queues.entry(family_index) {
-            Entry::Occupied(mut entry) => {
-                let next = (family_index, *entry.get());
-                *entry.get_mut() += 1;
-                next
-            }
-            Entry::Vacant(entry) => {
-                let next = (family_index, 0);
-                entry.insert(0);
-                next
-            }
-        };
-        retval[i] = next;
+fn create_queues(device: &ash::Device, queues: &[(u32, u32, vk::QueueFlags)]) -> Vec<Queue> {
+    let mut retval = Vec::new();
+    for (queue_family_index, amount, flags) in queues.iter().copied() {
+        for queue_index in 0..amount {
+            let vkqueue = unsafe { device.get_device_queue(queue_family_index, queue_index) };
+            let queue = Queue {
+                idx: queue_family_index,
+                queue: vkqueue,
+                capabilities: flags,
+                exclusive: Arc::new(()),
+            };
+            retval.push(queue);
+        }
     }
     retval
 }
@@ -693,31 +762,22 @@ fn create_logical_device(
     device: &PhysicalDevice,
     features_requested: vk::PhysicalDeviceFeatures,
     ext_features: Option<*const c_void>,
-    queues: [(u32, u32); 3],
+    queues: &[(u32, u32, vk::QueueFlags)],
 ) -> ash::Device {
     let validations = ValidationLayers::application_default();
     let physical_device = device.device;
-    let unique_families = queues
-        .iter()
-        .map(|(f, _)| f)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut queue_create_infos = Vec::with_capacity(unique_families.len());
-    let mut queue_priorities = vec![Vec::new(); unique_families.len()];
-    for (unique_index, queue_family_index) in unique_families.into_iter().enumerate() {
-        let count = queues
-            .iter()
-            .filter(|(f, _)| *f == queue_family_index)
-            .count();
+    let mut queue_create_infos = Vec::with_capacity(queues.len());
+    let mut queue_priorities = vec![Vec::new(); queues.len()];
+    for (i, (queue_family_index, queue_count, _)) in queues.iter().cloned().enumerate() {
         // this is to avoid dropping the pointed address before creating the device
-        queue_priorities[unique_index] = vec![1.0; count];
+        queue_priorities[i] = vec![1.0; queue_count as usize];
         let queue_create_info = vk::DeviceQueueCreateInfo {
             s_type: vk::StructureType::DEVICE_QUEUE_CREATE_INFO,
             p_next: ptr::null(),
             flags: vk::DeviceQueueCreateFlags::empty(),
             queue_family_index,
-            queue_count: count as u32,
-            p_queue_priorities: queue_priorities[unique_index].as_ptr(),
+            queue_count,
+            p_queue_priorities: queue_priorities[i].as_ptr(),
         };
         queue_create_infos.push(queue_create_info);
     }
