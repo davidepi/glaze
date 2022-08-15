@@ -1,3 +1,7 @@
+#![cfg_attr(
+    all(target_os = "windows", not(feature = "console"),),
+    windows_subsystem = "windows"
+)]
 use clap::Parser;
 use viewport::InteractiveView;
 use winit::event_loop::EventLoop;
