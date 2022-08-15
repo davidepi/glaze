@@ -75,9 +75,9 @@ vec3 ray_dir(vec2 ndc)
 vec3 sky_radiance(in vec3 dir)
 {
   vec3 w = normalize((SkyUniform.sky.world2obj * vec4(dir, 0.0)).xyz);
-  float u = atan(w.y, w.x); // just call it atan2 like everybody else...
-  u = u < 0.0 ? u + TWO_PI : u;
-  vec2 uv = vec2(u, acos(w.z)) * INV_2PI;
+  float phi = atan(w.y, w.x); // just call it atan2 like everybody else...
+  float theta = acos(w.z);
+  vec2 uv = vec2(phi * INV_2PI, theta * INV_PI);
   return texture(textures[nonuniformEXT(SkyUniform.sky.tex_id)], uv).rgb;
 }
 
