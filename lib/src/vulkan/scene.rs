@@ -1375,8 +1375,9 @@ pub struct RayTraceScene<T: Instance + Send + Sync> {
     material_instance_ids: FnvHashMap<u16, Vec<u16>>,
     /// Skylight used in this scene.
     sky: Option<Light>,
-    /// Buffer containing skylight data.
-    sky_buffer: SkyBuffers,
+    /// Buffer containing skylight data. This field is Option::Some even when RayTraceScene::sky is
+    /// Option::None. I just need to use std::mem::take.
+    sky_buffer: Option<SkyBuffers>,
     /// Number of lights in the scene.
     pub(crate) lights_no: u32,
     /// Additional parameters for the scene.
@@ -1500,6 +1501,8 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &mut unf,
             sky.clone(),
             &raw_textures,
+            None,
+            None,
         );
         let light_buffer = load_raytrace_lights_to_gpu(
             device,
@@ -1540,7 +1543,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             transforms_buffer: Arc::new(transforms_buffer),
             material_instance_ids,
             sky,
-            sky_buffer,
+            sky_buffer: Some(sky_buffer),
             lights_no: lights.len() as u32,
             meta,
             textures,
@@ -1562,7 +1565,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             &self.light_buffer,
             &self.derivative_buffer,
             &self.transforms_buffer,
-            &self.sky_buffer,
+            self.sky_buffer.as_ref().unwrap(),
             &self.textures.read().unwrap(),
             self.linear_sampler,
             self.nn_sampler,
@@ -1594,14 +1597,23 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             .last()
             .filter(|l| l.ltype() == LightType::SKY)
             .cloned();
+        // call the update sky function only if it is effectively changed
+        // this is a quite expensive function.
         if sky != self.sky {
-            let mut sky_buffer =
-                build_sky_raytrace_buffers(device, mm, tcmdm, unf, sky.clone(), textures);
-            std::mem::swap(&mut self.sky_buffer, &mut sky_buffer);
-            unf.add_buffer(sky_buffer.ssbo);
-            unf.add_image(sky_buffer.conditional_values);
-            unf.add_image(sky_buffer.conditional_cdf);
+            let old_sky = std::mem::take(&mut self.sky);
+            let old_buffers = std::mem::take(&mut self.sky_buffer);
+            let sky_buffer = build_sky_raytrace_buffers(
+                device,
+                mm,
+                tcmdm,
+                unf,
+                sky.clone(),
+                textures,
+                old_sky,
+                old_buffers,
+            );
             self.sky = sky;
+            self.sky_buffer = Some(sky_buffer);
         }
         // cannot drop yet, the loading is not finished yet
         std::mem::swap(&mut self.material_buffer, &mut mat_buffer);
@@ -1704,6 +1716,8 @@ impl From<&RealtimeScene> for RayTraceScene<PresentInstance> {
             &mut unf,
             sky.clone(),
             &scene.raw_textures,
+            None,
+            None,
         );
         let descriptor = build_raytrace_descriptor(
             &mut dm,
@@ -1736,7 +1750,7 @@ impl From<&RealtimeScene> for RayTraceScene<PresentInstance> {
             transforms_buffer,
             material_instance_ids,
             sky,
-            sky_buffer,
+            sky_buffer: Some(sky_buffer),
             lights_no: scene.lights.len() as u32,
             meta,
             textures,
@@ -2216,6 +2230,7 @@ struct SkyBuffers {
 }
 
 /// build the buffers required to draw the skylight in the raytrace renderer.
+#[allow(clippy::unnecessary_unwrap)] // false positive in this function
 fn build_sky_raytrace_buffers(
     device: &Device,
     mm: &MemoryManager,
@@ -2223,6 +2238,8 @@ fn build_sky_raytrace_buffers(
     unf: &mut UnfinishedExecutions,
     sky: Option<Light>,
     textures: &[Texture],
+    old_sky: Option<Light>,
+    old_buffer: Option<SkyBuffers>,
 ) -> SkyBuffers {
     // default does not return skylight, but everything else should succeed.
     let skylight = sky.unwrap_or_default();
@@ -2231,101 +2248,137 @@ fn build_sky_raytrace_buffers(
         world2obj: skylight.rotation_matrix().invert().unwrap(),
         tex_id: skylight.resource_id(),
     };
-    let distribution = calculate_skymap_distributions(&textures[rtlight.tex_id as usize]);
-    let values = distribution
-        .conditional()
-        .iter()
-        .flat_map(Distribution1D::values)
-        .copied()
-        .collect::<Vec<_>>();
-    let cdfs = distribution
-        .conditional()
-        .iter()
-        .flat_map(Distribution1D::cdf)
-        .copied()
-        .collect::<Vec<_>>();
-    let conditional_values = upload_2d_buffer(
-        device,
-        mm,
-        tcmdm,
-        unf,
-        distribution.dimensions_values(),
-        vk::Format::R32_SFLOAT,
-        &values,
-    );
-    let conditional_cdf = upload_2d_buffer(
-        device,
-        mm,
-        tcmdm,
-        unf,
-        distribution.dimensions_cdf(),
-        vk::Format::R32_SFLOAT,
-        &cdfs,
-    );
-    let mut ssbo_data = unsafe { as_u8_slice(&rtlight) }.to_vec();
-    let marginal_values = distribution
-        .marginal()
-        .values()
-        .iter()
-        .flat_map(|x| x.to_le_bytes());
-    let marginal_cdf = distribution
-        .marginal()
-        .cdf()
-        .iter()
-        .flat_map(|x| x.to_le_bytes());
-    let marginal_integral = distribution.marginal().integral();
-    let conditional_integrals = distribution
-        .conditional()
-        .iter()
-        .map(Distribution1D::integral)
-        .flat_map(|x| x.to_le_bytes());
-    let marginal_cdf_count = distribution.marginal().cdf().len() as u32;
-    let conditional_integrals_offset =
-        (distribution.marginal().values().len() + distribution.marginal().cdf().len()) as u32;
-    let conditional_cdf_count = distribution.conditional().first().unwrap().cdf().len() as u32;
-    ssbo_data.extend_from_slice(&marginal_cdf_count.to_le_bytes());
-    ssbo_data.extend_from_slice(&conditional_integrals_offset.to_le_bytes());
-    ssbo_data.extend_from_slice(&conditional_cdf_count.to_le_bytes());
-    ssbo_data.extend_from_slice(&marginal_integral.to_le_bytes());
-    ssbo_data.extend(marginal_cdf);
-    ssbo_data.extend(marginal_values);
-    ssbo_data.extend(conditional_integrals);
-    let cpu_buffer = mm.create_buffer(
-        "Sky SSBO CPU",
-        ssbo_data.len() as u64,
-        vk::BufferUsageFlags::TRANSFER_SRC,
-        MemoryLocation::CpuToGpu,
-    );
-    let gpu_buffer = mm.create_buffer(
-        "Sky SSBO GPU",
-        ssbo_data.len() as u64,
-        vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-        MemoryLocation::GpuOnly,
-    );
-    let mapped = cpu_buffer
-        .allocation()
-        .mapped_ptr()
-        .expect("Failed to map memory")
-        .cast()
-        .as_ptr();
-    unsafe { std::ptr::copy_nonoverlapping(ssbo_data.as_ptr(), mapped, ssbo_data.len()) };
-    let copy_region = vk::BufferCopy {
-        // these are not the allocation offset, but the buffer offset!
-        src_offset: 0,
-        dst_offset: 0,
-        size: cpu_buffer.size,
-    };
-    let command = unsafe {
-        |device: &ash::Device, cmd: vk::CommandBuffer| {
-            device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+    if old_buffer.is_none()
+        || old_sky.is_none()
+        || old_sky.unwrap().resource_id() != skylight.resource_id()
+    {
+        // recalculate the entire distribution of the texture map
+        let distribution = calculate_skymap_distributions(&textures[rtlight.tex_id as usize]);
+        let values = distribution
+            .conditional()
+            .iter()
+            .flat_map(Distribution1D::values)
+            .copied()
+            .collect::<Vec<_>>();
+        let cdfs = distribution
+            .conditional()
+            .iter()
+            .flat_map(Distribution1D::cdf)
+            .copied()
+            .collect::<Vec<_>>();
+        let conditional_values = upload_2d_buffer(
+            device,
+            mm,
+            tcmdm,
+            unf,
+            distribution.dimensions_values(),
+            vk::Format::R32_SFLOAT,
+            &values,
+        );
+        let conditional_cdf = upload_2d_buffer(
+            device,
+            mm,
+            tcmdm,
+            unf,
+            distribution.dimensions_cdf(),
+            vk::Format::R32_SFLOAT,
+            &cdfs,
+        );
+        let mut ssbo_data = unsafe { as_u8_slice(&rtlight) }.to_vec();
+        let marginal_values = distribution
+            .marginal()
+            .values()
+            .iter()
+            .flat_map(|x| x.to_le_bytes());
+        let marginal_cdf = distribution
+            .marginal()
+            .cdf()
+            .iter()
+            .flat_map(|x| x.to_le_bytes());
+        let marginal_integral = distribution.marginal().integral();
+        let conditional_integrals = distribution
+            .conditional()
+            .iter()
+            .map(Distribution1D::integral)
+            .flat_map(|x| x.to_le_bytes());
+        let marginal_cdf_count = distribution.marginal().cdf().len() as u32;
+        let conditional_integrals_offset =
+            (distribution.marginal().values().len() + distribution.marginal().cdf().len()) as u32;
+        let conditional_cdf_count = distribution.conditional().first().unwrap().cdf().len() as u32;
+        ssbo_data.extend_from_slice(&marginal_cdf_count.to_le_bytes());
+        ssbo_data.extend_from_slice(&conditional_integrals_offset.to_le_bytes());
+        ssbo_data.extend_from_slice(&conditional_cdf_count.to_le_bytes());
+        ssbo_data.extend_from_slice(&marginal_integral.to_le_bytes());
+        ssbo_data.extend(marginal_cdf);
+        ssbo_data.extend(marginal_values);
+        ssbo_data.extend(conditional_integrals);
+        let cpu_buffer = mm.create_buffer(
+            "Sky SSBO CPU",
+            ssbo_data.len() as u64,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            MemoryLocation::CpuToGpu,
+        );
+        let gpu_buffer = mm.create_buffer(
+            "Sky SSBO GPU",
+            ssbo_data.len() as u64,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+            MemoryLocation::GpuOnly,
+        );
+        let mapped = cpu_buffer
+            .allocation()
+            .mapped_ptr()
+            .expect("Failed to map memory")
+            .cast()
+            .as_ptr();
+        unsafe { std::ptr::copy_nonoverlapping(ssbo_data.as_ptr(), mapped, ssbo_data.len()) };
+        let copy_region = vk::BufferCopy {
+            // these are not the allocation offset, but the buffer offset!
+            src_offset: 0,
+            dst_offset: 0,
+            size: cpu_buffer.size,
+        };
+        let command = unsafe {
+            |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_copy_buffer(cmd, cpu_buffer.buffer, gpu_buffer.buffer, &[copy_region]);
+            }
+        };
+        let fence = device.submit_immediate(tcmdm, command);
+        unf.add(fence, cpu_buffer);
+        SkyBuffers {
+            ssbo: gpu_buffer,
+            conditional_values,
+            conditional_cdf,
         }
-    };
-    let fence = device.submit_immediate(tcmdm, command);
-    unf.add(fence, cpu_buffer);
-    SkyBuffers {
-        ssbo: gpu_buffer,
-        conditional_values,
-        conditional_cdf,
+    } else {
+        // just reuse the old buffer and update just the parameters.
+        let ssbo_data = unsafe { as_u8_slice(&rtlight) }.to_vec();
+        let retval = old_buffer.unwrap();
+        let cpu_buffer = mm.create_buffer(
+            "Sky SSBO update CPU",
+            ssbo_data.len() as u64,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            MemoryLocation::CpuToGpu,
+        );
+        let mapped = cpu_buffer
+            .allocation()
+            .mapped_ptr()
+            .expect("Failed to map memory")
+            .cast()
+            .as_ptr();
+        let copy_region = vk::BufferCopy {
+            src_offset: 0,
+            dst_offset: 0,
+            size: ssbo_data.len() as u64,
+        };
+        let command = unsafe {
+            |device: &ash::Device, cmd: vk::CommandBuffer| {
+                device.cmd_copy_buffer(cmd, cpu_buffer.buffer, retval.ssbo.buffer, &[copy_region]);
+            }
+        };
+        let fence = device.submit_immediate(tcmdm, command);
+        unf.add(fence, cpu_buffer);
+        unsafe { std::ptr::copy_nonoverlapping(ssbo_data.as_ptr(), mapped, ssbo_data.len()) };
+        retval
     }
 }
 
