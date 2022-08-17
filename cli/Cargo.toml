@@ -2,7 +2,7 @@
 name = "glaze-cli"
 version = "0.3.0"
 authors = ["Davide Pizzolotto <davide.pizzolotto@gmail.com>"]
-edition = "2018"
+edition = "2021"
 publish = false
 license = "MIT"
 description = "Unbiased GPU renderer"
