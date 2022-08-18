@@ -193,7 +193,7 @@ impl RealtimeScene {
         let update_buffer = mm.create_buffer(
             "Material update transfer buffer",
             std::mem::size_of::<MaterialParams>() as u64,
-            vk::BufferUsageFlags::UNIFORM_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::BufferUsageFlags::TRANSFER_SRC,
             MemoryLocation::CpuToGpu,
         );
         sort_meshes(&mut meshes, &materials_desc);
@@ -817,7 +817,7 @@ fn load_indices_to_gpu(
         let cpu_buffer = mm.create_buffer(
             "indices_local",
             size,
-            vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::BufferUsageFlags::TRANSFER_SRC,
             MemoryLocation::CpuToGpu,
         );
         let mut mapped = cpu_buffer
