@@ -164,6 +164,7 @@ mod tests {
             }
         }
         // download file
+        data.clear();
         let mut easy = Easy::new();
         easy.url(&download_url)?;
         easy.follow_location(true)?;
