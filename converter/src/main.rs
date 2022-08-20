@@ -316,6 +316,11 @@ fn convert_meshes(
     meshes: &[russimp::mesh::Mesh],
     pb: ProgressBar,
 ) -> Result<(Vec<Vertex>, Vec<Mesh>), std::io::Error> {
+    const DEFAULT_TEXCOORD: [Point2<f32>; 3] = [
+        Point2::new(0.0, 0.0),
+        Point2::new(1.0, 0.0),
+        Point2::new(1.0, 1.0),
+    ];
     let mut retval_vertices = Vec::new();
     let mut retval_meshes = Vec::new();
     let mut used_vert = HashMap::new();
@@ -324,12 +329,7 @@ fn convert_meshes(
     pb.set_message("Converting meshes");
     for (id, mesh) in meshes.iter().enumerate() {
         let mut indices = Vec::with_capacity(mesh.faces.len() * 3);
-        if mesh.uv_components[0] < 2 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Unsupported UV components in mesh",
-            ));
-        }
+        let use_default_uvs = mesh.uv_components[0] < 2;
         for face in &mesh.faces {
             if face.0.len() != 3 {
                 return Err(std::io::Error::new(
@@ -337,10 +337,15 @@ fn convert_meshes(
                     "Only triangles are supported",
                 ));
             }
-            for index in &face.0 {
+            for (i, index) in face.0.iter().enumerate() {
                 let vv = mesh.vertices[*index as usize];
                 let vn = mesh.normals[*index as usize];
-                let vt = mesh.texture_coords[0].as_ref().unwrap()[*index as usize];
+                let vt = if use_default_uvs {
+                    DEFAULT_TEXCOORD[i]
+                } else {
+                    let tmp = mesh.texture_coords[0].as_ref().unwrap()[*index as usize];
+                    Point2::new(tmp.x, tmp.y)
+                };
                 let vertex = Vertex {
                     vv: Point3::new(vv.x, vv.y, vv.z),
                     vn: Vec3::new(vn.x, vn.y, vn.z),
