@@ -285,19 +285,21 @@ fn convert_lights(lights: &[russimp::light::Light], pb: ProgressBar) -> Vec<Ligh
             light.color_diffuse.b,
         );
         let spectrum = Spectrum::from_rgb(color, true);
-        let position = russimp_vec_to_point(light.pos);
-        retval_lights.push(match light.light_source_type {
-            russimp::light::LightSourceType::Point => {
-                Light::new_omni(light.name.clone(), spectrum, position, 1.0)
-            }
-            russimp::light::LightSourceType::Directional => Light::new_sun(
-                light.name.clone(),
-                spectrum,
-                russimp_vec_to_vec(light.direction),
-            ),
-            // TODO: more gentle error handling
+        let mut new_light = Light {
+            ltype: glaze::LightType::OMNI,
+            name: light.name.clone(),
+            color: spectrum,
+            position: russimp_vec_to_point(light.pos),
+            direction: russimp_vec_to_vec(light.direction),
+            intensity: light.attenuation_linear,
+            ..Default::default()
+        };
+        match light.light_source_type {
+            russimp::light::LightSourceType::Point => new_light.ltype = glaze::LightType::OMNI,
+            russimp::light::LightSourceType::Directional => new_light.ltype = glaze::LightType::SUN,
             _ => panic!("Unsupported light type"),
-        });
+        };
+        retval_lights.push(new_light);
         pb.inc(1);
     }
     pb.finish();
@@ -571,7 +573,12 @@ fn convert_material(
         }
     }
     if retval.emissive_col.is_some() {
-        let light = Light::new_area(retval.name.clone(), mat_id as u32, 1.0);
+        let light = Light {
+            ltype: glaze::LightType::AREA,
+            name: retval.name.clone(),
+            resource_id: mat_id as u32,
+            ..Default::default()
+        };
         (retval, Some(light))
     } else {
         (retval, None)

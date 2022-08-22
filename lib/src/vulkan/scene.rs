@@ -298,12 +298,17 @@ impl RealtimeScene {
         if new.emissive_col.is_some() || old.emissive_col.is_some() {
             if new.emissive_col.is_some() && old.emissive_col.is_none() {
                 // lights should be added
-                self.lights
-                    .push(Light::new_area(new.name.clone(), mat_id as u32, 1.0));
+                let area = Light {
+                    ltype: LightType::AREA,
+                    name: new.name.clone(),
+                    resource_id: mat_id as u32,
+                    ..Default::default()
+                };
+                self.lights.push(area);
             } else if new.emissive_col.is_none() && old.emissive_col.is_some() {
                 // light should be removed
                 self.lights
-                    .retain(|x| x.ltype() != LightType::AREA || x.resource_id() != mat_id as u32);
+                    .retain(|x| x.ltype != LightType::AREA || x.resource_id != mat_id as u32);
             }
             // no need to update lights buffer because FOR NOW lights are not
             // rendered in the realtime preview
@@ -341,7 +346,7 @@ impl RealtimeScene {
         if let Some(light) = self
             .lights
             .last()
-            .filter(|x| x.ltype() == LightType::SKY)
+            .filter(|x| x.ltype == LightType::SKY)
             .cloned()
         {
             let device = self.instance.device();
@@ -395,7 +400,7 @@ impl RealtimeScene {
     pub fn skydome(&self) -> Option<Light> {
         self.lights
             .last()
-            .filter(|x| x.ltype() == LightType::SKY)
+            .filter(|x| x.ltype == LightType::SKY)
             .cloned()
     }
 
@@ -445,7 +450,7 @@ impl RealtimeScene {
         if let Some(sky) = self
             .lights
             .last()
-            .filter(|x| x.ltype() == LightType::SKY)
+            .filter(|x| x.ltype == LightType::SKY)
             .cloned()
         {
             // update skydome
@@ -621,8 +626,8 @@ fn gen_icosphere(subdivisions: u8) -> (Vec<f32>, Vec<u32>) {
 /// reorder the lights, so there is only a single LightType::SKY and is the last element of the
 /// array.
 fn reorder_lights(mut lights: Vec<Light>) -> Vec<Light> {
-    let sky = lights.iter().find(|l| l.ltype() == LightType::SKY).cloned();
-    lights.retain(|l| l.ltype() != LightType::SKY);
+    let sky = lights.iter().find(|l| l.ltype == LightType::SKY).cloned();
+    lights.retain(|l| l.ltype != LightType::SKY);
     if let Some(sky) = sky {
         lights.push(sky);
     }
@@ -663,7 +668,7 @@ fn build_skydome_realtime(
         &si,
     );
     // descriptor
-    let bound_sky = &textures[sky.resource_id() as usize].image;
+    let bound_sky = &textures[sky.resource_id as usize].image;
     let descriptor = dm
         .new_set()
         .bind_image(
@@ -1490,10 +1495,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             load_raytrace_materials_to_gpu(device, mm, &mut tcmdm, &mut unf, &materials);
         let linear_sampler = create_sampler(device, false);
         let nn_sampler = create_sampler(device, true);
-        let sky = lights
-            .last()
-            .filter(|x| x.ltype() == LightType::SKY)
-            .cloned();
+        let sky = lights.last().filter(|x| x.ltype == LightType::SKY).cloned();
         let sky_buffer = build_sky_raytrace_buffers(
             device,
             mm,
@@ -1593,10 +1595,7 @@ impl<T: Instance + Send + Sync> RayTraceScene<T> {
             lights,
             &self.material_instance_ids,
         );
-        let sky = lights
-            .last()
-            .filter(|l| l.ltype() == LightType::SKY)
-            .cloned();
+        let sky = lights.last().filter(|l| l.ltype == LightType::SKY).cloned();
         // call the update sky function only if it is effectively changed
         // this is a quite expensive function.
         if sky != self.sky {
@@ -1876,25 +1875,24 @@ fn load_raytrace_lights_to_gpu(
 ) -> AllocatedBuffer {
     let mut data = Vec::new();
     for l in lights {
-        let pos = l.position();
-        let mut dir = l.direction();
+        let mut dir = l.direction;
         if dir.x == 0.0 && dir.y == 0.0 && dir.z == 0.0 {
             log::warn!("zero length vector was changed to (0.0, -1.0, 0.0)");
             dir.y = -1.0;
         }
         dir.normalize();
         let mut addlight = RTLight {
-            color: l.emission(),
-            pos: [pos.x, pos.y, pos.z, 0.0],
+            color: l.color,
+            pos: [l.position.x, l.position.y, l.position.z, 0.0],
             dir: [dir.x, dir.y, dir.z, 0.0],
-            shader: l.ltype().sbt_callable_index(),
+            shader: l.ltype.sbt_callable_index(),
             instance_id: u32::MAX,
-            intensity: l.intensity(),
-            delta: l.ltype().is_delta(),
+            intensity: l.intensity,
+            delta: l.ltype.is_delta(),
         };
-        if l.ltype() == LightType::AREA {
+        if l.ltype == LightType::AREA {
             // add all the isntances of the material (material_id to isntance_id conversion)
-            let material_id = l.resource_id() as u16;
+            let material_id = l.resource_id as u16;
             let dflt = vec![0];
             let instances = transform_ids.get(&material_id).unwrap_or(&dflt);
             for instance in instances {
@@ -2246,11 +2244,12 @@ fn build_sky_raytrace_buffers(
     let rtlight = RTSky {
         obj2world: skylight.rotation_matrix(),
         world2obj: skylight.rotation_matrix().invert().unwrap(),
-        tex_id: skylight.resource_id(),
+        tex_id: skylight.resource_id,
+        intensity: skylight.intensity,
     };
     if old_buffer.is_none()
         || old_sky.is_none()
-        || old_sky.unwrap().resource_id() != skylight.resource_id()
+        || old_sky.unwrap().resource_id != skylight.resource_id
     {
         // recalculate the entire distribution of the texture map
         let distribution = calculate_skymap_distributions(&textures[rtlight.tex_id as usize]);

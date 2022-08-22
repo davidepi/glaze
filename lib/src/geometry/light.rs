@@ -59,12 +59,7 @@ impl LightType {
 
     /// Returns true if the current light type is expected to have an intensity.
     pub fn has_intensity(&self) -> bool {
-        match self {
-            LightType::OMNI => true,
-            LightType::SUN => false,
-            LightType::AREA => true,
-            LightType::SKY => false,
-        }
+        true
     }
 
     /// Returns true if the current light type is expected to have an emitted spectrum.
@@ -156,7 +151,7 @@ impl From<LightType> for u8 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Light {
     /// Type of light.
-    pub tp: LightType,
+    pub ltype: LightType,
     /// Name of the light.
     pub name: String,
     /// Emitted spectrum.
@@ -181,7 +176,7 @@ pub struct Light {
 impl Default for Light {
     fn default() -> Self {
         Self {
-            tp: LightType::OMNI,
+            ltype: LightType::OMNI,
             name: Default::default(),
             color: Spectrum::white(),
             position: Point3::<f32>::new(0.0, 0.0, 0.0),
@@ -196,116 +191,7 @@ impl Default for Light {
 }
 
 impl Light {
-    /// Creates a new omnidirectional light.
-    pub fn new_omni(name: String, color: Spectrum, position: Point3<f32>, intensity: f32) -> Self {
-        Light {
-            tp: LightType::OMNI,
-            name,
-            color,
-            position,
-            intensity,
-            ..Default::default()
-        }
-    }
-
-    /// Creates a new infinitely far away light.
-    pub fn new_sun(name: String, color: Spectrum, direction: Vec3<f32>) -> Self {
-        Light {
-            tp: LightType::SUN,
-            name,
-            color,
-            direction,
-            ..Default::default()
-        }
-    }
-
-    /// Creates a new area light.
-    pub fn new_area(name: String, material_id: u32, intensity: f32) -> Self {
-        Light {
-            tp: LightType::AREA,
-            name,
-            resource_id: material_id,
-            intensity,
-            ..Default::default()
-        }
-    }
-
-    /// Creates a new skylight.
-    pub fn new_sky(name: String, tex_id: u16, yaw_deg: f32, pitch_deg: f32, roll_deg: f32) -> Self {
-        Light {
-            name,
-            tp: LightType::SKY,
-            yaw_deg,
-            resource_id: tex_id as u32,
-            pitch_deg,
-            roll_deg,
-            ..Default::default()
-        }
-    }
-
-    /// Returns the light type for the current light.
-    pub fn ltype(&self) -> LightType {
-        self.tp
-    }
-
-    /// Returns the name of the current light.
-    ///
-    /// Skylights have no name and will simply return "`Sky`"
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Returns the emitted spectrum for the current light.
-    ///
-    /// If the light has no spectrum ([LightType::has_spectrum] is `false`), [Spectrum::white] is
-    /// returned.
-    pub fn emission(&self) -> Spectrum {
-        self.color
-    }
-
-    /// Returns the position of the current light.
-    ///
-    /// If the light has no position ([LightType::has_position] is `false`), `[0.0, 0.0, 0.0]` is
-    /// returned.
-    pub fn position(&self) -> Point3<f32> {
-        self.position
-    }
-
-    /// Returns the direction of the current light.
-    ///
-    /// If the light has no direction ([LightType::has_direction] is `false`), `[0.0, -1.0, 0.0]` is
-    /// returned.
-    pub fn direction(&self) -> Vec3<f32> {
-        self.direction
-    }
-
-    /// Returns the intensity of the current light.
-    ///
-    /// If the light has no intensity ([LightType::has_intensity] is `false`), `1.0` is
-    /// returned.
-    pub fn intensity(&self) -> f32 {
-        self.intensity
-    }
-
-    /// Returns the resource id associated to the current light.
-    ///
-    /// This returns:
-    /// - the `material_id` associated with the current area light on [LightType::AREA] lights.
-    /// - the `texture_id` associated with the skydome texture on [LightType::SKY] lights.
-    /// - 0 in all other cases.
-    pub fn resource_id(&self) -> u32 {
-        self.resource_id
-    }
-
-    /// Returns yaw, pitch and rool values in degrees if the current light is [LightType::SKY].
-    /// Returns all zeroes otherwise
-    pub fn yaw_pitch_roll(&self) -> [f32; 3] {
-        [self.yaw_deg, self.pitch_deg, self.roll_deg]
-    }
-
-    /// Returns the rotation matrix of the skydome if the current light is [LightType::SKY].
-    ///
-    /// Returns a zero matrix otherwise.
+    /// Returns the rotation matrix of the current light. Useful only for [LightType::SKY] lights.
     pub fn rotation_matrix(&self) -> Matrix4<f32> {
         Matrix4::from_angle_y(cgmath::Deg(self.yaw_deg))
             * Matrix4::from_angle_z(cgmath::Deg(self.pitch_deg))

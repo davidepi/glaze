@@ -892,12 +892,7 @@ fn material_to_bytes(material: &Material) -> Vec<u8> {
     retval.push(material.mtype.into());
     retval.push(material.metal.into());
     retval.extend(material.diffuse_mul);
-    if let Some(col) = material.emissive_col {
-        retval.push(0x1);
-        retval.extend(col);
-    } else {
-        retval.push(0x0);
-    }
+    retval.extend(material.emissive_col.unwrap_or([0; 3]));
     retval.extend(f32::to_le_bytes(material.ior));
     retval.extend(f32::to_le_bytes(material.roughness_mul));
     retval.extend(f32::to_le_bytes(material.metalness_mul));
@@ -918,14 +913,12 @@ fn bytes_to_material(data: &[u8]) -> Material {
     let mut index = 2;
     let diffuse_mul = data[index..index + 3].try_into().unwrap();
     index += 3;
-    let emissive_col = if data[index] == 0 {
-        index += 1;
-        None
+    let maybe_emissive = data[index..index + 3].try_into().unwrap();
+    index += 3;
+    let emissive_col = if maybe_emissive != [0; 3] {
+        Some(maybe_emissive)
     } else {
-        index += 1;
-        let emissive = Some(data[index..index + 3].try_into().unwrap());
-        index += 3;
-        emissive
+        None
     };
     let ior = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
     index += 4;
@@ -991,89 +984,65 @@ fn bytes_to_instance(data: [u8; 4]) -> MeshInstance {
     }
 }
 
-/// Converts a Light to a vector of bytes.
+/// Converts a Light to a vector of bytes. Wastes a bit of spaces but not a big deal.
 fn light_to_bytes(light: &Light) -> Vec<u8> {
-    let ltype = light.ltype();
+    let ltype = light.ltype;
     let mut data = vec![u8::from(ltype)];
-    if ltype.has_position() {
-        let pos: [f32; 3] = light.position().into();
-        data.extend(pos.into_iter().flat_map(f32::to_le_bytes));
-    }
-    if ltype.has_direction() {
-        let dir: [f32; 3] = light.direction().into();
-        data.extend(dir.into_iter().flat_map(f32::to_le_bytes));
-    }
-    if ltype.has_intensity() {
-        data.extend(light.intensity().to_le_bytes());
-    }
-    if ltype.has_spectrum() {
-        data.extend(light.emission().to_le_bytes());
-    }
-    if ltype.has_resources() {
-        data.extend(light.resource_id().to_le_bytes());
-    }
-    if ltype == LightType::SKY {
-        data.extend(
-            light
-                .yaw_pitch_roll()
-                .into_iter()
-                .flat_map(f32::to_le_bytes),
-        );
-    }
-    data.extend(light.name().bytes());
+    let pos: [f32; 3] = light.position.into();
+    data.extend(pos.into_iter().flat_map(f32::to_le_bytes));
+    let dir: [f32; 3] = light.direction.into();
+    data.extend(dir.into_iter().flat_map(f32::to_le_bytes));
+    data.extend(u32::to_le_bytes(light.resource_id));
+    data.extend(f32::to_le_bytes(light.intensity));
+    data.extend(f32::to_le_bytes(light.yaw_deg));
+    data.extend(f32::to_le_bytes(light.pitch_deg));
+    data.extend(f32::to_le_bytes(light.roll_deg));
+    data.extend(light.color.to_le_bytes());
+    data.extend(light.name.bytes());
     data
 }
 
 /// Converts a vector of bytes to a Light.
 fn bytes_to_light(data: &[u8]) -> Light {
-    let mut index = 1;
-    match LightType::try_from(data[0]).expect("Failed to parse light") {
-        LightType::OMNI => {
-            let position = Point3::new(
-                f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
-                f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
-                f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
-            );
-            index += 12;
-            let intensity = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
-            index += 4;
-            let color = Spectrum::from_bytes(data[index..index + 64].try_into().unwrap());
-            index += 64;
-            let name = String::from_utf8(data[index..].to_vec()).unwrap();
-            Light::new_omni(name, color, position, intensity)
-        }
-        LightType::SUN => {
-            let direction = Vec3::new(
-                f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
-                f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
-                f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
-            );
-            index += 12;
-            let color = Spectrum::from_bytes(data[index..index + 64].try_into().unwrap());
-            index += 64;
-            let name = String::from_utf8(data[index..].to_vec()).unwrap();
-            Light::new_sun(name, color, direction)
-        }
-        LightType::AREA => {
-            let intensity = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
-            index += 4;
-            let instance_id = u32::from_le_bytes(data[index..index + 4].try_into().unwrap());
-            index += 4;
-            let name = String::from_utf8(data[index..].to_vec()).unwrap();
-            Light::new_area(name, instance_id, intensity)
-        }
-        LightType::SKY => {
-            let tex_id = u16::from_le_bytes(data[index..index + 2].try_into().unwrap());
-            index += 4;
-            let yaw_deg = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
-            index += 4;
-            let pitch_deg = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
-            index += 4;
-            let roll_deg = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
-            index += 4;
-            let name = String::from_utf8(data[index..].to_vec()).unwrap();
-            Light::new_sky(name, tex_id, yaw_deg, pitch_deg, roll_deg)
-        }
+    let mut index = 0;
+    let ltype = LightType::try_from(data[index]).unwrap();
+    index += 1;
+    let position = Point3::new(
+        f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
+        f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
+        f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
+    );
+    index += 12;
+    let direction = Vec3::new(
+        f32::from_le_bytes(data[index..index + 4].try_into().unwrap()),
+        f32::from_le_bytes(data[index + 4..index + 8].try_into().unwrap()),
+        f32::from_le_bytes(data[index + 8..index + 12].try_into().unwrap()),
+    );
+    index += 12;
+    let resource_id = u32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let intensity = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let yaw_deg = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let pitch_deg = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let roll_deg = f32::from_le_bytes(data[index..index + 4].try_into().unwrap());
+    index += 4;
+    let color = Spectrum::from_le_bytes(data[index..index + 64].try_into().unwrap());
+    index += 64;
+    let name = String::from_utf8(data[index..].to_vec()).unwrap();
+    Light {
+        ltype,
+        name,
+        color,
+        position,
+        direction,
+        intensity,
+        resource_id,
+        yaw_deg,
+        pitch_deg,
+        roll_deg,
     }
 }
 
@@ -1370,23 +1339,46 @@ mod tests {
             let color = Spectrum::from_blackbody(rng.gen_range(800.0..10000.0));
             let ltype =
                 LightType::try_from(rng.gen_range(0..LightType::all().len() as u8)).unwrap();
+            let intensity = rng.gen();
             let light = match ltype {
                 LightType::OMNI => {
                     let position = Point3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-                    Light::new_omni(name, color, position, rng.gen())
+                    Light {
+                        ltype,
+                        name,
+                        color,
+                        position,
+                        intensity: rng.gen(),
+                        ..Default::default()
+                    }
                 }
                 LightType::SUN => {
                     let direction = Vec3::<f32>::new(rng.gen(), rng.gen(), rng.gen());
-                    Light::new_sun(name, color, direction)
+                    Light {
+                        ltype,
+                        name,
+                        color,
+                        direction,
+                        intensity,
+                        ..Default::default()
+                    }
                 }
-                LightType::AREA => Light::new_area(name, rng.gen(), rng.gen()),
-                LightType::SKY => Light::new_sky(
+                LightType::AREA => Light {
+                    ltype,
                     name,
-                    rng.gen(),
-                    rng.gen_range(0.0..360.0),
-                    rng.gen_range(0.0..360.0),
-                    rng.gen_range(0.0..360.0),
-                ),
+                    color,
+                    resource_id: rng.gen(),
+                    ..Default::default()
+                },
+                LightType::SKY => Light {
+                    ltype,
+                    name,
+                    resource_id: rng.gen(),
+                    yaw_deg: rng.gen_range(0.0..360.0),
+                    pitch_deg: rng.gen_range(0.0..360.0),
+                    roll_deg: rng.gen_range(0.0..360.0),
+                    ..Default::default()
+                },
             };
             data.push(light);
         }

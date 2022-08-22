@@ -1,6 +1,5 @@
 // separates better imgui logic (button clicked) from the program logic
 #![allow(clippy::collapsible_if)]
-use cgmath::Point3;
 use glaze::{
     parse, Camera, ColorRGB, Integrator, Light, LightType, MaterialType, Metal, OrthographicCam,
     PerspectiveCam, PresentInstance, RayTraceRenderer, RayTraceScene, RealtimeRenderer,
@@ -791,12 +790,11 @@ fn window_lights(
             update_exposure = true;
         }
         if ui.button("Add") {
-            let dflt_light = Light::new_omni(
-                format!("Light{}", scene.lights().len()),
-                Spectrum::from_blackbody(2500.0),
-                Point3::<f32>::new(0.0, 0.0, 0.0),
-                1.0,
-            );
+            let dflt_light = Light {
+                ltype: LightType::OMNI,
+                name: format!("Light{}", scene.lights().len()),
+                ..Default::default()
+            };
             update_lights = true;
             add = Some(dflt_light);
         }
@@ -831,13 +829,12 @@ fn window_lights(
                             match &mut sky {
                                 Some(s) => s.resource_id = id as u32,
                                 None => {
-                                    sky = Some(Light::new_sky(
-                                        "Sky".to_string(),
-                                        id as u16,
-                                        0.0,
-                                        0.0,
-                                        0.0,
-                                    ));
+                                    sky = Some(Light {
+                                        ltype: LightType::SKY,
+                                        name: "Sky".to_string(),
+                                        resource_id: id as u32,
+                                        ..Default::default()
+                                    });
                                 }
                             }
                             update_lights = true;
@@ -870,6 +867,12 @@ fn window_lights(
             {
                 update_lights = true;
             }
+            if imgui::Slider::new("Intensity", 1E-2, 1E2)
+                .flags(SliderFlags::ALWAYS_CLAMP | SliderFlags::LOGARITHMIC)
+                .build(ui, &mut sky.intensity)
+            {
+                update_lights = true;
+            }
         }
         ui.separator();
         ui.spacing();
@@ -884,14 +887,14 @@ fn window_lights(
             for (light_id, light) in scene.lights().iter().enumerate() {
                 ui.table_next_row();
                 ui.table_next_column();
-                if imgui::Selectable::new(light.name())
+                if imgui::Selectable::new(&light.name)
                     .span_all_columns(true)
                     .build(ui)
                 {
                     state.light_selected = Some(light_id);
                 }
                 ui.table_next_column();
-                ui.text(light.ltype().name());
+                ui.text(light.ltype.name());
                 ui.table_next_column();
             }
             table.end();
@@ -901,12 +904,12 @@ fn window_lights(
             // points to an invalid light. So i need this double check.
             if let Some(light) = &scene.lights().get(selected) {
                 let mut updated_current = false;
-                let mut new_name = light.name().to_string();
-                let mut new_type = light.ltype();
-                let mut new_color = light.emission();
-                let mut new_pos = light.position();
-                let mut new_dir = light.direction();
-                let mut new_intensity = light.intensity();
+                let mut new_name = light.name.to_string();
+                let mut new_type = light.ltype;
+                let mut new_color = light.color;
+                let mut new_pos = light.position;
+                let mut new_dir = light.direction;
+                let mut new_intensity = light.intensity;
                 ui.spacing();
                 if imgui::InputText::new(ui, "Light Name", &mut new_name)
                     .enter_returns_true(true)
@@ -982,15 +985,15 @@ fn window_lights(
                     remove = Some(selected);
                     update_lights = true;
                 } else if updated_current {
-                    let new_light = match new_type {
-                        LightType::OMNI => {
-                            Light::new_omni(new_name, new_color, new_pos, new_intensity)
-                        }
-                        LightType::SUN => Light::new_sun(new_name, new_color, new_dir),
-                        LightType::AREA => {
-                            Light::new_area(new_name, light.resource_id(), new_intensity)
-                        }
-                        LightType::SKY => panic!("Skylight should not be selectable"),
+                    let new_light = Light {
+                        ltype: new_type,
+                        name: new_name,
+                        position: new_pos,
+                        direction: new_dir,
+                        color: new_color,
+                        intensity: new_intensity,
+                        ..Default::default() /* remaining fields are for SKY which should not be
+                                              * selectable */
                     };
                     update = Some((selected, new_light));
                     update_lights = true;
@@ -1017,7 +1020,7 @@ fn window_lights(
             }
             // add/modify sky
             if let Some(last) = lights.last_mut() {
-                if last.ltype() == LightType::SKY {
+                if last.ltype == LightType::SKY {
                     //modify existing
                     if let Some(sky) = sky {
                         *last = sky;

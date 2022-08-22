@@ -125,7 +125,7 @@ void main()
     sam.wiW = normalize(SkyBuf.sky.obj2world * vec4(wi, 0.0)).xyz;
     sam.distance = 2.0*FrameData.scene_radius+1;
     vec3 sampled_texel =
-      texture(textures[nonuniformEXT(SkyBuf.sky.tex_id)], uv).rgb;
+      texture(textures[nonuniformEXT(SkyBuf.sky.tex_id)], uv).rgb * SkyBuf.sky.intensity;
     sam.emission = from_illuminant_color(sampled_texel);
   }
   else

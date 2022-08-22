@@ -25,5 +25,5 @@ void main()
   sam.wiW = -light.dir.xyz;
   sam.pdf = 1.0;
   sam.distance = 2.0*FrameData.scene_radius+1;
-  sam.emission = light.color;
+  sam.emission = mul(light.color, light.intensity);
 }

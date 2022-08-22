@@ -81,6 +81,7 @@ pub struct RTSky {
     pub obj2world: Matrix4<f32>,
     pub world2obj: Matrix4<f32>,
     pub tex_id: u32,
+    pub intensity: f32,
 }
 
 pub const PT_STEPS: usize = 6;

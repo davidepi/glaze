@@ -174,7 +174,7 @@ impl Spectrum {
         (y * INVY_SUM).clamp(0.0, 1.0)
     }
 
-    /// Converts the spectrum to an array of bytes
+    /// Converts the spectrum to an array of bytes in little endian order.
     pub fn to_le_bytes(self) -> [u8; Spectrum::SAMPLES * 4] {
         let mut retval = [0; Spectrum::SAMPLES * 4];
         let mut index = 0;
@@ -189,8 +189,8 @@ impl Spectrum {
         retval
     }
 
-    /// Creates the spectrum from an array of bytes
-    pub fn from_bytes(bytes: [u8; Spectrum::SAMPLES * 4]) -> Spectrum {
+    /// Creates the spectrum from an array of bytes in little endian order.
+    pub fn from_le_bytes(bytes: [u8; Spectrum::SAMPLES * 4]) -> Spectrum {
         let mut wavelength = [0.0; Spectrum::SAMPLES];
         for (i, chunk) in bytes.chunks_exact(4).enumerate() {
             wavelength[i] = f32::from_le_bytes(chunk.try_into().unwrap());
@@ -818,7 +818,7 @@ mod tests {
     fn spectrum_from_to_bytes() {
         let sp = SPECTRUM_CYAN;
         let bytes = sp.to_le_bytes();
-        let from = Spectrum::from_bytes(bytes);
+        let from = Spectrum::from_le_bytes(bytes);
         for i in 0..Spectrum::SAMPLES {
             assert_eq!(sp.wavelength[i], from.wavelength[i])
         }
