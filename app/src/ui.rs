@@ -49,6 +49,7 @@ pub struct UiState {
 
 impl UiState {
     pub fn new(instance: Arc<PresentInstance>) -> Self {
+        let use_raytracer = instance.supports_raytrace();
         UiState {
             instance,
             open_loading_popup: false,
@@ -74,7 +75,7 @@ impl UiState {
             stats_window: true,
             info_window: false,
             loading_scene: None,
-            use_raytracer: false,
+            use_raytracer,
             texture_path: "".to_string(),
             texture_format: TextureFormat::RgbaSrgb,
         }
