@@ -26,6 +26,7 @@ pub struct UiState {
     settings_window: bool,
     render_scale_cur: f32,
     render_scale_sel: f32,
+    pub movement_lock: bool,
     pub inverted_mouse_h: bool,
     pub inverted_mouse_v: bool,
     pub mouse_sensitivity: f32,
@@ -58,6 +59,7 @@ impl UiState {
             settings_window: false,
             render_scale_cur: 1.0,
             render_scale_sel: 1.0,
+            movement_lock: false,
             inverted_mouse_h: false,
             inverted_mouse_v: false,
             mouse_sensitivity: 0.05,
@@ -202,6 +204,7 @@ pub fn draw_ui(
                 raytracer.change_scene(rtscene);
             }
             ui.close_current_popup();
+            state.movement_lock = false;
         } else {
             let spinner_ticks = ['\\', '|', '/', '-'];
             let tick = spinner_ticks[state.current_tick % spinner_ticks.len()];
@@ -1126,6 +1129,7 @@ fn select_and_load_scene(state: &mut UiState) {
                     last_message: "".to_string(),
                     join_handle: thandle,
                 });
+                state.movement_lock = true;
                 state.mov_speed = scene_radius / 100.0;
                 state.vert_speed = scene_radius / 1000.0;
                 state.textures_selected = None;

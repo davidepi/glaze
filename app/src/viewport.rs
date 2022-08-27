@@ -170,32 +170,36 @@ fn handle_keyboard(input: KeyboardInput, view: &mut InteractiveView) {
 }
 
 fn camera_pos_strafe(view: &mut InteractiveView, direction: f32) {
-    let magnitude = view.state.mov_speed;
-    let multiplier = if view.alt_speed_down {
-        view.state.mov_speed_mul
-    } else {
-        1.0
-    };
-    let mut camera = view.renderer.camera();
-    camera.strafe(direction * magnitude * multiplier);
-    view.renderer.set_camera(camera);
-    if let Some(raytracer) = &mut view.raytracer {
-        raytracer.update_camera(camera);
+    if !view.state.movement_lock && !view.imgui.io().want_capture_keyboard {
+        let magnitude = view.state.mov_speed;
+        let multiplier = if view.alt_speed_down {
+            view.state.mov_speed_mul
+        } else {
+            1.0
+        };
+        let mut camera = view.renderer.camera();
+        camera.strafe(direction * magnitude * multiplier);
+        view.renderer.set_camera(camera);
+        if let Some(raytracer) = &mut view.raytracer {
+            raytracer.update_camera(camera);
+        }
     }
 }
 
 fn camera_pos_advance(view: &mut InteractiveView, direction: f32) {
-    let magnitude = view.state.mov_speed;
-    let multiplier = if view.alt_speed_down {
-        view.state.mov_speed_mul
-    } else {
-        1.0
-    };
-    let mut camera = view.renderer.camera();
-    camera.advance(direction * magnitude * multiplier);
-    view.renderer.set_camera(camera);
-    if let Some(raytracer) = &mut view.raytracer {
-        raytracer.update_camera(camera);
+    if !view.state.movement_lock && !view.imgui.io().want_capture_keyboard {
+        let magnitude = view.state.mov_speed;
+        let multiplier = if view.alt_speed_down {
+            view.state.mov_speed_mul
+        } else {
+            1.0
+        };
+        let mut camera = view.renderer.camera();
+        camera.advance(direction * magnitude * multiplier);
+        view.renderer.set_camera(camera);
+        if let Some(raytracer) = &mut view.raytracer {
+            raytracer.update_camera(camera);
+        }
     }
 }
 
@@ -205,7 +209,7 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
     let delta = (x - old_x, y - old_y);
     view.mouse_pos = (x, y);
     // if lmb pressed, move camera
-    if view.rmb_down {
+    if view.rmb_down && !view.state.movement_lock && !view.imgui.io().want_capture_mouse {
         let magnitude = view.state.mouse_sensitivity;
         let x_dir = if view.state.inverted_mouse_h {
             1.0
@@ -227,7 +231,7 @@ fn mouse_moved(new_pos: PhysicalPosition<f64>, view: &mut InteractiveView) {
             raytracer.update_camera(camera);
         }
     }
-    if view.mmb_down {
+    if view.mmb_down && !view.state.movement_lock && !view.imgui.io().want_capture_mouse {
         let magnitude = view.state.vert_speed;
         let direction = if view.state.inverted_vert_mov {
             1.0
