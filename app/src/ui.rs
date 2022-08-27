@@ -346,8 +346,11 @@ fn window_settings(
                 Slider::new("Vertical movement speed", 0.01, 10.0).build(ui, &mut state.vert_speed);
                 ui.separator();
                 ui.text("Keyboard");
-                Slider::new("Movement speed (normal)", 0.01, 10.0).build(ui, &mut state.mov_speed);
-                Slider::new("Fast movement multiplier", 1.0, 10.0)
+                Slider::new("Movement speed (normal)", 0.01, 100.0)
+                    .flags(SliderFlags::LOGARITHMIC)
+                    .build(ui, &mut state.mov_speed);
+                Slider::new("Fast movement multiplier", 1.0, 1000.0)
+                    .flags(SliderFlags::LOGARITHMIC)
                     .build(ui, &mut state.mov_speed_mul);
             }
         });
@@ -1103,6 +1106,7 @@ fn select_and_load_scene(state: &mut UiState) {
     if let Some(path) = dialog_pick {
         match parse(path) {
             Ok(parsed) => {
+                let scene_radius = parsed.meta().unwrap_or_default().scene_radius;
                 let (wchan, rchan) = mpsc::channel();
                 let instance_clone = Arc::clone(&state.instance);
                 let thandle = std::thread::spawn(move || {
@@ -1122,6 +1126,8 @@ fn select_and_load_scene(state: &mut UiState) {
                     last_message: "".to_string(),
                     join_handle: thandle,
                 });
+                state.mov_speed = scene_radius / 100.0;
+                state.vert_speed = scene_radius / 1000.0;
                 state.textures_selected = None;
                 state.materials_selected = None;
                 state.light_selected = None;
