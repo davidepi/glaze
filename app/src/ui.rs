@@ -383,16 +383,13 @@ fn window_textures(
             if ui.button("Select...") {
                 if let Some(path) = FileDialog::new()
                     .set_title("Select texture...")
-                    .add_filter("PNG image", &["png"])
-                    .add_filter("JPEG image", &["jpeg"])
-                    .add_filter("GIF image", &["gif"])
-                    .add_filter("BMP image", &["bmp"])
-                    .add_filter("ICO image", &["ico"])
-                    .add_filter("TIFF image", &["tiff"])
-                    .add_filter("WebP image", &["webp"])
-                    .add_filter("DDS image", &["dds"])
-                    .add_filter("TGA image", &["tga"])
-                    .add_filter("Netpbm image", &["pnm", "pbm", "pgm", "ppm"])
+                    .add_filter(
+                        "Image file",
+                        &[
+                            "png", "jpeg", "gif", "bmp", "ico", "tiff", "webp", "dds", "tga",
+                            "pnm", "pbm", "pgm", "ppm",
+                        ],
+                    )
                     .pick_file()
                 {
                     *texture_path = path.to_str().unwrap().to_string();
