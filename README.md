@@ -2,17 +2,16 @@
 ![build badge](https://github.com/davidepi/glaze/actions/workflows/ci.yml/badge.svg)
 
 Realtime path tracing renderer written in Rust and Vulkan Ray Tracing.
+
 Requires a GPU with raytracing support.
 
 ![test_image](https://user-images.githubusercontent.com/2979535/204575102-142d4e3f-365b-4e15-b754-e21fec08eccb.jpg)
 
-The following is a small video showing the realtime capabilities of the renderer. Note that flickering is expected during the first few frames, given the unbiased nature of Path Tracing.
+The following is a small video showing the realtime capabilities of the renderer.
+
+**Note:** flickering is expected during the first few frames, given the unbiased nature of Path Tracing.
 
 https://user-images.githubusercontent.com/2979535/204574735-59aff2a5-234d-4ea5-a167-dc108c7e9543.mp4
-
-
-
-
 
 ### Supported Materials
 
