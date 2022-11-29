@@ -87,6 +87,3 @@ jobs:
       - name: Build tests
         shell: bash
         run: cargo +stable test --no-run --verbose --all-features --target ${{ matrix.platform.target }}
-      - name: Run tests
-        shell: bash
-        run: cargo +stable test --verbose --all-features --no-fail-fast --target ${{ matrix.platform.target }}
