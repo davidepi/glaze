@@ -1769,12 +1769,12 @@ fn map_materials_to_instances(
         .iter()
         .map(|m| (m.mesh_id, m.material))
         .collect::<FnvHashMap<_, _>>();
-    let mut retval = FnvHashMap::default();
+    let mut retval: FnvHashMap<u16, Vec<u16>> = FnvHashMap::default();
     for (instance_id, instance) in instances.iter().enumerate() {
         let material_id = *materials_by_mesh_id.get(&instance.mesh_id).unwrap();
         retval
             .entry(material_id)
-            .or_insert(Vec::new())
+            .or_default()
             .push(instance_id as u16);
     }
     retval

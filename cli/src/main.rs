@@ -1,4 +1,4 @@
-use clap::{ArgEnum, Parser};
+use clap::{Parser, ValueEnum};
 use console::style;
 use glaze::{parse, Integrator, RayTraceInstance, RayTraceRenderer, RayTraceScene};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 enum ArgIntegrator {
     Direct,
     Pt,
@@ -34,7 +34,7 @@ struct Args {
     /// Samples per pixel.
     #[clap(short, long, default_value = "256")]
     spp: usize,
-    #[clap(arg_enum, short, long, default_value = "pt")]
+    #[clap(value_enum, short, long, default_value = "pt")]
     integrator: ArgIntegrator,
 }
 

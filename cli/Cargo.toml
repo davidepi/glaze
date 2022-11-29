@@ -9,10 +9,10 @@ description = "Unbiased GPU renderer"
 
 [dependencies]
 glaze = {path="../lib", features=["vulkan"]}
-env_logger = "0.9"
+env_logger = "0.10"
 log = "0.4"
 image = "0.24"
 cgmath = "0.18"
-clap = {version="3.2", features=["derive"]}
+clap = {version="4.0", features=["derive"]}
 console = "0.15"
 indicatif = "0.17"

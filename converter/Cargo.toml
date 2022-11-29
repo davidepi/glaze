@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 glaze = {path = "../lib"}
-clap = {version="3.2", features=["derive"]}
+clap = {version="4.0", features=["derive"]}
 cgmath = "0.18"
 russimp = "1.0.3"
 indicatif = "0.17"
