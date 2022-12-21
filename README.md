@@ -27,24 +27,38 @@ https://user-images.githubusercontent.com/2979535/204574735-59aff2a5-234d-4ea5-a
 ### Building
 _Glaze_ works on Windows and Linux operating systems.
 
-In order to build this application [Rust](https://www.rust-lang.org/tools/install)
-is required. In addition to that, [assimp](https://github.com/assimp/assimp.git)
-is required to build the 3D scene converter (`glaze-converter`).
+In order to build this application
+[Rust](https://www.rust-lang.org/tools/install) is required.
 
-In order to build the entire suite it is sufficient to run the following command
-on the project root:
+The following command can be used to build the interactive renderer:
 ```bash
-cargo build --release
+cargo build --release --bin glaze-app
 ```
-Alternatively, the following command can be used to build a single component:
-```bash
-cargo build --release --bin <component>
-```
-Where `<component>` can be one of `glaze-app`, `glaze-converter` or `glaze-cli`. 
-A description of these components can be found in the section [Repo Structure](#-repo-structure)
+The executable can be found in the folder `target/release`.
 
-Built binaries can be found in the folder `target/release`. 
-For non-interactive executables (`glaze-converter` and `glaze-cli`, command line parameters can be retrieved with the `-h` flags.
+The only runtime dependency is a decently recent version of the Vulkan runtime,
+usually bundled with the video card graphics driver.
+
+
+To build the non-interactive renderer or the 3D scene converter, `glaze-app` in
+the previous command should be replaced with `glaze-cli` or `glaze-converter`
+respectively. Note that building the converter requires
+[assimp](https://github.com/assimp/assimp.git) to be installed in the system.
+For non-interactive executables (`glaze-cli` and `glaze-converter`),
+command line parameters can be retrieved with the `-h` flags.
+
+### Input file
+This renderer requires its own 3D format.
+(Support for [glTF](https://github.com/KhronosGroup/glTF) SOON™)
+
+A (very) experimental converter, `glaze-converter`, based on
+[assimp](https://github.com/assimp), can be used to convert a 3D model from other
+formats to the one expected by this renderer.
+
+### Example scene
+
+The scene used in this README can be downloaded at the
+[following address](https://sel.ist.osaka-u.ac.jp/people/davidepi/sponza.glaze).
 
 ## Repo Structure
 - *[lib](lib)*: library containing all the rendering and parsing routines.
