@@ -969,7 +969,7 @@ fn build_sbt<T: Instance>(
     for miss_group in miss_groups.chunks_exact(size_handle as usize) {
         data.extend_from_slice(miss_group);
         // ensures every member is aligned properly
-        if align_handle != size_handle as u64 {
+        if align_handle != size_handle {
             let missing_bytes = padding(data.len() as u64, align_handle) as usize;
             data.extend(repeat(0).take(missing_bytes));
         }
@@ -996,7 +996,7 @@ fn build_sbt<T: Instance>(
     group_index += 1;
     for hit in shader_group.chunks_exact(size_handle as usize) {
         data.extend_from_slice(hit);
-        if align_handle != size_handle as u64 {
+        if align_handle != size_handle {
             let missing_bytes = padding(data.len() as u64, align_handle) as usize;
             data.extend(repeat(0).take(missing_bytes));
         }
@@ -1023,7 +1023,7 @@ fn build_sbt<T: Instance>(
     .expect("Failed to retrieve shader handle");
     for callable in callables_group.chunks_exact(size_handle as usize) {
         data.extend_from_slice(callable);
-        if align_handle != size_handle as u64 {
+        if align_handle != size_handle {
             let missing_bytes = padding(data.len() as u64, align_handle) as usize;
             data.extend(repeat(0).take(missing_bytes));
         }

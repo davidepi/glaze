@@ -12,7 +12,6 @@ mod light;
 pub use self::light::{Light, LightType};
 mod distribution;
 pub use self::distribution::{Distribution1D, Distribution2D};
-
 #[cfg(feature = "vulkan")]
 pub use self::light::SBT_LIGHT_STRIDE;
 #[cfg(feature = "vulkan")]

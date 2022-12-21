@@ -148,7 +148,7 @@ impl MemoryManager {
             s_type: vk::StructureType::BUFFER_CREATE_INFO,
             p_next: ptr::null(),
             flags: Default::default(),
-            size: size as u64,
+            size,
             usage,
             sharing_mode: vk::SharingMode::EXCLUSIVE,
             queue_family_index_count: 0,
@@ -275,8 +275,8 @@ pub fn export<T: Instance + ?Sized>(
 ) -> image::RgbaImage {
     // create the dst image with LINEAR tiling
     let extent3d = vk::Extent3D {
-        width: width as u32,
-        height: height as u32,
+        width,
+        height,
         depth: 1,
     };
     let device_properties = unsafe {
@@ -479,5 +479,5 @@ pub fn export<T: Instance + ?Sized>(
     if allocator.lock().unwrap().free(allocation).is_err() {
         log::warn!("Failed to free memory");
     }
-    image::RgbaImage::from_raw(width as u32, height as u32, raw).expect("Image conversion failed")
+    image::RgbaImage::from_raw(width, height, raw).expect("Image conversion failed")
 }

@@ -1,7 +1,6 @@
 #![allow(clippy::excessive_precision)]
-use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
-
 use crate::{ColorRGB, ColorXYZ};
+use std::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
 /// The representation of a visibile colour
 ///
@@ -728,11 +727,9 @@ impl DivAssign<f32> for Spectrum {
 
 #[cfg(test)]
 mod tests {
-    use float_cmp::assert_approx_eq;
-
-    use crate::{ColorRGB, Spectrum};
-
     use super::SPECTRUM_CYAN;
+    use crate::{ColorRGB, Spectrum};
+    use float_cmp::assert_approx_eq;
 
     #[test]
     fn spectrum_constructor_black() {

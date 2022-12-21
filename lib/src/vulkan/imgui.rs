@@ -105,8 +105,8 @@ impl ImguiRenderer {
             let fonts = fonts_ref.build_rgba32_texture();
             let fonts_size = (fonts.width * fonts.height * 4) as u64;
             let fonts_extent = vk::Extent2D {
-                width: fonts.width as u32,
-                height: fonts.height as u32,
+                width: fonts.width,
+                height: fonts.height,
             };
             let fonts_cpu_buf = mm.create_buffer(
                 "Font atlas CPU",

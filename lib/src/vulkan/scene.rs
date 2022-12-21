@@ -1845,7 +1845,7 @@ fn load_raytrace_materials_to_gpu(
                 normal: mat.normal as u32,
                 bsdf_index: mat.mtype.sbt_callable_index(),
                 roughness_mul: mat.roughness_mul,
-                metalness_mul: mat.metalness_mul as f32,
+                metalness_mul: mat.metalness_mul,
                 anisotropy: mat.anisotropy,
                 ior_dielectric: mat.ior,
                 is_specular: mat.mtype.is_specular() as u32,

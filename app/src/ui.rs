@@ -744,7 +744,7 @@ fn texture_selector(ui: &Ui, text: &str, mut selected: u16, scene: &RealtimeScen
             }
             if ui.is_item_hovered() {
                 ui.tooltip(|| {
-                    Image::new(TextureId::new(id as usize), [128.0, 128.0]).build(ui);
+                    Image::new(TextureId::new(id), [128.0, 128.0]).build(ui);
                 });
             }
         }
@@ -845,7 +845,7 @@ fn window_lights(
                         }
                         if ui.is_item_hovered() {
                             ui.tooltip(|| {
-                                Image::new(TextureId::new(id as usize), [128.0, 128.0]).build(ui);
+                                Image::new(TextureId::new(id), [128.0, 128.0]).build(ui);
                             });
                         }
                     });

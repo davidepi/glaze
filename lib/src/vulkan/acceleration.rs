@@ -146,9 +146,9 @@ impl<'scene, 'renderer> SceneASBuilder<'scene, 'renderer> {
                 geometry,
                 flags,
             }];
-            let primitive_count = (mesh.index_count / 3) as u32;
+            let primitive_count = mesh.index_count / 3;
             let build_range = vk::AccelerationStructureBuildRangeInfoKHR {
-                primitive_count: (mesh.index_count / 3) as u32,
+                primitive_count: mesh.index_count / 3,
                 primitive_offset: (mesh.index_offset * std::mem::size_of::<u32>() as u32),
                 first_vertex: 0,
                 transform_offset: 0,

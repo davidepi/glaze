@@ -1,3 +1,4 @@
+use crate::ui::{draw_ui, UiState};
 use glaze::{parse, PresentInstance, RayTraceRenderer, RealtimeRenderer, RealtimeScene};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use std::convert::TryFrom;
@@ -7,8 +8,6 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, Event, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{Window, WindowBuilder};
-
-use crate::ui::{draw_ui, UiState};
 
 pub struct InteractiveView {
     window: Window,

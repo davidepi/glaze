@@ -105,7 +105,7 @@ fn compile_spirv(variants: &[(&str, &str, &str)]) -> Result<(), Box<dyn Error>> 
                         Some(&edited_options),
                     )?;
                     let outfile = outdir.clone().join(format!("{}.spv", out_name));
-                    std::fs::write(&outfile, compiled_bytes.as_binary_u8())?;
+                    std::fs::write(outfile, compiled_bytes.as_binary_u8())?;
                 }
             }
         }
