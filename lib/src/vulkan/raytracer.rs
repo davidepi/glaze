@@ -253,6 +253,7 @@ impl<T: Instance + Send + Sync + 'static> RayTraceRenderer<T> {
         self.pipeline = pipeline;
         self.sbt = sbt;
         unf.wait_completion();
+        self.update_camera(self.scene.camera);
         self.request_new_frame = true;
     }
 
