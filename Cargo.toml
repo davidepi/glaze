@@ -2,6 +2,7 @@
 
 members = [
     "lib",
+    "lib2",
     "app",
     "cli",
     "converter",
