@@ -1,3 +1,4 @@
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ImageUsage {
     SampledImage,
     StorageImage,
@@ -9,6 +10,7 @@ pub enum ImageUsage {
     TransferDst,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum PresentMode {
     Immediate,
     Fifo,

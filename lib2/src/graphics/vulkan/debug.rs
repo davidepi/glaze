@@ -1,6 +1,6 @@
+use super::util::cchars_to_string;
 use std::collections::HashSet;
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
+use std::ffi::CString;
 
 /// Validation layers enabled when compiling in debug mode
 pub const DEFAULT_VALIDATIONS: [&str; 1] = ["VK_LAYER_KHRONOS_validation"];
@@ -53,27 +53,13 @@ impl ValidationLayers {
     }
 }
 
-/// converts a CString to a Rust String
-pub fn cchars_to_string(cchars: &[c_char]) -> String {
-    let raw_string = unsafe {
-        let pointer = cchars.as_ptr();
-        CStr::from_ptr(pointer)
-    };
-
-    raw_string
-        .to_str()
-        .expect("Failed to convert C string to Rust String")
-        .to_owned()
-}
-
 /// Enables logging of Vulkan events
 #[cfg(debug_assertions)]
 pub mod logger {
+    use crate::graphics::vulkan::error::VulkanError;
     use ash::vk;
     use std::ffi::{c_void, CStr};
     use std::ptr;
-
-    use crate::graphics::vulkan::error::VulkanError;
 
     /// Prints vulkan debug messages, grouped by severity
     pub unsafe extern "system" fn debug_print_callback(

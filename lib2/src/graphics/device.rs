@@ -1,4 +1,4 @@
-use crate::graphics::formats::{ImageFormat, ImageUsage, PresentMode};
+use crate::graphics::format::{ImageFormat, ImageUsage, PresentMode};
 
 pub trait Device {
     type GraphicError;

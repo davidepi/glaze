@@ -1,8 +1,8 @@
+use super::debug::ValidationLayers;
+use super::error::VulkanError;
 use ash::vk;
 use std::ffi::{CStr, CString};
 use std::ptr;
-use super::debug::ValidationLayers;
-use super::error::VulkanError;
 
 #[cfg(debug_assertions)]
 
@@ -12,14 +12,43 @@ use super::error::VulkanError;
 /// Alongside the application state, using [ash::Instance] the library loader [ash::Entry] is
 /// store.
 pub struct VulkanInstance {
-    entry: ash::Entry,
+    present: bool,
+    #[cfg(target_os = "linux")]
+    wayland: bool,
     instance: ash::Instance,
+    entry: ash::Entry,
 }
 
 impl VulkanInstance {
+    /// Returns the vulkan instance handle provided by the ash crate.
+    pub fn vk_instance(&self) -> &ash::Instance {
+        &self.instance
+    }
+
+    /// Returns true if presentation support is enable at instance level.
+    pub fn supports_presentation(&self) -> bool {
+        self.present
+    }
+
+    /// Returns true if wayland support is enabled at instance level.
+    ///
+    /// Returns always false in non-linux systems.
+    pub fn supports_wayland(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.wayland
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+
     /// Creates a new vulkan instance.
     ///
     /// if `present` is true, surface presentation support is added to the instance.
+    /// Only linux systems, wayland is used to enable wayland support. On windows the value is
+    /// ignored.
     ///
     /// The following extensions support are required:
     /// - `VK_KHR_swapchain` if `present` is true.
@@ -30,7 +59,7 @@ impl VulkanInstance {
     pub fn new(present: bool, wayland: bool) -> Result<Self, VulkanError> {
         let entry = match unsafe { ash::Entry::load() } {
             Ok(entry) => entry,
-            Err(err) => panic!("Failed to create entry: {}", err),
+            Err(err) => return Err(VulkanError::new(format!("Failed to create entry: {}", err))),
         };
         let validations = ValidationLayers::application_default();
         let mut extensions = Vec::new();
@@ -50,13 +79,28 @@ impl VulkanInstance {
                 extensions.push(ash::extensions::khr::XlibSurface::name());
             }
             #[cfg(target_os = "windows")]
-            extensions.push(ash::extensions::khr::Win32Surface::name());
+            {
+                extensions.push(ash::extensions::khr::Win32Surface::name());
+            }
         }
         let instance = create_instance(&entry, &extensions, validations.names())?;
-        Ok(VulkanInstance {
-            entry,
-            instance,
-        })
+        #[cfg(target_os = "linux")]
+        {
+            Ok(VulkanInstance {
+                present,
+                wayland,
+                entry,
+                instance,
+            })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(VulkanInstance {
+                present,
+                entry,
+                instance,
+            })
+        }
     }
 }
 

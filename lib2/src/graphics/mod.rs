@@ -2,4 +2,4 @@
 mod vulkan;
 
 mod device;
-mod formats;
+mod format;
