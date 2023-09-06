@@ -6,10 +6,15 @@ edition  = "2021"
 license  = "MIT"
 
 [dependencies]
-ash = "0.37"
 log = "0.4"
+
+[target.'cfg(any(target_os="windows", target_os="linux"))'.dependencies]
+ash = "0.37"
 
 [target.'cfg(target_os="windows")'.dependencies]
 windows = { version = "0.51" }
+
+[target.'cfg(target_os="macos")'.dependencies]
+metal = { version = "0.26" }
 
 [features]
