@@ -1,1 +1,1 @@
-mod graphics;
+pub mod graphics;

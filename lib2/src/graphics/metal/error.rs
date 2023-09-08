@@ -8,8 +8,8 @@ pub enum MetalError {
 
 impl MetalError {
     /// Creates a new custom MetalError with the given text.
-    pub fn new(text: String) -> Self {
-        Self::Custom(text)
+    pub fn new(text: impl Into<String>) -> Self {
+        Self::Custom(text.into())
     }
 }
 

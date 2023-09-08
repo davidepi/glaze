@@ -13,8 +13,8 @@ pub enum VulkanError {
 
 impl VulkanError {
     /// Creates a new custom VulkanError with the given text.
-    pub fn new(text: String) -> Self {
-        Self::Custom(text)
+    pub fn new(text: impl Into<String>) -> Self {
+        Self::Custom(text.into())
     }
 }
 

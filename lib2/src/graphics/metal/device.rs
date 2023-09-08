@@ -1,6 +1,7 @@
 use super::error::MetalError;
+use crate::graphics::device::Device;
 
-struct MetalDevice {
+pub struct MetalDevice {
     inner: metal::Device,
 }
 
@@ -26,9 +27,20 @@ impl MetalDevice {
         } else {
             metal::Device::system_default()
         }
-        .ok_or_else(|| MetalError::new("Failed to find metal device".to_string()))?;
+        .ok_or_else(|| MetalError::new("Failed to find supported GPU"))?;
+        if !pdevice.supports_BC_texture_compression() {
+            return Err(MetalError::new("GPU must support BC compression"));
+        }
         let ret = MetalDevice { inner: pdevice };
         Ok(ret)
+    }
+}
+
+impl Device for MetalDevice {
+    type GraphicError = MetalError;
+
+    fn supports_raytracing(&self) -> bool {
+        self.inner.supports_raytracing()
     }
 }
 
