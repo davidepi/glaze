@@ -4,8 +4,6 @@ use ash::vk;
 use std::ffi::{CStr, CString};
 use std::ptr;
 
-#[cfg(debug_assertions)]
-
 /// Constains the entry point for the vulkan library.
 ///
 /// Vulkan library does not have a global state and application state is stored in this struct.

@@ -1,7 +1,7 @@
 use super::error::VulkanError;
 use super::instance::VulkanInstance;
 use super::util::cchars_to_string;
-use crate::graphics::device::{Device, PresentDevice};
+use crate::graphics::device::Device;
 use crate::graphics::vulkan::physical::PhysicalDeviceVulkan;
 use ash::vk;
 use std::collections::HashSet;

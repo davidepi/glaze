@@ -7,14 +7,20 @@ license  = "MIT"
 
 [dependencies]
 log = "0.4"
+num-traits = "0.2"
+winit = { version = "0.28", optional = true }
 
 [target.'cfg(any(target_os="windows", target_os="linux"))'.dependencies]
 ash = "0.37"
 
 [target.'cfg(target_os="windows")'.dependencies]
-windows = { version = "0.51" }
+windows = "0.51"
 
 [target.'cfg(target_os="macos")'.dependencies]
-metal = { version = "0.26" }
+cocoa = "0.25"
+core-graphics = "0.23"
+metal = "0.26"
 
 [features]
+default = ["display"]
+display = ["winit"]

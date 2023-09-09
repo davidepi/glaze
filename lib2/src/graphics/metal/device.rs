@@ -9,7 +9,7 @@ impl MetalDevice {
     /// Creates an Apple Metal device.
     ///
     /// If the device_id is provided, the
-    /// (registryID)[https://developer.apple.com/documentation/metal/mtldevice/2915737-registryid]
+    /// [registryID](https://developer.apple.com/documentation/metal/mtldevice/2915737-registryid)
     /// of the device is used look up the GPU on the system. If no GPU is found, the method will
     /// fall back to the default one.
     pub fn new(device_id: Option<u64>) -> Result<MetalDevice, MetalError> {
