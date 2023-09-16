@@ -1,3 +1,4 @@
+use super::debug::logger::VulkanDebugLogger;
 use super::debug::ValidationLayers;
 use super::error::VulkanError;
 use crate::graphics::format::FeatureSet;
@@ -11,9 +12,10 @@ use std::ptr;
 /// Alongside the application state, using [ash::Instance] the library loader [ash::Entry] is
 /// store.
 pub struct InstanceVulkan {
-    features: FeatureSet,
-    instance: ash::Instance,
     entry: ash::Entry,
+    instance: ash::Instance,
+    features: FeatureSet,
+    _logger: Option<VulkanDebugLogger>,
 }
 
 impl InstanceVulkan {
@@ -57,16 +59,23 @@ impl InstanceVulkan {
             }
         }
         let instance = create_instance(&entry, &extensions, validations.names())?;
-        Ok(InstanceVulkan {
+        let mut ret = InstanceVulkan {
             features,
             entry,
             instance,
-        })
+            _logger: None,
+        };
+        if cfg!(debug_assertions) {
+            let logger = VulkanDebugLogger::new(&ret.entry, &ret.instance)?;
+            ret._logger = Some(logger);
+        }
+        Ok(ret)
     }
 }
 
 impl Drop for InstanceVulkan {
     fn drop(&mut self) {
+        self._logger = None; // logger must be destroyed before the instance
         unsafe {
             self.instance.destroy_instance(None);
         }
