@@ -12,3 +12,7 @@ pub fn cchars_to_string(cchars: &[c_char]) -> String {
         .expect("Failed to convert C string to Rust String")
         .to_owned()
 }
+
+pub fn is_wayland() -> bool {
+    std::env::var("WAYLAND_DISPLAY").is_ok()
+}

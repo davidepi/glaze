@@ -38,10 +38,6 @@ impl MetalDevice {
 
 impl Device for MetalDevice {
     type GraphicError = MetalError;
-
-    fn supports_raytracing(&self) -> bool {
-        self.inner.supports_raytracing()
-    }
 }
 
 #[cfg(test)]

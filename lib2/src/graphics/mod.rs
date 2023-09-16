@@ -5,7 +5,7 @@ pub use self::metal::MetalDevice;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod vulkan;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-pub use self::vulkan::VulkanDevice;
+pub use self::vulkan::DeviceVulkan;
 
 pub mod device;
 pub mod format;
