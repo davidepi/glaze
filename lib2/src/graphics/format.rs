@@ -43,6 +43,17 @@ pub enum PresentMode {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ColorSpace {
+    SRGBNonlinear,
+    ExtendedSRGBNonlinear,
+    ExtendedSRGBLinear,
+    Bt709Linear,
+    Bt2020Linear,
+    DCIP3Nonlinear,
+    DisplayP3Nonlinear,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum ImageFormat {
     BC1_RGBA_SRGB_BLOCK,

@@ -8,18 +8,22 @@ use std::ffi::CStr;
 
 /// Wrapper for a physical device (`VkPhysicalDevice`), with its properties and features.
 #[derive(Copy, Clone)]
-pub struct PhysicalDeviceVulkan<'instance> {
-    instance: &'instance ash::Instance,
+pub struct PhysicalDeviceVulkan {
     pub device: vk::PhysicalDevice,
     pub properties: vk::PhysicalDeviceProperties,
     pub features: vk::PhysicalDeviceFeatures,
 }
 
-impl PhysicalDeviceVulkan<'_> {
+impl PhysicalDeviceVulkan {
     /// Checks if the input vulkan extensions are supported by the device
-    fn supports_extensions(&self, ext: &[&'static CStr]) -> Result<bool, VulkanError> {
+    fn supports_extensions(
+        &self,
+        instance: &InstanceVulkan,
+        ext: &[&'static CStr],
+    ) -> Result<bool, VulkanError> {
         let available = unsafe {
-            self.instance
+            instance
+                .vk_instance()
                 .enumerate_device_extension_properties(self.device)
         }?
         .into_iter()
@@ -36,12 +40,14 @@ impl PhysicalDeviceVulkan<'_> {
     /// tiling mode.
     fn supports_format(
         &self,
+        instance: &InstanceVulkan,
         format: vk::Format,
         usage: vk::FormatFeatureFlags,
         optimal: bool,
     ) -> bool {
         let props = unsafe {
-            self.instance
+            instance
+                .vk_instance()
                 .get_physical_device_format_properties(self.device, format)
         };
         if optimal {
@@ -113,10 +119,15 @@ impl PhysicalDeviceVulkan<'_> {
         let formats = features.required_formats();
         let list = PhysicalDeviceVulkan::list_all(instance)?
             .into_iter()
-            .filter(|device| device.supports_extensions(&exts).unwrap_or(false))
+            .filter(|device| device.supports_extensions(instance, &exts).unwrap_or(false))
             .filter(|device| {
                 for (format, usage, optimal) in &formats {
-                    if !device.supports_format(format.to_vk(), usage.to_vk_format(), *optimal) {
+                    if !device.supports_format(
+                        instance,
+                        format.to_vk(),
+                        usage.to_vk_format(),
+                        *optimal,
+                    ) {
                         return false;
                     }
                 }
@@ -135,7 +146,6 @@ impl PhysicalDeviceVulkan<'_> {
             let properties = unsafe { vk_instance.get_physical_device_properties(device) };
             let features = unsafe { vk_instance.get_physical_device_features(device) };
             retval.push(PhysicalDeviceVulkan {
-                instance: vk_instance,
                 device,
                 properties,
                 features,

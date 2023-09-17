@@ -1,4 +1,4 @@
-use crate::graphics::format::{ImageFormat, ImageUsage, PresentMode};
+use crate::graphics::format::{ColorSpace, ImageFormat, ImageUsage, PresentMode};
 use ash::vk;
 
 impl ImageUsage {
@@ -24,6 +24,21 @@ impl PresentMode {
             PresentMode::Immediate => vk::PresentModeKHR::IMMEDIATE,
             PresentMode::Fifo => vk::PresentModeKHR::FIFO,
             PresentMode::Mailbox => vk::PresentModeKHR::MAILBOX,
+        }
+    }
+}
+
+impl ColorSpace {
+    /// Returns the corresponding [vk::ColorSpaceKHR]
+    pub fn to_vk(self) -> vk::ColorSpaceKHR {
+        match self {
+            ColorSpace::SRGBNonlinear => vk::ColorSpaceKHR::SRGB_NONLINEAR,
+            ColorSpace::ExtendedSRGBNonlinear => vk::ColorSpaceKHR::EXTENDED_SRGB_NONLINEAR_EXT,
+            ColorSpace::ExtendedSRGBLinear => vk::ColorSpaceKHR::EXTENDED_SRGB_LINEAR_EXT,
+            ColorSpace::Bt709Linear => vk::ColorSpaceKHR::BT709_LINEAR_EXT,
+            ColorSpace::Bt2020Linear => vk::ColorSpaceKHR::BT2020_LINEAR_EXT,
+            ColorSpace::DCIP3Nonlinear => vk::ColorSpaceKHR::DCI_P3_NONLINEAR_EXT,
+            ColorSpace::DisplayP3Nonlinear => vk::ColorSpaceKHR::DISPLAY_P3_NONLINEAR_EXT,
         }
     }
 }

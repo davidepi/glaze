@@ -1,6 +1,7 @@
 use super::error::VulkanError;
 use super::extensions::VulkanFeatures;
 use super::instance::InstanceVulkan;
+use crate::graphics::device::Device;
 use crate::graphics::format::FeatureSet;
 use crate::graphics::vulkan::physical::PhysicalDeviceVulkan;
 use ash::vk;
@@ -9,13 +10,14 @@ use std::ptr;
 
 pub struct DeviceVulkan {
     logical: ash::Device,
+    physical: PhysicalDeviceVulkan,
     instance: InstanceVulkan,
 }
 
 impl DeviceVulkan {
     pub fn new(device_id: Option<u64>, features: FeatureSet) -> Result<Self, VulkanError> {
         let instance = InstanceVulkan::new(features)?;
-        let pdevice = if let Some(id) = device_id {
+        let physical = if let Some(id) = device_id {
             match PhysicalDeviceVulkan::with_id(&instance, id) {
                 Ok(d) => Ok(d),
                 Err(e) => {
@@ -26,7 +28,7 @@ impl DeviceVulkan {
         } else {
             PhysicalDeviceVulkan::with_default(&instance)
         }?;
-        let queues = application_required_queue_families(&instance, &pdevice)?;
+        let queues = application_required_queue_families(&instance, &physical)?;
         let mut queues_ci = [vk::DeviceQueueCreateInfo::default(); 3];
         let priorities = [1.0; 1];
         for i in 0..3 {
@@ -51,10 +53,30 @@ impl DeviceVulkan {
         let logical = unsafe {
             instance
                 .vk_instance()
-                .create_device(pdevice.device, &device_ci, None)
+                .create_device(physical.device, &device_ci, None)
         }?;
-        Ok(Self { logical, instance })
+        Ok(Self {
+            logical,
+            instance,
+            physical,
+        })
     }
+
+    pub(super) fn instance(&self) -> &InstanceVulkan {
+        &self.instance
+    }
+
+    pub(super) fn logical(&self) -> &ash::Device {
+        &self.logical
+    }
+
+    pub(super) fn physical(&self) -> &PhysicalDeviceVulkan {
+        &self.physical
+    }
+}
+
+impl Device for DeviceVulkan {
+    type GraphicError = VulkanError;
 }
 
 // finds the queue family with the specified flags and returns the family with the most queues

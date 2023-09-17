@@ -1,3 +1,6 @@
+use crate::geometry::Extent2D;
+use ash::vk;
+use num_traits::AsPrimitive;
 use std::ffi::{c_char, CStr};
 
 /// converts a CString to a Rust String
@@ -15,4 +18,13 @@ pub fn cchars_to_string(cchars: &[c_char]) -> String {
 
 pub fn is_wayland() -> bool {
     std::env::var("WAYLAND_DISPLAY").is_ok()
+}
+
+impl<T: AsPrimitive<u32>> Extent2D<T> {
+    pub fn to_vk(self) -> vk::Extent2D {
+        vk::Extent2D {
+            width: self.x.as_(),
+            height: self.y.as_(),
+        }
+    }
 }

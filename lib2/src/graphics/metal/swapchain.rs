@@ -18,10 +18,10 @@ impl PresentDevice for MetalDevice {
         &mut self,
         mode: PresentMode,
         format: ImageFormat,
+        color_space: ColorSpace,
         size: Extent2D<u32>,
         window: &Window,
         triple_buffering: bool,
-        _wayland: bool,
     ) -> Result<Self::Swapchain, Self::GraphicError> {
         let layer = metal::MetalLayer::new();
         match mode {
