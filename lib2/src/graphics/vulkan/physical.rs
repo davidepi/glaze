@@ -1,6 +1,6 @@
-use super::error::VulkanError;
 use super::instance::InstanceVulkan;
 use super::util::cchars_to_string;
+use crate::graphics::error::{ErrorCategory, GraphicError};
 use crate::graphics::format::FeatureSet;
 use ash::vk;
 use std::collections::HashSet;
@@ -20,7 +20,7 @@ impl PhysicalDeviceVulkan {
         &self,
         instance: &InstanceVulkan,
         ext: &[&'static CStr],
-    ) -> Result<bool, VulkanError> {
+    ) -> Result<bool, GraphicError> {
         let available = unsafe {
             instance
                 .vk_instance()
@@ -63,7 +63,7 @@ impl PhysicalDeviceVulkan {
     /// the best dedicated device possible (supporting all extensions).
     ///
     /// No idea how to decently tests for features, so it's not implemented.
-    pub fn with_default(instance: &InstanceVulkan) -> Result<PhysicalDeviceVulkan, VulkanError> {
+    pub fn with_default(instance: &InstanceVulkan) -> Result<PhysicalDeviceVulkan, GraphicError> {
         let features = instance.features();
         let devices = Self::list_compatible(instance, features)?;
         if let Some(dedicated) = devices
@@ -77,7 +77,10 @@ impl PhysicalDeviceVulkan {
         {
             Ok(*integrated)
         } else {
-            Err(VulkanError::new("Failed to find a compatible device"))
+            Err(GraphicError::new(
+                ErrorCategory::InitFailed,
+                "Failed to find a compatible device",
+            ))
         }
     }
 
@@ -91,7 +94,7 @@ impl PhysicalDeviceVulkan {
     pub fn with_id(
         instance: &InstanceVulkan,
         id: u64,
-    ) -> Result<PhysicalDeviceVulkan, VulkanError> {
+    ) -> Result<PhysicalDeviceVulkan, GraphicError> {
         let vendor_id = ((id & 0xFFFFFFFF00000000) >> 32) as u32;
         let device_id = (id & 0x00000000FFFFFFFF) as u32;
         if let Some(device) = PhysicalDeviceVulkan::list_all(instance)?
@@ -106,7 +109,7 @@ impl PhysicalDeviceVulkan {
                 "Could not find device with id {}. Using default device.",
                 id
             );
-            Err(VulkanError::Custom(error))
+            Err(GraphicError::new(ErrorCategory::InitFailed, error))
         }
     }
 
@@ -114,7 +117,7 @@ impl PhysicalDeviceVulkan {
     pub fn list_compatible(
         instance: &InstanceVulkan,
         features: FeatureSet,
-    ) -> Result<Vec<PhysicalDeviceVulkan>, VulkanError> {
+    ) -> Result<Vec<PhysicalDeviceVulkan>, GraphicError> {
         let exts = features.required_device_extensions();
         let formats = features.required_formats();
         let list = PhysicalDeviceVulkan::list_all(instance)?
@@ -138,7 +141,7 @@ impl PhysicalDeviceVulkan {
     }
 
     /// Lists all the physical devices on the system.
-    pub fn list_all(instance: &InstanceVulkan) -> Result<Vec<PhysicalDeviceVulkan>, VulkanError> {
+    pub fn list_all(instance: &InstanceVulkan) -> Result<Vec<PhysicalDeviceVulkan>, GraphicError> {
         let vk_instance = instance.vk_instance();
         let physical_devices = unsafe { vk_instance.enumerate_physical_devices() }?;
         let mut retval = Vec::with_capacity(physical_devices.len());
@@ -158,8 +161,8 @@ impl PhysicalDeviceVulkan {
 #[cfg(test)]
 mod tests {
     use super::PhysicalDeviceVulkan;
+    use crate::graphics::error::GraphicError;
     use crate::graphics::format::{FeatureSet, ImageFormat, ImageUsage};
-    use crate::graphics::vulkan::error::VulkanError;
     use crate::graphics::vulkan::instance::InstanceVulkan;
 
     #[test]
@@ -177,14 +180,14 @@ mod tests {
     }
 
     #[test]
-    fn select_optimal() -> Result<(), VulkanError> {
+    fn select_optimal() -> Result<(), GraphicError> {
         let instance = InstanceVulkan::new(FeatureSet::Convert)?;
         PhysicalDeviceVulkan::with_default(&instance)?;
         Ok(())
     }
 
     #[test]
-    fn select_optimal_video() -> Result<(), VulkanError> {
+    fn select_optimal_video() -> Result<(), GraphicError> {
         // regression test (lol so simple, but initially I used Surface instead of Swapchain inside
         // the extensions, so it was failing only with FeatureSet::Present
         let instance = InstanceVulkan::new(FeatureSet::Present).unwrap();
@@ -193,7 +196,7 @@ mod tests {
     }
 
     #[test]
-    fn select_optimal_supported_format() -> Result<(), VulkanError> {
+    fn select_optimal_supported_format() -> Result<(), GraphicError> {
         let instance = InstanceVulkan::new(FeatureSet::Convert)?;
         PhysicalDeviceVulkan::with_default(&instance)?;
         Ok(())

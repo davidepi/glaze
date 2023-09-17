@@ -1,5 +1,4 @@
 mod device;
-mod error;
 mod format;
 #[cfg(feature = "display")]
 mod swapchain;

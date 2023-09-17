@@ -1,5 +1,5 @@
-use super::error::MetalError;
 use crate::graphics::device::Device;
+use crate::graphics::error::{GraphicError, ErrorCategory};
 
 pub struct MetalDevice {
     inner: metal::Device,
@@ -12,7 +12,7 @@ impl MetalDevice {
     /// [registryID](https://developer.apple.com/documentation/metal/mtldevice/2915737-registryid)
     /// of the device is used look up the GPU on the system. If no GPU is found, the method will
     /// fall back to the default one.
-    pub fn new(device_id: Option<u64>) -> Result<MetalDevice, MetalError> {
+    pub fn new(device_id: Option<u64>) -> Result<MetalDevice, GraphicError> {
         let pdevice = if let Some(id) = device_id {
             match metal::Device::all()
                 .into_iter()
@@ -27,9 +27,9 @@ impl MetalDevice {
         } else {
             metal::Device::system_default()
         }
-        .ok_or_else(|| MetalError::new("Failed to find supported GPU"))?;
+        .ok_or_else(|| GraphicError::new(ErrorCategory::InitFailed, "Failed to find supported GPU"))?;
         if !pdevice.supports_BC_texture_compression() {
-            return Err(MetalError::new("GPU must support BC compression"));
+            return Err(GraphicError::new(ErrorCategory::UnsupportedFeature, "GPU must support BC compression"));
         }
         let ret = MetalDevice { inner: pdevice };
         Ok(ret)
@@ -37,7 +37,6 @@ impl MetalDevice {
 }
 
 impl Device for MetalDevice {
-    type GraphicError = MetalError;
 }
 
 #[cfg(test)]

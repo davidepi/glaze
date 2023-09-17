@@ -1,4 +1,5 @@
 use super::device::Device;
+use super::error::GraphicError;
 use super::format::{ColorSpace, ImageFormat, PresentMode};
 use crate::geometry::Extent2D;
 use winit::window::Window;
@@ -13,7 +14,7 @@ pub trait PresentDevice: Device {
         size: Extent2D<u32>,
         window: &Window,
         triple_buffering: bool,
-    ) -> Result<Self::Swapchain, Self::GraphicError>;
+    ) -> Result<Self::Swapchain, GraphicError>;
 }
 
 pub trait Swapchain {

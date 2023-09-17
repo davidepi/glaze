@@ -1,6 +1,6 @@
 use super::debug::logger::VulkanDebugLogger;
 use super::debug::ValidationLayers;
-use super::error::VulkanError;
+use crate::graphics::error::{GraphicError, ErrorCategory};
 use crate::graphics::format::FeatureSet;
 use ash::vk;
 use std::ffi::{CStr, CString};
@@ -44,10 +44,10 @@ impl InstanceVulkan {
     /// The required extensions are defined by the struct [ExtensionsVulkanInstance].
     /// This struct, additionally, injects the `VK_EXT_debug_utils` extension for debugging
     /// purposes if the build is unoptimized.
-    pub fn new(features: FeatureSet) -> Result<Self, VulkanError> {
+    pub fn new(features: FeatureSet) -> Result<Self, GraphicError> {
         let entry = match unsafe { ash::Entry::load() } {
             Ok(entry) => entry,
-            Err(err) => return Err(VulkanError::new(format!("Failed to create entry: {}", err))),
+            Err(err) => return Err(GraphicError::new(ErrorCategory::InitFailed, format!("Failed to create entry: {}", err))),
         };
         let validations = ValidationLayers::application_default();
         let mut extensions = features.required_instance_extensions();
@@ -87,7 +87,7 @@ fn create_instance(
     entry: &ash::Entry,
     extensions: &[&'static CStr],
     validations: &[CString],
-) -> Result<ash::Instance, VulkanError> {
+) -> Result<ash::Instance, GraphicError> {
     let app_name_string = format!("{}-app", env!("CARGO_PKG_NAME"));
     let engine_name_string = env!("CARGO_PKG_NAME");
     let ver_major = env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap();
@@ -123,17 +123,16 @@ fn create_instance(
 #[cfg(test)]
 mod tests {
     use super::InstanceVulkan;
-    use crate::graphics::format::FeatureSet;
-    use crate::graphics::vulkan::error::VulkanError;
+    use crate::graphics::{format::FeatureSet, error::GraphicError};
 
     #[test]
-    fn create_present() -> Result<(), VulkanError> {
+    fn create_present() -> Result<(), GraphicError> {
         InstanceVulkan::new(FeatureSet::Present)?;
         Ok(())
     }
 
     #[test]
-    fn create_no_present() -> Result<(), VulkanError> {
+    fn create_no_present() -> Result<(), GraphicError> {
         InstanceVulkan::new(FeatureSet::Convert)?;
         Ok(())
     }

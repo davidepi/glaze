@@ -1,8 +1,8 @@
-use super::error::VulkanError;
 use super::instance::InstanceVulkan;
 use super::physical::PhysicalDeviceVulkan;
 use super::DeviceVulkan;
 use crate::geometry::Extent2D;
+use crate::graphics::error::{GraphicError, ErrorCategory};
 use crate::graphics::format::{ColorSpace, ImageFormat, PresentMode};
 use crate::graphics::swapchain::{PresentDevice, Swapchain};
 use crate::graphics::vulkan::util::is_wayland;
@@ -23,7 +23,7 @@ impl SurfaceVulkan {
         instance: &InstanceVulkan,
         physical: &PhysicalDeviceVulkan,
         window: &Window,
-    ) -> Result<Self, VulkanError> {
+    ) -> Result<Self, GraphicError> {
         let surface = unsafe { create_surface(instance, window) }?;
         let loader =
             ash::extensions::khr::Surface::new(instance.vk_loader(), instance.vk_instance());
@@ -52,7 +52,7 @@ impl Drop for SurfaceVulkan {
 unsafe fn create_surface(
     instance: &InstanceVulkan,
     window: &Window,
-) -> Result<vk::SurfaceKHR, VulkanError> {
+) -> Result<vk::SurfaceKHR, GraphicError> {
     #[cfg(target_os = "windows")]
     {
         use std::os::raw::c_void;
@@ -84,10 +84,10 @@ unsafe fn create_surface(
                 "Failed to get wayland window. Maybe X11 is in use but $WAYLAND_DISPLAY is set?";
             let display = window
                 .wayland_display()
-                .ok_or_else(|| VulkanError::new(error_msg))?;
+                .ok_or_else(|| GraphicError::new(ErrorCategory::InitFailed, error_msg))?;
             let surface = window
                 .wayland_surface()
-                .ok_or_else(|| VulkanError::new(error_msg))?;
+                .ok_or_else(|| GraphicError::new(ErrorCategory::InitFailed, error_msg))?;
             let surface_ci = vk::WaylandSurfaceCreateInfoKHR {
                 s_type: vk::StructureType::WAYLAND_SURFACE_CREATE_INFO_KHR,
                 p_next: ptr::null(),
@@ -106,10 +106,10 @@ unsafe fn create_surface(
                 "Failed to get X11 window. Maybe wayland is in use but $WAYLAND_DISPLAY is not set?";
             let x11_display = window
                 .xlib_display()
-                .ok_or_else(|| VulkanError::new(error_msg))?;
+                .ok_or_else(|| GraphicError::new(ErrorCategory::InitFailed, error_msg))?;
             let x11_window = window
                 .xlib_window()
-                .ok_or_else(|| VulkanError::new(error_msg))?;
+                .ok_or_else(|| GraphicError::new(ErrorCategory::InitFailed, error_msg))?;
             let x11_create_info = vk::XlibSurfaceCreateInfoKHR {
                 s_type: vk::StructureType::XLIB_SURFACE_CREATE_INFO_KHR,
                 p_next: ptr::null(),
@@ -149,7 +149,7 @@ impl PresentDevice for DeviceVulkan {
         size: Extent2D<u32>,
         window: &winit::window::Window,
         triple_buffering: bool,
-    ) -> Result<Self::Swapchain, Self::GraphicError> {
+    ) -> Result<Self::Swapchain, GraphicError> {
         let surface = SurfaceVulkan::new(self.instance(), self.physical(), window)?;
         let loader =
             ash::extensions::khr::Swapchain::new(self.instance().vk_instance(), self.logical());
@@ -204,19 +204,27 @@ fn swapchain_init(
     image_extent: &mut vk::Extent2D,
     triple_buffering: bool,
     old_swapchain: vk::SwapchainKHR,
-) -> Result<vk::SwapchainKHR, VulkanError> {
+) -> Result<vk::SwapchainKHR, GraphicError> {
     let image_format = surface
         .formats
         .iter()
         .find(|sf| sf.format == format.to_vk() && sf.color_space == color_space.to_vk())
         .ok_or_else(|| {
-            VulkanError::new("The requested surface format and colorspace are not supported")
+            GraphicError::new(
+                ErrorCategory::UnsupportedFeature,
+                "The requested surface format and colorspace are not supported",
+            )
         })?;
     let present_mode = surface
         .present_modes
         .iter()
         .find(|&x| *x == mode.to_vk())
-        .ok_or_else(|| VulkanError::new("The requested present mode is not supported"))?;
+        .ok_or_else(|| {
+            GraphicError::new(
+                ErrorCategory::UnsupportedFeature,
+                "The requested present mode is not supported",
+            )
+        })?;
     image_extent.width = image_extent.width.clamp(
         surface.capabilities.min_image_extent.width,
         surface.capabilities.max_image_extent.width,

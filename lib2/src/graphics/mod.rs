@@ -11,3 +11,4 @@ pub mod device;
 pub mod format;
 #[cfg(any(feature = "display", doc))]
 pub mod swapchain;
+pub mod error;

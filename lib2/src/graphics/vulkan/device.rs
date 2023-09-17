@@ -1,7 +1,7 @@
-use super::error::VulkanError;
 use super::extensions::VulkanFeatures;
 use super::instance::InstanceVulkan;
 use crate::graphics::device::Device;
+use crate::graphics::error::{GraphicError, ErrorCategory};
 use crate::graphics::format::FeatureSet;
 use crate::graphics::vulkan::physical::PhysicalDeviceVulkan;
 use ash::vk;
@@ -15,7 +15,7 @@ pub struct DeviceVulkan {
 }
 
 impl DeviceVulkan {
-    pub fn new(device_id: Option<u64>, features: FeatureSet) -> Result<Self, VulkanError> {
+    pub fn new(device_id: Option<u64>, features: FeatureSet) -> Result<Self, GraphicError> {
         let instance = InstanceVulkan::new(features)?;
         let physical = if let Some(id) = device_id {
             match PhysicalDeviceVulkan::with_id(&instance, id) {
@@ -75,9 +75,7 @@ impl DeviceVulkan {
     }
 }
 
-impl Device for DeviceVulkan {
-    type GraphicError = VulkanError;
-}
+impl Device for DeviceVulkan {}
 
 // finds the queue family with the specified flags and returns the family with the most queues
 // available
@@ -99,7 +97,7 @@ where
 fn application_required_queue_families(
     instance: &InstanceVulkan,
     pdevice: &PhysicalDeviceVulkan,
-) -> Result<[(u32, vk::QueueFlags); 3], VulkanError> {
+) -> Result<[(u32, vk::QueueFlags); 3], GraphicError> {
     let mut props = unsafe {
         instance
             .vk_instance()
@@ -107,13 +105,21 @@ fn application_required_queue_families(
     };
     let mut retval = [(0, vk::QueueFlags::empty()); 3];
     // first find a queue with graphics, this will be the generic one for the main rendering job.
-    let graphic_index = find_queue(&props, |q| q.contains(vk::QueueFlags::GRAPHICS))
-        .ok_or_else(|| VulkanError::new("Not enough Graphics queues available"))?;
+    let graphic_index =
+        find_queue(&props, |q| q.contains(vk::QueueFlags::GRAPHICS)).ok_or_else(|| {
+            GraphicError::new(
+                ErrorCategory::InitFailed,
+                "Not enough Graphics queues available",
+            )
+        })?;
     if props[graphic_index].queue_count >= 1 {
         props[graphic_index].queue_count -= 1;
         retval[0] = (graphic_index as u32, props[graphic_index].queue_flags);
     } else {
-        return Err(VulkanError::new("Not enough Graphics queues available"));
+        return Err(GraphicError::new(
+            ErrorCategory::InitFailed,
+            "Not enough Graphics queues available",
+        ));
     }
     // then find the unique transfer queue. If not exist, use any queue with transfer support.
     let mut transfer_index = find_queue(&props, |q| {
@@ -124,13 +130,20 @@ fn application_required_queue_families(
     if transfer_index.is_none() {
         transfer_index = find_queue(&props, |q| q.contains(vk::QueueFlags::TRANSFER));
     }
-    let transfer_index =
-        transfer_index.ok_or_else(|| VulkanError::new("Not enough Transfer queues available"))?;
+    let transfer_index = transfer_index.ok_or_else(|| {
+        GraphicError::new(
+            ErrorCategory::InitFailed,
+            "Not enough Transfer queues available",
+        )
+    })?;
     if props[transfer_index].queue_count >= 1 {
         props[transfer_index].queue_count -= 1;
         retval[1] = (transfer_index as u32, props[transfer_index].queue_flags);
     } else {
-        return Err(VulkanError::new("Not enough Transfer queues available"));
+        return Err(GraphicError::new(
+            ErrorCategory::InitFailed,
+            "Not enough Transfer queues available",
+        ));
     }
     // Finally, try to find a Compute + Transfer (Compute Async), or use any compute otherwise.
     let mut compute_index = find_queue(&props, |q| {
@@ -141,13 +154,20 @@ fn application_required_queue_families(
     if compute_index.is_none() {
         compute_index = find_queue(&props, |q| q.contains(vk::QueueFlags::COMPUTE));
     }
-    let compute_index =
-        compute_index.ok_or_else(|| VulkanError::new("Not enough Compute queues available"))?;
+    let compute_index = compute_index.ok_or_else(|| {
+        GraphicError::new(
+            ErrorCategory::InitFailed,
+            "Not enough Compute queues available",
+        )
+    })?;
     if props[compute_index].queue_count >= 1 {
         props[compute_index].queue_count -= 1;
         retval[2] = (compute_index as u32, props[compute_index].queue_flags);
     } else {
-        return Err(VulkanError::new("Not enough Compute queues available"));
+        return Err(GraphicError::new(
+            ErrorCategory::InitFailed,
+            "Not enough Compute queues available",
+        ));
     }
     Ok(retval)
 }
@@ -163,17 +183,17 @@ impl Drop for DeviceVulkan {
 #[cfg(test)]
 mod tests {
     use super::DeviceVulkan;
+    use crate::graphics::error::GraphicError;
     use crate::graphics::format::FeatureSet;
-    use crate::graphics::vulkan::error::VulkanError;
 
     #[test]
-    fn create_convert() -> Result<(), VulkanError> {
+    fn create_convert() -> Result<(), GraphicError> {
         DeviceVulkan::new(None, FeatureSet::Convert)?;
         Ok(())
     }
 
     #[test]
-    fn create_present() -> Result<(), VulkanError> {
+    fn create_present() -> Result<(), GraphicError> {
         DeviceVulkan::new(None, FeatureSet::Present)?;
         Ok(())
     }

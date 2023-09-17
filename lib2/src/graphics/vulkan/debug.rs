@@ -56,10 +56,11 @@ impl ValidationLayers {
 /// Enables logging of Vulkan events
 #[cfg(debug_assertions)]
 pub mod logger {
-    use crate::graphics::vulkan::error::VulkanError;
     use ash::vk;
     use std::ffi::{c_void, CStr};
     use std::ptr;
+
+    use crate::graphics::error::GraphicError;
 
     /// Prints vulkan debug messages, grouped by severity
     pub unsafe extern "system" fn debug_print_callback(
@@ -105,7 +106,7 @@ pub mod logger {
         pub fn new(
             entry: &ash::Entry,
             instance: &ash::Instance,
-        ) -> Result<VulkanDebugLogger, VulkanError> {
+        ) -> Result<VulkanDebugLogger, GraphicError> {
             let debug_loader = ash::extensions::ext::DebugUtils::new(entry, instance);
             let ci = vk::DebugUtilsMessengerCreateInfoEXT {
                 s_type: vk::StructureType::DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
