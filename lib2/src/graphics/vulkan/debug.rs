@@ -56,11 +56,10 @@ impl ValidationLayers {
 /// Enables logging of Vulkan events
 #[cfg(debug_assertions)]
 pub mod logger {
+    use crate::graphics::error::GraphicError;
     use ash::vk;
     use std::ffi::{c_void, CStr};
     use std::ptr;
-
-    use crate::graphics::error::GraphicError;
 
     /// Prints vulkan debug messages, grouped by severity
     pub unsafe extern "system" fn debug_print_callback(

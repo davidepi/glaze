@@ -1,8 +1,7 @@
 use super::extensions::VulkanFeatures;
 use super::instance::InstanceVulkan;
-use crate::graphics::device::Device;
-use crate::graphics::error::{GraphicError, ErrorCategory};
-use crate::graphics::format::FeatureSet;
+use crate::graphics::device::{Device, FeatureSet};
+use crate::graphics::error::{ErrorCategory, GraphicError};
 use crate::graphics::vulkan::physical::PhysicalDeviceVulkan;
 use ash::vk;
 use std::ffi::c_void;
@@ -183,8 +182,8 @@ impl Drop for DeviceVulkan {
 #[cfg(test)]
 mod tests {
     use super::DeviceVulkan;
+    use crate::graphics::device::FeatureSet;
     use crate::graphics::error::GraphicError;
-    use crate::graphics::format::FeatureSet;
 
     #[test]
     fn create_convert() -> Result<(), GraphicError> {

@@ -1,4 +1,4 @@
-use crate::graphics::error::{GraphicError, ErrorCategory};
+use crate::graphics::error::{ErrorCategory, GraphicError};
 
 impl From<ash::vk::Result> for GraphicError {
     fn from(value: ash::vk::Result) -> Self {

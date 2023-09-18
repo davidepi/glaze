@@ -2,7 +2,7 @@ use super::instance::InstanceVulkan;
 use super::physical::PhysicalDeviceVulkan;
 use super::DeviceVulkan;
 use crate::geometry::Extent2D;
-use crate::graphics::error::{GraphicError, ErrorCategory};
+use crate::graphics::error::{ErrorCategory, GraphicError};
 use crate::graphics::format::{ColorSpace, ImageFormat, PresentMode};
 use crate::graphics::swapchain::{PresentDevice, Swapchain};
 use crate::graphics::vulkan::util::is_wayland;
@@ -142,7 +142,7 @@ impl PresentDevice for DeviceVulkan {
     type Swapchain = SwapchainVulkan;
 
     fn new_swapchain(
-        &mut self,
+        &self,
         mode: PresentMode,
         format: ImageFormat,
         color_space: ColorSpace,

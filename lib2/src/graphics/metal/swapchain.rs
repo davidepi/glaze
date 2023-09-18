@@ -15,7 +15,7 @@ impl PresentDevice for MetalDevice {
     type Swapchain = MetalSwapchain;
 
     fn new_swapchain(
-        &mut self,
+        &self,
         mode: PresentMode,
         format: ImageFormat,
         color_space: ColorSpace,

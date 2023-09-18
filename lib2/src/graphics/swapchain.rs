@@ -7,7 +7,7 @@ use winit::window::Window;
 pub trait PresentDevice: Device {
     type Swapchain;
     fn new_swapchain(
-        &mut self,
+        &self,
         mode: PresentMode,
         format: ImageFormat,
         color_space: ColorSpace,

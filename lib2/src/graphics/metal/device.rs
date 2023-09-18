@@ -1,5 +1,5 @@
 use crate::graphics::device::Device;
-use crate::graphics::error::{GraphicError, ErrorCategory};
+use crate::graphics::error::{ErrorCategory, GraphicError};
 
 pub struct MetalDevice {
     inner: metal::Device,
@@ -27,17 +27,21 @@ impl MetalDevice {
         } else {
             metal::Device::system_default()
         }
-        .ok_or_else(|| GraphicError::new(ErrorCategory::InitFailed, "Failed to find supported GPU"))?;
+        .ok_or_else(|| {
+            GraphicError::new(ErrorCategory::InitFailed, "Failed to find supported GPU")
+        })?;
         if !pdevice.supports_BC_texture_compression() {
-            return Err(GraphicError::new(ErrorCategory::UnsupportedFeature, "GPU must support BC compression"));
+            return Err(GraphicError::new(
+                ErrorCategory::UnsupportedFeature,
+                "GPU must support BC compression",
+            ));
         }
         let ret = MetalDevice { inner: pdevice };
         Ok(ret)
     }
 }
 
-impl Device for MetalDevice {
-}
+impl Device for MetalDevice {}
 
 #[cfg(test)]
 mod tests {

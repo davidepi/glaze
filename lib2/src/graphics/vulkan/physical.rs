@@ -1,7 +1,7 @@
 use super::instance::InstanceVulkan;
 use super::util::cchars_to_string;
+use crate::graphics::device::FeatureSet;
 use crate::graphics::error::{ErrorCategory, GraphicError};
-use crate::graphics::format::FeatureSet;
 use ash::vk;
 use std::collections::HashSet;
 use std::ffi::CStr;
@@ -161,8 +161,9 @@ impl PhysicalDeviceVulkan {
 #[cfg(test)]
 mod tests {
     use super::PhysicalDeviceVulkan;
+    use crate::graphics::device::FeatureSet;
     use crate::graphics::error::GraphicError;
-    use crate::graphics::format::{FeatureSet, ImageFormat, ImageUsage};
+    use crate::graphics::format::{ImageFormat, ImageUsage};
     use crate::graphics::vulkan::instance::InstanceVulkan;
 
     #[test]
@@ -207,6 +208,7 @@ mod tests {
         let instance = InstanceVulkan::new(FeatureSet::Convert).unwrap();
         let gpu = PhysicalDeviceVulkan::with_default(&instance).unwrap();
         let format_support = gpu.supports_format(
+            &instance,
             ImageFormat::R8_SRGB.to_vk(),
             ImageUsage::DepthStencil.to_vk_format(),
             true,
@@ -219,7 +221,7 @@ mod tests {
         let instance = InstanceVulkan::new(FeatureSet::Present).unwrap();
         let gpu = PhysicalDeviceVulkan::with_default(&instance).unwrap();
         let ext_support = gpu
-            .supports_extensions(&[ash::extensions::khr::Swapchain::name()])
+            .supports_extensions(&instance, &[ash::extensions::khr::Swapchain::name()])
             .unwrap();
         assert!(ext_support)
     }
@@ -230,7 +232,7 @@ mod tests {
         let gpu = PhysicalDeviceVulkan::with_default(&instance).unwrap();
         // vulkan will never run on ios for this crate, so this test will always fail
         let ext_support = gpu
-            .supports_extensions(&[ash::extensions::mvk::IOSSurface::name()])
+            .supports_extensions(&instance, &[ash::extensions::mvk::IOSSurface::name()])
             .unwrap();
         assert!(!ext_support)
     }

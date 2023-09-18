@@ -1,7 +1,7 @@
 use super::debug::logger::VulkanDebugLogger;
 use super::debug::ValidationLayers;
-use crate::graphics::error::{GraphicError, ErrorCategory};
-use crate::graphics::format::FeatureSet;
+use crate::graphics::device::FeatureSet;
+use crate::graphics::error::{ErrorCategory, GraphicError};
 use ash::vk;
 use std::ffi::{CStr, CString};
 use std::ptr;
@@ -47,7 +47,12 @@ impl InstanceVulkan {
     pub fn new(features: FeatureSet) -> Result<Self, GraphicError> {
         let entry = match unsafe { ash::Entry::load() } {
             Ok(entry) => entry,
-            Err(err) => return Err(GraphicError::new(ErrorCategory::InitFailed, format!("Failed to create entry: {}", err))),
+            Err(err) => {
+                return Err(GraphicError::new(
+                    ErrorCategory::InitFailed,
+                    format!("Failed to create entry: {}", err),
+                ))
+            }
         };
         let validations = ValidationLayers::application_default();
         let mut extensions = features.required_instance_extensions();
@@ -123,7 +128,8 @@ fn create_instance(
 #[cfg(test)]
 mod tests {
     use super::InstanceVulkan;
-    use crate::graphics::{format::FeatureSet, error::GraphicError};
+    use crate::graphics::device::FeatureSet;
+    use crate::graphics::error::GraphicError;
 
     #[test]
     fn create_present() -> Result<(), GraphicError> {

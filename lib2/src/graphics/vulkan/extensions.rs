@@ -1,5 +1,5 @@
 use super::util::is_wayland;
-use crate::graphics::format::FeatureSet;
+use crate::graphics::device::FeatureSet;
 use ash::vk;
 use std::ffi::{c_void, CStr};
 use std::pin::Pin;
