@@ -5,4 +5,4 @@ mod swapchain;
 mod util;
 
 // entry point for metal.
-pub use self::device::MetalDevice;
+pub use self::device::DeviceMetal;

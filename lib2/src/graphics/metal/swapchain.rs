@@ -1,5 +1,6 @@
-use super::MetalDevice;
+use super::DeviceMetal;
 use crate::geometry::Extent2D;
+use crate::graphics::error::GraphicError;
 use crate::graphics::format::{ImageFormat, PresentMode};
 use crate::graphics::swapchain::{PresentDevice, Swapchain};
 use cocoa::appkit::NSView;
@@ -11,19 +12,19 @@ pub struct MetalSwapchain {
     size: Extent2D<u32>,
 }
 
-impl PresentDevice for MetalDevice {
+impl PresentDevice for DeviceMetal {
     type Swapchain = MetalSwapchain;
 
     fn new_swapchain(
         &self,
         mode: PresentMode,
         format: ImageFormat,
-        color_space: ColorSpace,
         size: Extent2D<u32>,
         window: &Window,
         triple_buffering: bool,
-    ) -> Result<Self::Swapchain, Self::GraphicError> {
+    ) -> Result<Self::Swapchain, GraphicError> {
         let layer = metal::MetalLayer::new();
+        layer.set_device(self.logical());
         match mode {
             PresentMode::Fifo | PresentMode::Mailbox => layer.set_display_sync_enabled(true),
             PresentMode::Immediate => layer.set_display_sync_enabled(false),
@@ -52,7 +53,15 @@ impl Swapchain for MetalSwapchain {
         self.size
     }
 
-    fn set_size(&mut self, size: Extent2D<u32>) {
-        self.inner.set_drawable_size(size.to_cgsize());
+    fn triple_buffering(&self) -> bool {
+        self.inner.maximum_drawable_count() == 3
+    }
+
+    fn present_mode(&self) -> PresentMode {
+        if self.inner.display_sync_enabled() {
+            PresentMode::Fifo
+        } else {
+            PresentMode::Immediate
+        }
     }
 }

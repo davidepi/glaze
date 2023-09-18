@@ -1,7 +1,7 @@
 #[cfg(target_os = "macos")]
 mod metal;
 #[cfg(target_os = "macos")]
-pub use self::metal::MetalDevice;
+pub use self::metal::DeviceMetal;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod vulkan;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -15,17 +15,17 @@ pub mod swapchain;
 
 #[cfg(test)]
 mod testhelpers {
-    use super::device::{Device, FeatureSet};
+    use super::device::Device;
     use super::error::GraphicError;
 
     pub fn create_device() -> Result<impl Device, GraphicError> {
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
-            super::vulkan::DeviceVulkan::new(None, FeatureSet::Convert)
+            super::vulkan::DeviceVulkan::new(None, super::device::FeatureSet::Convert)
         }
         #[cfg(target_os = "macos")]
         {
-            super::metal::DeviceMetal::new(None, FeatureSet::Convert)
+            super::metal::DeviceMetal::new(None)
         }
     }
 }

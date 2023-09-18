@@ -133,7 +133,6 @@ pub struct SwapchainVulkan {
     loader: ash::extensions::khr::Swapchain,
     mode: PresentMode,
     format: ImageFormat,
-    color_space: ColorSpace,
     image_extent: vk::Extent2D,
     triple_buffering: bool,
 }
@@ -145,7 +144,6 @@ impl PresentDevice for DeviceVulkan {
         &self,
         mode: PresentMode,
         format: ImageFormat,
-        color_space: ColorSpace,
         size: Extent2D<u32>,
         window: &winit::window::Window,
         triple_buffering: bool,
@@ -159,7 +157,6 @@ impl PresentDevice for DeviceVulkan {
             &surface,
             mode,
             format,
-            color_space,
             &mut image_extent,
             triple_buffering,
             vk::SwapchainKHR::null(),
@@ -170,7 +167,6 @@ impl PresentDevice for DeviceVulkan {
             loader,
             mode,
             format,
-            color_space,
             image_extent,
             triple_buffering,
         })
@@ -200,11 +196,11 @@ fn swapchain_init(
     surface: &SurfaceVulkan,
     mode: PresentMode,
     format: ImageFormat,
-    color_space: ColorSpace,
     image_extent: &mut vk::Extent2D,
     triple_buffering: bool,
     old_swapchain: vk::SwapchainKHR,
 ) -> Result<vk::SwapchainKHR, GraphicError> {
+    let color_space = ColorSpace::SRGBNonlinear;
     let image_format = surface
         .formats
         .iter()
