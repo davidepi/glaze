@@ -1,11 +1,11 @@
 use super::instance::InstanceVulkan;
 use super::physical::PhysicalDeviceVulkan;
 use super::DeviceVulkan;
-use crate::geometry::Extent2D;
 use crate::graphics::error::{ErrorCategory, GraphicError};
 use crate::graphics::format::{ColorSpace, ImageFormat, PresentMode};
 use crate::graphics::swapchain::{PresentDevice, Swapchain};
 use crate::graphics::vulkan::util::is_wayland;
+use crate::math::Extent2D;
 use ash::vk;
 use std::ptr;
 use winit::window::Window;

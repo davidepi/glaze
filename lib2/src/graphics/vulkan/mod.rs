@@ -4,6 +4,7 @@ mod error;
 mod extensions;
 mod format;
 mod instance;
+mod memory;
 mod physical;
 #[cfg(feature = "display")]
 mod swapchain;

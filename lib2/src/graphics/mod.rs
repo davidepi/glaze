@@ -7,9 +7,11 @@ mod vulkan;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub use self::vulkan::DeviceVulkan;
 
+pub mod config;
 pub mod device;
 pub mod error;
 pub mod format;
+pub mod memory;
 #[cfg(any(feature = "display", doc))]
 pub mod swapchain;
 

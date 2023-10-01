@@ -21,6 +21,9 @@ cocoa = "0.25"
 core-graphics = "0.23"
 metal = "0.26"
 
+[dev-dependencies]
+float-cmp = "0.9"
+
 [features]
 default = ["display"]
 display = ["winit"]

@@ -1,7 +1,7 @@
 use super::device::Device;
 use super::error::GraphicError;
 use super::format::{ImageFormat, PresentMode};
-use crate::geometry::Extent2D;
+use crate::math::Extent2D;
 use winit::window::Window;
 
 pub trait PresentDevice: Device {

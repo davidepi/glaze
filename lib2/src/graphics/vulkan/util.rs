@@ -1,4 +1,4 @@
-use crate::geometry::Extent2D;
+use crate::math::Extent2D;
 use ash::vk;
 use num_traits::AsPrimitive;
 use std::ffi::{c_char, CStr};
