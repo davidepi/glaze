@@ -1,8 +1,8 @@
 use super::error::{ErrorCategory, GraphicError};
 use crate::math::util::{ilog2_ceil, Stats};
-use crate::util::collections::IndexVec;
+use crate::util::collections::{Key, KeyMap};
 use std::backtrace;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 pub trait MemoryAllocatorInternal {
@@ -42,7 +42,7 @@ pub struct BuddyBlock {
     /// anyway
     left_buddy: bool,
     /// the index of the main memory block.
-    memory_index: u32,
+    memory_key: Key,
 }
 
 impl BuddyBlock {
@@ -98,7 +98,7 @@ pub struct BuddyAllocator<T: MemoryAllocatorInternal> {
     free_blocks: Vec<BTreeSet<BuddyBlock>>,
     // not actually needed to work, so track only the blocks external to the allocator.
     used_blocks: HashSet<BuddyBlock>,
-    heap_blocks: IndexVec<T::MemorySlab>,
+    heap_blocks: KeyMap<T::MemorySlab>,
     // maximum size of a memory_block
     max_order: u8,
     // minimum size of an allocation
@@ -132,7 +132,7 @@ impl<T: MemoryAllocatorInternal> BuddyAllocator<T> {
             block_allocator: allocator,
             free_blocks: vec![BTreeSet::new(); (max_order - min_order) as usize],
             used_blocks: HashSet::default(),
-            heap_blocks: IndexVec::new(),
+            heap_blocks: KeyMap::new(),
             max_order,
             min_order,
             memory_type,
@@ -191,11 +191,11 @@ impl<T: MemoryAllocatorInternal> BuddyAllocator<T> {
             let heap_block = self
                 .block_allocator
                 .allocate_slab(self.memory_type, 0x1 << self.max_order)?;
-            let block_index = self.heap_blocks.insert(heap_block) as u32;
+            let memory_key = self.heap_blocks.insert(heap_block);
             let entire_block = BuddyBlock {
                 offset: 0,
                 order: self.max_order,
-                memory_index: block_index,
+                memory_key,
                 left_buddy: true,
             };
             Ok(entire_block)
@@ -212,7 +212,7 @@ impl<T: MemoryAllocatorInternal> BuddyAllocator<T> {
                 offset: parent_block.offset,
                 order,
                 left_buddy: true,
-                memory_index: parent_block.memory_index,
+                memory_key: parent_block.memory_key,
             };
             let right_buddy = left_buddy.other_buddy();
             self.free_blocks[(order - self.min_order) as usize].insert(right_buddy);
@@ -255,7 +255,7 @@ impl<T: MemoryAllocatorInternal> BuddyAllocator<T> {
         let other_buddy = block.other_buddy();
         if block.order == self.max_order {
             // terminating condition: release the entire heap block
-            let heap_block = self.heap_blocks.pop(block.memory_index as usize).expect(
+            let heap_block = self.heap_blocks.remove(block.memory_key).expect(
                 "Failed to find allocated heap block. This indicates an internal memory error.",
             );
             self.block_allocator.free_slab(heap_block);
@@ -288,27 +288,28 @@ impl<T: MemoryAllocatorInternal> BuddyAllocator<T> {
     ///
     /// A `Stats` object containing information about the average fragmentation.
     pub fn fragmentation(&self) -> Stats {
-        let mut max_contiguous = vec![0.0; self.heap_blocks.len()];
-        let mut total_free = vec![0.0; self.heap_blocks.len()];
+        let mut max_contiguous = HashMap::new();
+        let mut total_free = HashMap::new();
         for free_block_by_order in &self.free_blocks {
             for block in free_block_by_order {
-                let midx = block.memory_index as usize;
-                max_contiguous[midx] =
-                    f32::max(max_contiguous[midx], (0x1_u64 << block.order) as f32);
-                total_free[midx] += block.size() as f32;
+                let key = block.memory_key;
+                max_contiguous
+                    .entry(key)
+                    .and_modify(|val| *val = f32::max(*val, block.size() as f32))
+                    .or_insert(block.size() as f32);
+                total_free
+                    .entry(key)
+                    .and_modify(|val| *val += block.size() as f32)
+                    .or_insert(block.size() as f32);
             }
         }
-        let fragmentation = max_contiguous
-            .into_iter()
-            .zip(total_free)
-            .map(|(max, total)| {
-                if total != 0.0 {
-                    1.0 - (max / total)
-                } else {
-                    0.0
-                }
-            })
-            .collect::<Vec<_>>();
+        let mut fragmentation = Vec::with_capacity(max_contiguous.len());
+        for (key, max) in max_contiguous {
+            // value is always present.
+            let total = *total_free.get(&key).unwrap();
+            let value = if total != 0.0 { 1.0 - max / total } else { 0.0 };
+            fragmentation.push(value);
+        }
         Stats::new(&fragmentation)
     }
 }
@@ -357,6 +358,7 @@ mod tests {
     use super::{MemoryAllocatorInternal, MemoryType};
     use crate::graphics::error::{ErrorCategory, GraphicError};
     use crate::graphics::memory::{BuddyAllocator, BuddyBlock};
+    use crate::util::collections::Key;
     use float_cmp::assert_approx_eq;
     use std::collections::HashSet;
 
@@ -607,7 +609,7 @@ mod tests {
         // Check that at least two different pages are used
         let unique_memory_indices = allocated_blocks
             .iter()
-            .map(|block| block.memory_index)
+            .map(|block| block.memory_key)
             .collect::<HashSet<_>>();
         assert!(unique_memory_indices.len() >= 2);
         Ok(())
@@ -639,7 +641,7 @@ mod tests {
         let invalid_block = BuddyBlock {
             offset: 0,
             order: 0,
-            memory_index: 0,
+            memory_key: Key::forge(),
             left_buddy: true,
         };
         let deallocation_result = ballocator.free(invalid_block);

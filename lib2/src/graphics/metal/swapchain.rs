@@ -1,8 +1,8 @@
 use super::DeviceMetal;
-use crate::geometry::Extent2D;
 use crate::graphics::error::GraphicError;
 use crate::graphics::format::{ImageFormat, PresentMode};
 use crate::graphics::swapchain::{PresentDevice, Swapchain};
+use crate::math::Extent2D;
 use cocoa::appkit::NSView;
 use winit::platform::macos::WindowExtMacOS;
 use winit::window::Window;

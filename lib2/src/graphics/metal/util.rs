@@ -1,4 +1,4 @@
-use crate::geometry::Extent2D;
+use crate::math::Extent2D;
 use core_graphics::geometry::CGSize;
 use num_traits::AsPrimitive;
 
